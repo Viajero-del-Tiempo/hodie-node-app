@@ -30,38 +30,58 @@ whatsappClient.on("message", async (mensaje) => {
     case "hola":
       await mensaje.reply("¡Hola! 👋 ¿Cómo estás?");
       break;
+    case "info":
+      await mensaje.reply(
+        "ℹ️ Podés encontrar más información en nuestro sitio web: https://hodie.com.py"
+      );
+      break;
+    case "ubicación":
+    case "ubicacion":
+      await mensaje.reply(
+        "📍 Nos encontramos en Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay."
+      );
+      break;
+    case "precios":
     case "precio":
       await mensaje.reply(
         "💰 Nuestros precios están disponibles en: https://hodie.com.py"
       );
       break;
+    case "catalogo":
     case "catálogo":
       await mensaje.reply(
         "🛍️ Aquí tenés nuestro catálogo completo: https://hodie.com.py"
       );
       break;
+    case "buenos dias":
     case "buenos días":
-      await mensaje.reply(
-        "☀️ ¡Muy buenos días! Espero que tengas un excelente día 😊"
-      );
+      await mensaje.reply("☀️ ¡Muy buenos días! ¿En qué puedo ayudarte hoy?😊");
       break;
     case "buen día":
     case "buen dia":
       await mensaje.reply("☀️ ¡buen día! En qué puedo ayudarte?");
+      break;
+    case "buenas tardes":
+      await mensaje.reply("🌇 ¡Buenas tardes! ¿En qué puedo ayudarte?");
+      break;
+    case "buenas noches":
+      await mensaje.reply("🌙 ¡Buenas noches! ¿En qué puedo ayudarte? 😊");
       break;
     case "gracias":
       await mensaje.reply("¡De nada! 😊");
       break;
     case "chau":
     case "adiós":
+    case "adios":
     case "hasta luego":
       await mensaje.reply("👋 ¡Hasta luego! Que tengas un excelente día.");
       break;
-
-    default:
+    case "ayuda":
       await mensaje.reply(
-        "📦 Si querés ver nuestro catálogo, escribí *catálogo* o hacé clic en este enlace:\nhttps://hodie.com.py"
+        "🆘 Para asistencia, visitá: https://hodie.com.py/contacto"
       );
+      break;
+    default:
       break;
   }
 });
