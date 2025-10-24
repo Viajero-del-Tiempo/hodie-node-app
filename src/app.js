@@ -3,6 +3,18 @@ import bodyParser from "body-parser";
 import { router as authRouter } from "./routes/auth.routes.js";
 
 const app = express();
+
+const allowedOrigins = [
+  'http://localhost:4200',   // Desarrollo Angular
+  'https://hodie.com.py'    // ✅ Tu dominio en producción
+];
+
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
+}));
+
 app.use(bodyParser.json());
 // 👉 Ruta base para probar el servidor
 app.get("/", (req, res) => {
