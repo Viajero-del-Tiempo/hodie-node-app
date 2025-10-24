@@ -1,12 +1,14 @@
 import express from "express";
 import bodyParser from "body-parser";
+import cors from "cors";
 import { router as authRouter } from "./routes/auth.routes.js";
 
 const app = express();
 
 const allowedOrigins = [
-  'http://localhost:4200',   // Desarrollo Angular
-  'https://hodie.com.py'    // ✅ Tu dominio en producción
+  "http://localhost:4200", // Desarrollo Angular
+  "https://hodie.com.py",  // ✅ Tu dominio en producción
+  "https://www.hodie.com.py" // ✅ Por si lo visitas con www
 ];
 
 app.use(cors({

@@ -1,8 +1,0 @@
-2025/10/14-18:02:41.682 5da0 Creating DB C:\hodie-autenticacion\wa-auth-app\session\session\Default\Local Storage\leveldb since it was missing.
-2025/10/14-18:02:41.691 5da0 Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\Local Storage\leveldb/MANIFEST-000001
-2025/10/14-18:02:41.691 5da0 Recovering log #4
-2025/10/14-18:02:41.692 5da0 Reusing old log C:\hodie-autenticacion\wa-auth-app\session\session\Default\Local Storage\leveldb/000004.log 
-2025/10/14-18:02:41.692 5da0 Delete type=2 #5
-2025/10/15-03:53:16.606 5690 Level-0 table #6: started
-2025/10/15-03:53:16.615 5690 Level-0 table #6: 18060 bytes OK
-2025/10/15-03:53:16.617 5690 Delete type=0 #4
