@@ -9,9 +9,7 @@ export const sendVerificationCode = async (phone, code) => {
 
 export const sendWelcomeMessage = async (phone) => {
   const chatId = `${phone}@c.us`;
-  const message1 = `¡Hola! 👋 Gracias por registrarte en HoDie Tienda de Regalos.🎁​`;
-  const message2 = `*¡Bienvenido!* \n Estamos aquí para ayudarte en lo que necesites. 😊`;
-  await whatsappClient.sendMessage(chatId, message1);
+  const message2 = `*¡Bienvenido a HoDie Tienda de Regalos.🎁!* \n Estamos aquí para ayudarte en lo que necesites. 😊`;
   await whatsappClient.sendMessage(chatId, message2);
   console.log(`📤 Mensaje de bienvenida enviado a ${phone}`);
 }
