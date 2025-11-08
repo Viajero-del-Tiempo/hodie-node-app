@@ -11,10 +11,20 @@ dotenv.config();
 // Ejemplo en .env:
 // FIREBASE_SERVICE_ACCOUNT_KEY_JSON={"type":"service_account","project_id":"...", ...}
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY_JSON);
+// Lee la variable de entorno que contiene el JSON de la clave de servicio.
+const serviceAccountKeyJson = process.env.FIREBASE_SERVICE_ACCOUNT_KEY_JSON;
+
+if (!serviceAccountKeyJson) {
+  throw new Error(
+    "La variable de entorno FIREBASE_SERVICE_ACCOUNT_KEY_JSON no está definida. Por favor, configúrala en tu archivo .env."
+  );
+}
+
+// Parsea el JSON string a un objeto JavaScript.
+const serviceAccount = JSON.parse(serviceAccountKeyJson);
 
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
 });
 
 export const db = admin.firestore();
