@@ -1,7 +1,7 @@
 import { db } from '../config/firebase.js';
 import { FieldValue } from 'firebase-admin/firestore';
 
-const usersCollection = db.collection('users');
+const usersCollection = db.collection('autenticated_users');
 
 // --- Configuración ---
 const CODE_EXPIRATION_MINUTES = 5; // El código expira en 5 minutos

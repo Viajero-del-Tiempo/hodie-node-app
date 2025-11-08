@@ -24,7 +24,8 @@ export const requestCode = async (req, res) => {
     const userCanRequestCode = await canRequestCode(phone);
     if (!userCanRequestCode) {
       return res.status(429).json({
-        error: "Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.",
+        error:
+          "Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.",
       });
     }
 
