@@ -1,0 +1,13 @@
+2025/11/08-22:47:51.473 3f38 Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2025/11/08-22:47:51.473 3f38 Recovering log #77
+2025/11/08-22:47:51.502 3f38 Reusing old log C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000077.log 
+2025/11/08-22:47:53.319 5794 Level-0 table #82: started
+2025/11/08-22:47:53.329 5794 Level-0 table #82: 243231 bytes OK
+2025/11/08-22:47:53.330 5794 Delete type=0 #77
+2025/11/08-22:47:53.331 5794 Manual compaction at level-0 from '\x00%\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00&\x00\x00\x00' @ 0 : 0; will stop at (end)
+2025/11/08-22:47:55.683 2a8c Compacting 1@1 + 1@2 files
+2025/11/08-22:47:55.800 2a8c Generated table #83@1: 53900 keys, 2151985 bytes
+2025/11/08-22:47:55.800 2a8c Compacted 1@1 + 1@2 files => 2151985 bytes
+2025/11/08-22:47:55.801 2a8c compacted to: files[ 0 0 1 0 0 0 0 ]
+2025/11/08-22:47:55.801 2a8c Delete type=2 #79
+2025/11/08-22:47:55.801 2a8c Delete type=2 #82

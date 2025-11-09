@@ -16,7 +16,14 @@ export const sendWelcomeMessage = async (phone) => {
 
 export const sendErrorMessage = async (phone) => {
   const chatId = `${phone}@c.us`;
-  const message = `❌ Ha ocurrido un error. Por favor, intenta nuevamente`;
+  const message = `❌ Código inválido o expirado. Intenta de nuevo.`;
   await whatsappClient.sendMessage(chatId, message);
   console.log(`📤 Mensaje de error enviado a ${phone}`);
+}
+
+export const sendLimitError = async (phone) => {
+  const chatId = `${phone}@c.us`;
+  const message = `❌ Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.`;
+  await whatsappClient.sendMessage(chatId, message);
+  console.log(`📤 Mensaje de limite exedido enviado a ${phone}`);
 }

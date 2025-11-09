@@ -30,12 +30,14 @@ export const requestCode = async (req, res) => {
     }
 
     const code = generateCode();
+
     const userDoc = await findUserByPhone(phone);
 
     if (userDoc.exists) {
       await updateVerificationCode(phone, code);
     } else {
-      await createUser(phone, code);
+     const newUser = await createUser(phone, code);
+      console.log(`Nuevo usuario creado:`, newUser);
     }
 
     await sendVerificationCode(phone, code);

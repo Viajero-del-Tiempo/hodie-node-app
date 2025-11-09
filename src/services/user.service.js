@@ -1,5 +1,6 @@
 import { db } from '../config/firebase.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { sendLimitError } from './whatsapp.service.js';
 
 const usersCollection = db.collection('autenticated_users');
 
@@ -19,7 +20,7 @@ export const findUserByPhone = async (phone) => {
 };
 
 /**
- * Crea un nuevo usuario en Firestore con la información de la solicitud de código.
+ * Crea un nuevo usuario en Firestore.
  * @param {string} phone - El número de teléfono.
  * @param {string} code - El código de verificación.
  * @returns {Promise<object>} El nuevo usuario creado.
@@ -31,14 +32,14 @@ export const createUser = async (phone, code) => {
     created_at: FieldValue.serverTimestamp(),
     verification_code: code,
     code_created_at: FieldValue.serverTimestamp(),
-    code_requests: [FieldValue.serverTimestamp()], // Array para registrar los intentos
+    code_request_timestamps: [],
   };
   await usersCollection.doc(phone).set(newUser);
   return newUser;
 };
 
 /**
- * Actualiza el código de verificación y registra el intento.
+ * Actualiza el código de verificación de un usuario.
  * @param {string} phone - El número de teléfono.
  * @param {string} code - El nuevo código de verificación.
  */
@@ -46,39 +47,69 @@ export const updateVerificationCode = async (phone, code) => {
   await usersCollection.doc(phone).update({
     verification_code: code,
     code_created_at: FieldValue.serverTimestamp(),
-    code_requests: FieldValue.arrayUnion(FieldValue.serverTimestamp()),
   });
 };
 
 /**
- * Verifica si un usuario puede solicitar un nuevo código basándose en los límites de tiempo y cantidad.
+ * Verifica si un usuario puede solicitar un nuevo código.
+ * Limita las solicitudes a `MAX_CODE_REQUESTS` en los últimos `CODE_REQUESTS_TIMEFRAME_MINUTES`.
  * @param {string} phone - El número de teléfono del usuario.
  * @returns {Promise<boolean>} - True si puede solicitar un código, false si no.
  */
 export const canRequestCode = async (phone) => {
-  const userDoc = await findUserByPhone(phone);
-  if (!userDoc.exists) {
-    return true; // Si el usuario no existe, puede solicitarlo.
+  const userDocRef = usersCollection.doc(phone);
+
+  try {
+    const canRequest = await db.runTransaction(async (transaction) => {
+      const userDoc = await transaction.get(userDocRef);
+
+      // Si el usuario no existe, se permite la solicitud.
+      // El controlador se encargará de crearlo.
+      if (!userDoc.exists) {
+        return true;
+      }
+
+      const userData = userDoc.data();
+      const requestTimestamps = userData.code_request_timestamps || [];
+
+      const now = new Date();
+      const timeframeStart = new Date(
+        now.getTime() - CODE_REQUESTS_TIMEFRAME_MINUTES * 60 * 1000
+      );
+
+      // Filtra los timestamps que están dentro de la ventana de tiempo.
+      const recentRequests = requestTimestamps.filter(
+        (timestamp) => timestamp.toDate() > timeframeStart
+      );
+
+      // Si se ha alcanzado el límite, no se permite la solicitud.
+      if (recentRequests.length >= MAX_CODE_REQUESTS) {
+         await sendLimitError(phone);
+        console.log(`Límite de solicitudes de código excedido para ${phone}.`);
+        return false;
+      }
+
+      // Añade el nuevo timestamp de solicitud.
+      // Usamos new Date() porque FieldValue.serverTimestamp() no puede ser usado en un array.
+      // Firestore convertirá el objeto Date a un Timestamp.
+      const newTimestamps = [...recentRequests, new Date()];
+
+      transaction.update(userDocRef, {
+        code_request_timestamps: newTimestamps,
+      });
+
+      return true; // La transacción fue exitosa, se permite la solicitud.
+    });
+
+    return canRequest;
+  } catch (error) {
+    // Para cualquier otro error en la transacción, se deniega por seguridad.
+    console.error(
+      `Error en la transacción de 'canRequestCode' para ${phone}:`,
+      error
+    );
+    return false;
   }
-
-  const userData = userDoc.data();
-  const requests = userData.code_requests || [];
-
-  // Filtramos las solicitudes que están dentro de la ventana de tiempo.
-  const timeframe = new Date();
-  timeframe.setMinutes(timeframe.getMinutes() - CODE_REQUESTS_TIMEFRAME_MINUTES);
-
-  const recentRequests = requests.filter(
-    (timestamp) => timestamp.toDate() > timeframe
-  );
-
-  // Purgamos el array de solicitudes en la base de datos para no almacenar datos viejos.
-  // Esto se puede hacer de forma asíncrona sin esperar a que termine.
-  if (recentRequests.length < requests.length) {
-     usersCollection.doc(phone).update({ code_requests: recentRequests });
-  }
-
-  return recentRequests.length < MAX_CODE_REQUESTS;
 };
 
 /**
