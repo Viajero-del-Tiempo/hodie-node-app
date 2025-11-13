@@ -1,3 +1,2 @@
-2025/11/13-13:19:01.802 4c68 Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\Session Storage/MANIFEST-000001
-2025/11/13-13:19:01.803 4c68 Recovering log #3
-2025/11/13-13:19:01.803 4c68 Reusing old log C:\hodie-autenticacion\wa-auth-app\session\session\Default\Session Storage/000003.log 
+2025/11/13-18:49:40.408 21a4 Creating DB C:\hodie-autenticacion\wa-auth-app\session\session\Default\Session Storage since it was missing.
+2025/11/13-18:49:40.421 21a4 Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\Session Storage/MANIFEST-000001
