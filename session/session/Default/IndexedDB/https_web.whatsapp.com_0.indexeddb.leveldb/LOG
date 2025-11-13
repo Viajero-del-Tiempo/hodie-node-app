@@ -1,13 +1,15 @@
-2025/11/08-22:55:50.479 334c Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
-2025/11/08-22:55:50.479 334c Recovering log #81
-2025/11/08-22:55:50.507 334c Reusing old log C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000081.log 
-2025/11/08-22:55:52.363 334c Level-0 table #86: started
-2025/11/08-22:55:52.373 334c Level-0 table #86: 247110 bytes OK
-2025/11/08-22:55:52.375 334c Delete type=0 #81
-2025/11/08-22:55:52.375 334c Manual compaction at level-0 from '\x00&\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00'\x00\x00\x00' @ 0 : 0; will stop at (end)
-2025/11/08-22:55:54.469 c0 Compacting 1@1 + 1@2 files
-2025/11/08-22:55:54.564 c0 Generated table #87@1: 55015 keys, 2182935 bytes
-2025/11/08-22:55:54.564 c0 Compacted 1@1 + 1@2 files => 2182935 bytes
-2025/11/08-22:55:54.566 c0 compacted to: files[ 0 0 1 0 0 0 0 ]
-2025/11/08-22:55:54.566 c0 Delete type=2 #83
-2025/11/08-22:55:54.566 c0 Delete type=2 #86
+2025/11/13-13:18:59.020 4c68 Reusing MANIFEST C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2025/11/13-13:18:59.021 4c68 Recovering log #128
+2025/11/13-13:18:59.060 4c68 Reusing old log C:\hodie-autenticacion\wa-auth-app\session\session\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000128.log 
+2025/11/13-13:19:03.397 2804 Level-0 table #134: started
+2025/11/13-13:19:03.410 2804 Level-0 table #134: 308562 bytes OK
+2025/11/13-13:19:03.411 2804 Delete type=0 #128
+2025/11/13-13:19:03.412 2804 Manual compaction at level-0 from '\x003\x00\x00\x00' @ 72057594037927935 : 1 .. '\x004\x00\x00\x00' @ 0 : 0; will stop at (end)
+2025/11/13-13:19:05.527 4b34 Compacting 1@1 + 2@2 files
+2025/11/13-13:19:05.630 4b34 Generated table #135@1: 52658 keys, 2216365 bytes
+2025/11/13-13:19:05.639 4b34 Generated table #136@1: 3990 keys, 76486 bytes
+2025/11/13-13:19:05.639 4b34 Compacted 1@1 + 2@2 files => 2292851 bytes
+2025/11/13-13:19:05.640 4b34 compacted to: files[ 0 0 2 0 0 0 0 ]
+2025/11/13-13:19:05.640 4b34 Delete type=2 #130
+2025/11/13-13:19:05.640 4b34 Delete type=2 #131
+2025/11/13-13:19:05.640 4b34 Delete type=2 #134
