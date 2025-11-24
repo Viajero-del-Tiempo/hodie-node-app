@@ -2,6 +2,7 @@ import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
 import { router as authRouter } from "./routes/auth.routes.js";
+import { router as orderRouter } from "./routes/order.routes.js";
 
 const app = express();
 
@@ -28,6 +29,8 @@ app.get("/ping", (req, res) => {
   console.log("🔄 Ping recibido:", new Date().toLocaleString());
   res.status(200).send("pong 🏓");
 });
+
 app.use("/auth", authRouter);
+app.use("/orders", orderRouter);
 
 export default app;

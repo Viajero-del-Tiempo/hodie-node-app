@@ -1,5 +1,5 @@
 import pkg from "whatsapp-web.js";
-const { Client, LocalAuth } = pkg;
+const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from "qrcode-terminal";
 
 export const whatsappClient = new Client({
@@ -87,3 +87,5 @@ whatsappClient.on("message", async (mensaje) => {
 });
 
 await whatsappClient.initialize();
+
+export {MessageMedia};

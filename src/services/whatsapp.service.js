@@ -1,4 +1,5 @@
-import { whatsappClient } from "../config/whatsapp.js";
+import { whatsappClient, MessageMedia } from "../config/whatsapp.js";
+import fs from "fs";
 
 export const sendVerificationCode = async (phone, code) => {
   const chatId = `${phone}@c.us`;
@@ -12,18 +13,78 @@ export const sendWelcomeMessage = async (phone) => {
   const message2 = `*¡Bienvenido a HoDie Tienda de Regalos.🎁!* \n Estamos aquí para ayudarte en lo que necesites. 😊`;
   await whatsappClient.sendMessage(chatId, message2);
   console.log(`📤 Mensaje de bienvenida enviado a ${phone}`);
-}
+};
 
 export const sendErrorMessage = async (phone) => {
   const chatId = `${phone}@c.us`;
   const message = `❌ Código inválido o expirado. Intenta de nuevo.`;
   await whatsappClient.sendMessage(chatId, message);
   console.log(`📤 Mensaje de error enviado a ${phone}`);
-}
+};
 
 export const sendLimitError = async (phone) => {
   const chatId = `${phone}@c.us`;
   const message = `❌ Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.`;
   await whatsappClient.sendMessage(chatId, message);
   console.log(`📤 Mensaje de limite exedido enviado a ${phone}`);
-}
+};
+
+export const sendOrderPDF = async (phone, pdfPath) => {
+  try {
+    const pdfBuffer = fs.readFileSync(pdfPath);
+    const base64 = pdfBuffer.toString("base64");
+
+    const media = new MessageMedia(
+      "application/pdf",
+      base64,
+      `pedido-${Date.now()}.pdf`
+    );
+
+    await whatsappClient.sendMessage(`${phone}@c.us`, media);
+
+    return true;
+  } catch (err) {
+    console.error("Error enviando PDF por WhatsApp:", err);
+    return false;
+  }
+};
+
+/**
+ * Envía un mensaje con el estado del pedido al cliente por WhatsApp.
+ *
+ * @param {string} phone - Número del cliente sin @c.us (ej: 595981234567)
+ * @param {string} status - Estado del pedido
+ */
+export const sendOrderStatus = async (phone, status) => {
+  try {
+    if (!phone) throw new Error("Número de teléfono requerido");
+    if (!status) throw new Error("Estado requerido");
+
+    // Normalizar número
+    const chatId = `${phone}@c.us`;
+
+    // Textos por estado
+    const statusMessages = {
+      pending:
+        "📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!",
+      paid: "💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!",
+      preparing:
+        "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
+      shipped:
+        "🚚 *Tu pedido ha sido enviado*\nLa transportadora se estará comunicando con vos para pasar a retirar.",
+      delivered:
+        "📦 *Compra culminada con éxito*\nAgradecemos tu preferencia y esperamos servirte nuevamente muy pronto!",
+      cancelled: "❌ *Tu pedido fue cancelado*",
+    };
+
+  
+    const message = statusMessages[status];
+
+    await whatsappClient.sendMessage(chatId, message);
+
+    return { success: true };
+  } catch (err) {
+    console.error("Error enviando estado del pedido:", err);
+    throw err;
+  }
+};

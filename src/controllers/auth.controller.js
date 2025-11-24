@@ -112,3 +112,4 @@ export const logout = async (req, res) => {
 
   res.json({ success: true, message: 'Sesión cerrada correctamente' });
 };
+
