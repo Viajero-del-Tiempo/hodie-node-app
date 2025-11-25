@@ -251,6 +251,8 @@ export const generateOrderPDF = async (order) => {
       // ======================================================
       // PIE
       // ======================================================
+      // nueva página
+      doc.addPage();
       // Obtener tamaño de página
       const pageWidth = doc.page.width;
       const pageHeight = doc.page.height;
