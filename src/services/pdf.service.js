@@ -131,7 +131,7 @@ export const generateOrderPDF = async (order) => {
 
       for (const item of order.items) {
         let productImage = null;
-        let productDescription = ''
+        let productDescription = "";
         if (item.selectedPackaging === null) {
           try {
             productImage = await loadImageFromUrl(item.imageUrl);
@@ -140,7 +140,7 @@ export const generateOrderPDF = async (order) => {
           }
         } else {
           try {
-            productDescription = ` con ${item.selectedPackaging.name}`
+            productDescription = ` con ${item.selectedPackaging.name}`;
             productImage = await loadImageFromUrl(
               item.selectedPackaging.imageUrl
             );
@@ -159,9 +159,7 @@ export const generateOrderPDF = async (order) => {
           .font("Poppins")
           .fontSize(15)
           .fillColor("#333")
-          .text(
-            `Producto: ${item.productName}${productDescription}`
-          )
+          .text(`Producto: ${item.productName}${productDescription}`)
           .text(`Código: ${item.productSku}`)
           .text(`Cantidad: ${item.quantity}`)
           .text(`Precio unitario: ${item.price.toLocaleString()} Gs.`)
@@ -253,11 +251,25 @@ export const generateOrderPDF = async (order) => {
       // ======================================================
       // PIE
       // ======================================================
-      doc
-        .font("Poppins")
-        .fontSize(28)
-        .fillColor("#666")
-        .text("Gracias por su compra", { align: "center" });
+      // Obtener tamaño de página
+      const pageWidth = doc.page.width;
+      const pageHeight = doc.page.height;
+
+      // Texto
+      const text = "Gracias por su compra";
+
+      // Obtener ancho y alto del texto
+      const textWidth = doc.widthOfString(text);
+      const textHeight = doc.heightOfString(text, { width: pageWidth });
+
+      // Calcular posición centrada
+      const x = (pageWidth - textWidth) / 2;
+      const y = (pageHeight - textHeight) / 2;
+
+      doc.font("Poppins").fontSize(28).fillColor("#666").text(text, x, y, {
+        align: "center",
+        width: textWidth,
+      });
 
       doc.end();
 
