@@ -131,9 +131,17 @@ export const generateOrderPDF = async (order) => {
 
       for (const item of order.items) {
         let productImage = null;
-        try {
-          productImage = await loadImageFromUrl(item.selectedPackaging.imageUrl);
-        } catch (_) {}
+        if (item.selectedPackaging === null) {
+          try {
+            productImage = await loadImageFromUrl(item.imageUrl);
+          } catch (_) {}
+        } else {
+          try {
+            productImage = await loadImageFromUrl(
+              item.selectedPackaging.imageUrl
+            );
+          } catch (_) {}
+        }
 
         // Si no hay espacio → nueva página
         const spaceLeftItem = doc.page.height - doc.y - 100; // margen de seguridad
@@ -145,7 +153,9 @@ export const generateOrderPDF = async (order) => {
           .font("Poppins")
           .fontSize(15)
           .fillColor("#333")
-          .text(`Producto: ${item.productName} con ${item.selectedPackaging.name}`)
+          .text(
+            `Producto: ${item.productName} con ${item.selectedPackaging.name}`
+          )
           .text(`Código: ${item.productSku}`)
           .text(`Cantidad: ${item.quantity}`)
           .text(`Precio unitario: ${item.price.toLocaleString()} Gs.`)
