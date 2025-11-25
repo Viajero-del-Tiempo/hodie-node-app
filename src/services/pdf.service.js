@@ -233,8 +233,8 @@ export const generateOrderPDF = async (order) => {
       if (fs.existsSync(bankImagePath)) {
         const spaceLeft = doc.page.height - doc.y - 100; // margen de seguridad
 
-        // Si no hay espacio → nueva página
-        if (spaceLeft < 280) doc.addPage();
+        // nueva página
+        doc.addPage();
 
         doc
           .font("Poppins-Bold")
