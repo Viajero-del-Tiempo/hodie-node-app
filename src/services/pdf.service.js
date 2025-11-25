@@ -131,16 +131,22 @@ export const generateOrderPDF = async (order) => {
 
       for (const item of order.items) {
         let productImage = null;
+        let productDescription = ''
         if (item.selectedPackaging === null) {
           try {
             productImage = await loadImageFromUrl(item.imageUrl);
-          } catch (_) {}
+          } catch (err) {
+            console.log('Falló con "item.imageUrl"', err);
+          }
         } else {
           try {
+            productDescription = ` con ${item.selectedPackaging.name}`
             productImage = await loadImageFromUrl(
               item.selectedPackaging.imageUrl
             );
-          } catch (_) {}
+          } catch (err) {
+            console.log('Falló con "item.selectedPackaging.imageUrl"', err);
+          }
         }
 
         // Si no hay espacio → nueva página
@@ -154,7 +160,7 @@ export const generateOrderPDF = async (order) => {
           .fontSize(15)
           .fillColor("#333")
           .text(
-            `Producto: ${item.productName} con ${item.selectedPackaging.name}`
+            `Producto: ${item.productName}${productDescription}`
           )
           .text(`Código: ${item.productSku}`)
           .text(`Cantidad: ${item.quantity}`)
@@ -258,6 +264,7 @@ export const generateOrderPDF = async (order) => {
       stream.on("finish", () => resolve(filePath));
       stream.on("error", reject);
     } catch (err) {
+      console.log(err);
       reject(err);
     }
   });
