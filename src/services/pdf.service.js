@@ -155,6 +155,8 @@ export const generateOrderPDF = async (order) => {
 
         if (productImage) doc.image(productImage, { width: 85 });
 
+        const priceTotal = item.price + item.selectedPackaging.price;
+
         doc
           .font("Poppins")
           .fontSize(15)
@@ -162,9 +164,10 @@ export const generateOrderPDF = async (order) => {
           .text(`Producto: ${item.productName}${productDescription}`)
           .text(`Código: ${item.productSku}`)
           .text(`Cantidad: ${item.quantity}`)
-          .text(`Precio unitario: ${item.price.toLocaleString()} Gs.`)
+          .text(`Precio unitario del producto: ${item.price.toLocaleString()} Gs.`)
+          .text(`Precio unitario del paquete: ${item.selectedPackaging.price.toLocaleString()} Gs.`)
           .text(
-            `Subtotal: ${(item.price * item.quantity).toLocaleString()} Gs.`
+            `Subtotal: ${(priceTotal * item.quantity).toLocaleString()} Gs.`
           )
           .moveDown(1);
 
