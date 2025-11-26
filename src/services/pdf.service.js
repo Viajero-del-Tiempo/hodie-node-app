@@ -130,47 +130,66 @@ export const generateOrderPDF = async (order) => {
       doc.moveDown(1);
 
       for (const item of order.items) {
+        // Definir precio total y descripción según el packaging
+        const priceTotal = item.selectedPackaging
+          ? item.price + item.selectedPackaging.price
+          : item.price;
+
+        const productDescription = item.selectedPackaging
+          ? ` con ${item.selectedPackaging.name}`
+          : "";
+
+        // Cargar la imagen correspondiente
         let productImage = null;
-        let productDescription = "";
-        if (item.selectedPackaging === null) {
-          try {
-            productImage = await loadImageFromUrl(item.imageUrl);
-          } catch (err) {
-            console.log('Falló con "item.imageUrl"', err);
-          }
-        } else {
-          try {
-            productDescription = ` con ${item.selectedPackaging.name}`;
-            productImage = await loadImageFromUrl(
-              item.selectedPackaging.imageUrl
-            );
-          } catch (err) {
-            console.log('Falló con "item.selectedPackaging.imageUrl"', err);
-          }
+        try {
+          const imageUrl = item.selectedPackaging?.imageUrl || item.imageUrl;
+          productImage = await loadImageFromUrl(imageUrl);
+        } catch (err) {
+          console.log(
+            `Falló al cargar la imagen de ${
+              item.selectedPackaging ? "packaging" : "producto"
+            }`,
+            err
+          );
         }
 
-        // Si no hay espacio → nueva página
+        // Revisar espacio en página y agregar nueva si es necesario
         const spaceLeftItem = doc.page.height - doc.y - 100; // margen de seguridad
         if (spaceLeftItem < 50) doc.addPage();
 
+        // Mostrar imagen si existe
         if (productImage) doc.image(productImage, { width: 85 });
 
-        const priceTotal = item.price + item.selectedPackaging.price;
+        // Definir estilo de texto una sola vez
+        doc.font("Poppins").fontSize(15).fillColor("#333");
 
+        // Información del producto
         doc
-          .font("Poppins")
-          .fontSize(15)
-          .fillColor("#333")
           .text(`Producto: ${item.productName}${productDescription}`)
           .text(`Código: ${item.productSku}`)
           .text(`Cantidad: ${item.quantity}`)
-          .text(`Precio unitario del producto: ${item.price.toLocaleString()} Gs.`)
-          .text(`Precio unitario del paquete: ${item.selectedPackaging.price.toLocaleString()} Gs.`)
+          .text(
+            `Precio unitario del producto: ${item.price.toLocaleString()} Gs.`
+          )
+          .moveDown(1);
+
+        // Información del packaging si existe
+        if (item.selectedPackaging) {
+          doc
+            .text(
+              `Precio unitario del paquete: ${item.selectedPackaging.price.toLocaleString()} Gs.`
+            )
+            .moveDown(1);
+        }
+
+        // Subtotal
+        doc
           .text(
             `Subtotal: ${(priceTotal * item.quantity).toLocaleString()} Gs.`
           )
           .moveDown(1);
 
+        // Divider entre productos
         divider();
       }
 
