@@ -56,7 +56,7 @@ export const sendOrderPDF = async (phone, pdfPath) => {
  * @param {string} status - Estado del pedido
  * @param {number | null} amount - Monto total a pagar del pedido
  */
-export const sendOrderStatus = async (phone, status, amount = null) => {
+export const sendOrderStatus = async (phone, status, amount) => {
   try {
     if (!phone) throw new Error("Número de teléfono requerido");
     if (!status) throw new Error("Estado requerido");
@@ -66,13 +66,11 @@ export const sendOrderStatus = async (phone, status, amount = null) => {
 
     // Textos por estado
     const statusMessages = {
-      pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\n
-                    *Monto:* ${amount ? amount.toLocaleString() : "N/A"} Gs.\n
-                    *Alias para el pago:* +595987305945 (celular)\n
-                    Más abajo los detalles completos 👇`,
+      pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\n*Monto:* ${
+        amount ? amount.toLocaleString() : "N/A"
+      } Gs.\n*Alias para el pago:* +595987305945 (celular)\nMás abajo los detalles completos 👇`,
       paid: `💳 *Hemos recibido tu pago*\n
-                Tu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n
-                ¡Muchas gracias!`,
+                Tu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
       shipped:

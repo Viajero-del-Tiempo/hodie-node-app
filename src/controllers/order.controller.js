@@ -84,7 +84,7 @@ export const sendOrder = async (req, res) => {
 
 export const updateOrderStatus = async (req, res) => {
 try {
-    const { phone, status } = req.body;
+    const { phone, status, amount } = req.body;
 
     if (!phone || !status) {
       return res.status(400).json({
@@ -93,7 +93,7 @@ try {
     }
 
     // Envia el mensaje por WhatsApp
-    await sendOrderStatus(phone, status);
+    await sendOrderStatus(phone, status, amount);
 
     return res.json({
       success: true,
