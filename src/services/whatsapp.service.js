@@ -54,8 +54,9 @@ export const sendOrderPDF = async (phone, pdfPath) => {
  *
  * @param {string} phone - Número del cliente sin @c.us (ej: 595981234567)
  * @param {string} status - Estado del pedido
+ * @param {number | null} amount - Monto total a pagar del pedido
  */
-export const sendOrderStatus = async (phone, status) => {
+export const sendOrderStatus = async (phone, status, amount = null) => {
   try {
     if (!phone) throw new Error("Número de teléfono requerido");
     if (!status) throw new Error("Estado requerido");
@@ -65,9 +66,13 @@ export const sendOrderStatus = async (phone, status) => {
 
     // Textos por estado
     const statusMessages = {
-      pending:
-        "📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!",
-      paid: "💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!",
+      pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\n
+                    *Monto:* ${amount ? amount.toLocaleString() : "N/A"} Gs.\n
+                    *Alias para el pago:* +595987305945 (celular)\n
+                    Más abajo los detalles completos 👇`,
+      paid: `💳 *Hemos recibido tu pago*\n
+                Tu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n
+                ¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
       shipped:
@@ -77,7 +82,6 @@ export const sendOrderStatus = async (phone, status) => {
       cancelled: "❌ *Tu pedido fue cancelado*",
     };
 
-  
     const message = statusMessages[status];
 
     await whatsappClient.sendMessage(chatId, message);
