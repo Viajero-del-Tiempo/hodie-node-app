@@ -66,11 +66,10 @@ export const sendOrderStatus = async (phone, status, amount) => {
 
     // Textos por estado
     const statusMessages = {
-      pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\n*Monto:* ${
+      pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\nSi tu pago ingresa después del medio día, el mismo será enviado al día siguiente\n*Monto:* ${
         amount ? amount.toLocaleString() : "N/A"
       } Gs.\n*Alias para el pago:* +595987305945 (celular)\nMás abajo los detalles completos 👇`,
-      paid: `💳 *Hemos recibido tu pago*\n
-                Tu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
+      paid: `💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
       shipped:
@@ -81,6 +80,10 @@ export const sendOrderStatus = async (phone, status, amount) => {
     };
 
     const message = statusMessages[status];
+
+    if (status === "pending") {
+      await sendWelcomeMessage(phone);
+    }
 
     await whatsappClient.sendMessage(chatId, message);
 

@@ -1,7 +1,6 @@
 import jwt from 'jsonwebtoken';
 import {
   sendVerificationCode,
-  sendWelcomeMessage,
   sendErrorMessage,
   sendLimitError,
 } from '../services/whatsapp.service.js';
@@ -69,7 +68,6 @@ export const verifyCode = async (req, res) => {
       if (elapsedTime < CODE_EXPIRATION_MINUTES * 60 * 1000) {
         const token = jwt.sign({ phone }, JWT_SECRET, { expiresIn: JWT_EXPIRATION });
         res.json({ success: true, message: 'Usuario verificado correctamente', token });
-        await sendWelcomeMessage(phone);
       } else {
         await sendErrorMessage(phone);
         res.status(400).json({ error: 'Código expirado' });
