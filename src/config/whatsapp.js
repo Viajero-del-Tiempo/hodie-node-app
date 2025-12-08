@@ -3,11 +3,26 @@ const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from "qrcode-terminal";
 
 export const whatsappClient = new Client({
-  authStrategy: new LocalAuth({ dataPath: "./session" }),
+  authStrategy: new LocalAuth({
+    dataPath: "./sessions",
+    clientId: "client-one",
+  }),
   puppeteer: {
     headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--single-process",
+      "--disable-gpu",
+    ],
+    bypassCSP: true,
+   ignoreHTTPSErrors: true,
   },
+  authTimeoutMs: 60000,
 });
 
 whatsappClient.on("qr", (qr) => {
@@ -77,15 +92,19 @@ whatsappClient.on("message", async (mensaje) => {
       await mensaje.reply("👋 ¡Hasta luego! Que tengas un excelente día.");
       break;
     case "ayuda":
-      await mensaje.reply(
-        "🆘 Para asistencia, visitá: https://hodie.com.py/contacto"
-      );
+      await mensaje.reply("🆘 Para asistencia, visitá: https://hodie.com.py");
       break;
     default:
       break;
   }
 });
 
-await whatsappClient.initialize();
+export const initializeWhatsapp = async () => {
+  try {
+    await whatsappClient.initialize();
+  } catch (error) {
+    console.error("Error initializing WhatsApp client:", error);
+  }
+};
 
-export {MessageMedia};
+export { MessageMedia };

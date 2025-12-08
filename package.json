@@ -20,6 +20,6 @@
     "pdfkit": "^0.17.2",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^13.0.0",
-    "whatsapp-web.js": "^1.34.1"
+    "whatsapp-web.js": "^1.34.2"
   }
 }
