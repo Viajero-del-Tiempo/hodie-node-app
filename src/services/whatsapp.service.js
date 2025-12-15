@@ -68,7 +68,7 @@ export const sendOrderStatus = async (phone, status, amount) => {
     const statusMessages = {
       pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\nSi tu pago ingresa después del medio día, el mismo será enviado al día siguiente\n*Monto:* ${
         amount ? amount.toLocaleString() : "N/A"
-      } Gs.\n*Alias para el pago:* +595987305945 (celular)\nMás abajo los detalles completos 👇`,
+      } Gs.\n*Costo de envío:* Pago contra entrega\n*Alias para el pago:* +595987305945 (celular)\nMás abajo los detalles completos 👇`,
       paid: `💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",

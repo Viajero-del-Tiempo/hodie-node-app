@@ -239,7 +239,7 @@ export const generateOrderPDF = async (order) => {
         .fontSize(16)
         .fillColor("#333")
         .text(`Subtotal: ${order.subtotal.toLocaleString()} Gs.`)
-        .text(`Costo de envío: ${order.shippingCost.toLocaleString()} Gs.`)
+        .text(`Costo de envío: Pago contra entrega`)
         .moveDown(0.5);
 
       doc
