@@ -169,8 +169,7 @@ whatsappClient.on("message", async (mensaje) => {
       default:
         break;
     }
-
-    console.log("Mensaje recibido:", mensaje);
+    console.log("Mensaje recibido:", mensaje.body, "de:", mensaje.from);
   } catch (error) {
     console.error("Error processing message:", error);
   }
