@@ -20,7 +20,7 @@ export const whatsappClient = new Client({
       "--disable-gpu",
     ],
     bypassCSP: true,
-   ignoreHTTPSErrors: true,
+    ignoreHTTPSErrors: true,
   },
   authTimeoutMs: 60000,
 });
@@ -32,70 +32,147 @@ whatsappClient.on("qr", (qr) => {
 
 whatsappClient.on("ready", () => console.log("✅ WhatsApp listo"));
 whatsappClient.on("disconnected", (reason) =>
-  console.log("❌ Desconectado:", reason)
+  console.log("❌ Desconectado:", reason),
 );
 
 whatsappClient.on("message", async (mensaje) => {
-  const texto = mensaje.body?.toLowerCase().trim();
-  if (!texto) return;
+  try {
+    if (!mensaje.body) return;
 
-  console.log(`📩 Mensaje recibido de ${mensaje.from}: ${mensaje.body}`);
+    const chat = await mensaje.getChat();
+    const chatId = chat.id._serialized;
+    const texto = mensaje.body.toLowerCase().trim();
 
-  switch (texto) {
-    case "hola":
-      await mensaje.reply("¡Hola! 👋 ¿Cómo estás?");
-      break;
-    case "info":
-      await mensaje.reply(
-        "ℹ️ Podés encontrar más información en nuestro sitio web: https://hodie.com.py"
-      );
-      break;
-    case "ubicación":
-    case "ubicacion":
-      await mensaje.reply(
-        "📍 Nos encontramos en Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay."
-      );
-      break;
-    case "precios":
-    case "precio":
-      await mensaje.reply(
-        "💰 Nuestros precios están disponibles en: https://hodie.com.py"
-      );
-      break;
-    case "catalogo":
-    case "catálogo":
-      await mensaje.reply(
-        "🛍️ Aquí tenés nuestro catálogo completo: https://hodie.com.py"
-      );
-      break;
-    case "buenos dias":
-    case "buenos días":
-      await mensaje.reply("☀️ ¡Muy buenos días! ¿En qué puedo ayudarte hoy?😊");
-      break;
-    case "buen día":
-    case "buen dia":
-      await mensaje.reply("☀️ ¡buen día! En qué puedo ayudarte?");
-      break;
-    case "buenas tardes":
-      await mensaje.reply("🌇 ¡Buenas tardes! ¿En qué puedo ayudarte?");
-      break;
-    case "buenas noches":
-      await mensaje.reply("🌙 ¡Buenas noches! ¿En qué puedo ayudarte? 😊");
-      break;
-    case "gracias":
-      await mensaje.reply("¡De nada! 😊");
-      break;
-    case "chau":
-    case "adiós":
-    case "adios":
-    case "hasta luego":
-      await mensaje.reply("👋 ¡Hasta luego! Que tengas un excelente día.");
-      break;
-    case "ayuda":
-      await mensaje.reply("🆘 Para asistencia, visitá: https://hodie.com.py");
-      break;
-    default:
-      break;
+    switch (texto) {
+      case "hola":
+        await whatsappClient.sendMessage(chatId, "Hola 👋", {
+          quotedMessageId: mensaje.id._serialized,
+          sendSeen: false,
+        });
+        break;
+      case "info":
+        await whatsappClient.sendMessage(
+          chatId,
+          "ℹ️ Podés encontrar más información en nuestro sitio web: https://hodie.com.py",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "ubicación":
+      case "ubicacion":
+        await whatsappClient.sendMessage(
+          chatId,
+          "📍 Nos encontramos en Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay.",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "precios":
+      case "precio":
+      case "¿precios?":
+      case "¿precio?":
+        await whatsappClient.sendMessage(
+          chatId,
+          "💰 Nuestros precios están disponibles en: https://hodie.com.py",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "catalogo":
+      case "catálogo":
+        await whatsappClient.sendMessage(
+          chatId,
+          "🛍️ Aquí tenés nuestro catálogo completo: https://hodie.com.py",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "buenos dias":
+      case "buenos días":
+        await whatsappClient.sendMessage(
+          chatId,
+          "☀️ ¡Muy buenos días! ¿En qué puedo ayudarte hoy?😊",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "buen día":
+      case "buen dia":
+        await whatsappClient.sendMessage(
+          chatId,
+          "☀️ ¡buen día! En qué puedo ayudarte?",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "buenas tardes":
+        await whatsappClient.sendMessage(
+          chatId,
+          "🌇 ¡Buenas tardes! ¿En qué puedo ayudarte?",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "buenas noches":
+        await whatsappClient.sendMessage(
+          chatId,
+          "🌙 ¡Buenas noches! ¿En qué puedo ayudarte? 😊",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "gracias":
+        await whatsappClient.sendMessage(chatId, "¡De nada! 😊", {
+          quotedMessageId: mensaje.id._serialized,
+          sendSeen: false,
+        });
+        break;
+      case "chau":
+      case "adiós":
+      case "adios":
+      case "hasta luego":
+        await whatsappClient.sendMessage(
+          chatId,
+          "👋 ¡Hasta luego! Que tengas un excelente día.",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      case "ayuda":
+        await whatsappClient.sendMessage(
+          chatId,
+          "🆘 Para asistencia, visitá: https://hodie.com.py",
+          {
+            quotedMessageId: mensaje.id._serialized,
+            sendSeen: false,
+          },
+        );
+        break;
+      default:
+        break;
+    }
+
+    console.log("Mensaje recibido:", mensaje);
+  } catch (error) {
+    console.error("Error processing message:", error);
   }
 });
 
