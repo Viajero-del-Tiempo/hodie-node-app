@@ -1,3 +1,2 @@
-2026/01/27-14:39:48.916 2cb8 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Sync Data\LevelDB/MANIFEST-000001
-2026/01/27-14:39:48.916 2cb8 Recovering log #3
-2026/01/27-14:39:48.917 2cb8 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\Sync Data\LevelDB/000003.log 
+2026/01/27-15:08:15.293 2d0c Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\Sync Data\LevelDB since it was missing.
+2026/01/27-15:08:15.320 2d0c Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Sync Data\LevelDB/MANIFEST-000001

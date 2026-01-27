@@ -1,3 +1,2 @@
-2026/01/27-14:39:56.008 1eb8 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\GCM Store/MANIFEST-000001
-2026/01/27-14:39:56.009 1eb8 Recovering log #3
-2026/01/27-14:39:56.009 1eb8 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\GCM Store/000003.log 
+2026/01/27-15:08:23.627 2b34 Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\GCM Store since it was missing.
+2026/01/27-15:08:23.661 2b34 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\GCM Store/MANIFEST-000001

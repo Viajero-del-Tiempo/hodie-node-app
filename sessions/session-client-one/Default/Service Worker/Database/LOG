@@ -1,3 +1,2 @@
-2026/01/27-14:39:48.919 1254 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Service Worker\Database/MANIFEST-000001
-2026/01/27-14:39:48.919 1254 Recovering log #3
-2026/01/27-14:39:48.920 1254 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\Service Worker\Database/000003.log 
+2026/01/27-15:08:18.534 3728 Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\Service Worker\Database since it was missing.
+2026/01/27-15:08:18.538 3728 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Service Worker\Database/MANIFEST-000001
