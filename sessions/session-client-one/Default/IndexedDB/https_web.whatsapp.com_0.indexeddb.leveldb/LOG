@@ -1,20 +1,6 @@
-2026/01/27-15:26:53.647 2ab4 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
-2026/01/27-15:26:53.647 2ab4 Recovering log #105
-2026/01/27-15:26:53.681 2ab4 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000105.log 
-2026/01/27-15:26:56.195 2ab4 Level-0 table #114: started
-2026/01/27-15:26:56.231 2ab4 Level-0 table #114: 1158921 bytes OK
-2026/01/27-15:26:56.233 2ab4 Delete type=0 #105
-2026/01/27-15:26:56.387 4784 Compacting 1@1 + 5@2 files
-2026/01/27-15:26:56.464 4784 Generated table #115@1: 48354 keys, 2210632 bytes
-2026/01/27-15:26:56.527 4784 Generated table #116@1: 26789 keys, 2185514 bytes
-2026/01/27-15:26:56.586 4784 Generated table #117@1: 14986 keys, 2187680 bytes
-2026/01/27-15:26:56.660 4784 Generated table #118@1: 68403 keys, 2218338 bytes
-2026/01/27-15:26:56.668 4784 Generated table #119@1: 3022 keys, 163846 bytes
-2026/01/27-15:26:56.668 4784 Compacted 1@1 + 5@2 files => 8966010 bytes
-2026/01/27-15:26:56.670 4784 compacted to: files[ 0 0 5 0 0 0 0 ]
-2026/01/27-15:26:56.670 4784 Delete type=2 #107
-2026/01/27-15:26:56.670 4784 Delete type=2 #108
-2026/01/27-15:26:56.670 4784 Delete type=2 #109
-2026/01/27-15:26:56.671 4784 Delete type=2 #110
-2026/01/27-15:26:56.671 4784 Delete type=2 #111
-2026/01/27-15:26:56.671 4784 Delete type=2 #114
+2026/01/27-16:10:49.395 3504 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/01/27-16:10:49.396 3504 Recovering log #113
+2026/01/27-16:10:49.420 3504 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000113.log 
+2026/01/27-16:11:21.825 3504 Level-0 table #122: started
+2026/01/27-16:11:21.860 3504 Level-0 table #122: 1272113 bytes OK
+2026/01/27-16:11:21.863 3504 Delete type=0 #113
