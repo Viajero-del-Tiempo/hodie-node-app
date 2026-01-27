@@ -1,3 +1,2 @@
-2026/01/27-16:10:52.181 3504 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Session Storage/MANIFEST-000001
-2026/01/27-16:10:52.181 3504 Recovering log #3
-2026/01/27-16:10:52.181 3504 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\Session Storage/000003.log 
+2026/01/27-16:31:16.400 728 Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\Session Storage since it was missing.
+2026/01/27-16:31:16.430 728 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Session Storage/MANIFEST-000001

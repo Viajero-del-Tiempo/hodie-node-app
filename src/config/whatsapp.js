@@ -18,6 +18,7 @@ export const whatsappClient = new Client({
       "--no-zygote",
       "--single-process",
       "--disable-gpu",
+      "--disable-software-rasterizer",
     ],
     bypassCSP: true,
     ignoreHTTPSErrors: true,

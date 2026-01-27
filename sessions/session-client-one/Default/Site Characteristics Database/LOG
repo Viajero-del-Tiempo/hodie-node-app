@@ -1,3 +1,2 @@
-2026/01/27-16:10:48.850 5028 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Site Characteristics Database/MANIFEST-000001
-2026/01/27-16:10:48.851 5028 Recovering log #3
-2026/01/27-16:10:48.851 5028 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\Site Characteristics Database/000003.log 
+2026/01/27-16:31:16.352 4780 Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\Site Characteristics Database since it was missing.
+2026/01/27-16:31:16.372 4780 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Site Characteristics Database/MANIFEST-000001

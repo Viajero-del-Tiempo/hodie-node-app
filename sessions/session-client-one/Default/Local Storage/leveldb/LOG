@@ -1,3 +1,2 @@
-2026/01/27-16:10:48.844 2718 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Local Storage\leveldb/MANIFEST-000001
-2026/01/27-16:10:48.845 2718 Recovering log #3
-2026/01/27-16:10:48.846 2718 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\Local Storage\leveldb/000003.log 
+2026/01/27-16:31:16.345 259c Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\Local Storage\leveldb since it was missing.
+2026/01/27-16:31:16.362 259c Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\Local Storage\leveldb/MANIFEST-000001

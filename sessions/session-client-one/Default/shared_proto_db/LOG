@@ -1,3 +1,2 @@
-2026/01/27-16:10:48.973 2598 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\shared_proto_db/MANIFEST-000001
-2026/01/27-16:10:48.973 2598 Recovering log #3
-2026/01/27-16:10:48.974 2598 Reusing old log C:\hodie-wa-app\sessions\session-client-one\Default\shared_proto_db/000003.log 
+2026/01/27-16:31:16.436 49f4 Creating DB C:\hodie-wa-app\sessions\session-client-one\Default\shared_proto_db since it was missing.
+2026/01/27-16:31:16.455 49f4 Reusing MANIFEST C:\hodie-wa-app\sessions\session-client-one\Default\shared_proto_db/MANIFEST-000001
