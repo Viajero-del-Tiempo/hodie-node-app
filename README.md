@@ -78,7 +78,7 @@ sequenceDiagram
     
     Note over WebApp: Usuario introduce el código recibido
     WebApp->>API: POST /auth/verify { phone, code }
-    alt Código Válido & No Expirado (<5min)
+    alt Código Válido y No Expirado (menos de 5 min)
         API->>API: Firma JWT Token
         API-->>WebApp: 200 OK { token }
     else Código Inválido / Expirado
