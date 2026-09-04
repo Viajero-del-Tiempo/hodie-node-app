@@ -18,9 +18,17 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "pdfkit": "^0.17.2",
-    "puppeteer": "^24.36.0",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^13.0.0",
-    "whatsapp-web.js": "^1.34.4"
+    "whatsapp-web.js": "^1.34.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.14"
+  },
+  "allowScripts": {
+    "puppeteer@24.38.0": true
+  },
+  "overrides": {
+    "puppeteer": "24.38.0"
   }
 }
