@@ -23,6 +23,7 @@ sessions/
 .wwebjs_cache/
 .wwebjs_auth/
 .puppeteer/
+.cache/
 .local-chromium/
 chrome-profile/
 

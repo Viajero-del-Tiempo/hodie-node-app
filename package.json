@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "postinstall": "puppeteer browsers install chrome"
   },
   "keywords": [],
   "author": "Arnaldo Guerrero",
@@ -22,14 +23,12 @@
     "firebase-admin": "^14.4.0",
     "jsonwebtoken": "^9.0.2",
     "pdfkit": "^0.17.2",
+    "puppeteer": "24.38.0",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^13.0.0",
     "whatsapp-web.js": "^1.34.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
-  },
-  "optionalDependencies": {
-    "puppeteer": "24.38.0"
   }
 }
