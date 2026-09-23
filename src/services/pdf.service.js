@@ -151,7 +151,9 @@ export const generateOrderPDF = async (order) => {
         let productImage = null;
         try {
           const imageUrl = item.selectedPackaging?.imageUrl || item.imageUrl;
-          productImage = await loadImageFromUrl(imageUrl);
+          if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
+            productImage = await loadImageFromUrl(imageUrl);
+          }
         } catch (err) {
           console.log(
             `Falló al cargar la imagen de ${

@@ -3,6 +3,10 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import { router as authRouter } from "./routes/auth.routes.js";
 import { router as orderRouter } from "./routes/order.routes.js";
+import { router as adminOrderRouter } from "./routes/admin.order.routes.js";
+import { router as adminProductRouter } from "./routes/admin.product.routes.js";
+import { router as userRouter } from "./routes/user.routes.js";
+import { router as adminUserRouter } from "./routes/admin.user.routes.js";
 
 const app = express();
 
@@ -14,7 +18,7 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: allowedOrigins,
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
@@ -32,5 +36,9 @@ app.get("/ping", (req, res) => {
 
 app.use("/auth", authRouter);
 app.use("/orders", orderRouter);
+app.use("/users", userRouter);
+app.use("/admin", adminOrderRouter);
+app.use("/admin", adminProductRouter);
+app.use("/admin", adminUserRouter);
 
 export default app;

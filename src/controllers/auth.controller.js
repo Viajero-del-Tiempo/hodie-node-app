@@ -10,9 +10,10 @@ import {
   MAX_CODE_REQUESTS,
 } from '../config/auth.js';
 import { JWT_SECRET, JWT_EXPIRATION } from '../config/jwt.js';
+import { db } from '../config/firebase.js';
 
-const inMemoryStorage = {};
-const tokenBlacklist = new Set();
+export const inMemoryStorage = {};
+export const tokenBlacklist = new Set();
 
 const generateCode = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
@@ -66,14 +67,52 @@ export const verifyCode = async (req, res) => {
       const now = Date.now();
       const elapsedTime = now - storedData.timestamp;
       if (elapsedTime < CODE_EXPIRATION_MINUTES * 60 * 1000) {
+        // Asegurar que el usuario existe en Firestore con Admin SDK
+        const snapshot = await db
+          .collection("users")
+          .where("phoneNumber", "==", phone)
+          .limit(1)
+          .get();
+
+        let userData;
+        if (snapshot.empty) {
+          const newDocRef = db.collection("users").doc();
+          userData = {
+            uid: newDocRef.id,
+            phoneNumber: phone,
+            displayName: "",
+            role: "customer",
+            whatsapp_verified: true,
+            profile_status: "incomplete",
+            addresses: [],
+            billingAddress: null,
+            active: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+          await newDocRef.set(userData);
+        } else {
+          const userDoc = snapshot.docs[0];
+          userData = { uid: userDoc.id, ...userDoc.data(), whatsapp_verified: true };
+          await userDoc.ref.update({
+            whatsapp_verified: true,
+            updatedAt: new Date(),
+          });
+        }
+
         const token = jwt.sign({ phone }, JWT_SECRET, { expiresIn: JWT_EXPIRATION });
-        res.json({ success: true, message: 'Usuario verificado correctamente', token });
+        res.json({
+          success: true,
+          message: 'Usuario verificado correctamente',
+          token,
+          user: userData,
+        });
       } else {
-        await sendErrorMessage(phone);
+        try { await sendErrorMessage(phone); } catch (e) { console.warn("No se pudo enviar mensaje de error WhatsApp:", e.message); }
         res.status(400).json({ error: 'Código expirado' });
       }
     } else {
-      await sendErrorMessage(phone);
+      try { await sendErrorMessage(phone); } catch (e) { console.warn("No se pudo enviar mensaje de error WhatsApp:", e.message); }
       res.status(400).json({ error: 'Código inválido' });
     }
   } catch (err) {
