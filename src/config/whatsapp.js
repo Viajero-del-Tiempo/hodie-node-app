@@ -49,8 +49,9 @@ whatsappClient.on("message", async (mensaje) => {
   try {
     if (!mensaje.body) return;
 
-    const chat = await mensaje.getChat();
-    const chatId = chat.id._serialized;
+    // Usamos mensaje.from directamente para evitar el bug de compatibilidad de whatsapp-web.js con WA Web 2.3000.x-alpha
+    // (mensaje.getChat() llama internamente a Client.getChatById que falla en Puppeteer evaluate con error 'r: r')
+    const chatId = mensaje.from;
     const texto = mensaje.body.toLowerCase().trim();
 
     switch (texto) {
