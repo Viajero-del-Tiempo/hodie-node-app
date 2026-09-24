@@ -37,10 +37,13 @@ whatsappClient.on("qr", (qr) => {
   qrcode.generate(qr, { small: true });
 });
 
-whatsappClient.on("ready", () => console.log("✅ WhatsApp listo"));
-whatsappClient.on("disconnected", (reason) =>
-  console.log("❌ Desconectado:", reason),
-);
+whatsappClient.on("ready", async () => {
+  console.log("✅ WhatsApp listo");
+  console.log(
+    "📌 WhatsApp Web Version:",
+    await whatsappClient.getWWebVersion(),
+  );
+});
 
 whatsappClient.on("message", async (mensaje) => {
   try {
