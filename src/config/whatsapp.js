@@ -66,7 +66,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "ubicacion":
         await whatsappClient.sendMessage(
           chatId,
-          "📍 Nos encontramos en Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay.",
+          "📍 Nos encontramos en la ciudad de Minga Guazú, Alto Paraná - Paraguay. Realizamos envíos a todo el país. Para ver nuestro catálogo completo, visitá: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
             sendSeen: false,
