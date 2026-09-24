@@ -28,8 +28,8 @@ export const sendOrder = async (req, res) => {
 
 export const updateOrderStatus = async (req, res) => {
   try {
-    const { phone, status, amount, orderId } = req.body;
-    const result = await updateOrderStatusAndNotify({ phone, status, amount, orderId });
+    const { phone, status, amount, orderId, whatsappChatId } = req.body;
+    const result = await updateOrderStatusAndNotify({ phone, status, amount, orderId, whatsappChatId });
     return res.json(result);
   } catch (error) {
     if (error.statusCode === 400) {

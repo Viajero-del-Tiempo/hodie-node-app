@@ -1,40 +1,80 @@
 import { whatsappClient, MessageMedia } from "../config/whatsapp.js";
 import fs from "fs";
 
-export const sendVerificationCode = async (phone, code) => {
+/**
+ * Normaliza y resuelve el identificador de chat para WhatsApp.
+ * Si recibe un whatsappChatId que ya contiene '@' (@c.us o @lid), lo usa directamente sin alterar.
+ * Si recibe un número de teléfono o string sin '@', aplica el fallback reconstruyendo
+ * `${target}@c.us` y emite una advertencia clara para trazabilidad de registros antiguos.
+ *
+ * @param {string} target - whatsappChatId (@c.us o @lid), o número de teléfono fallback
+ * @param {string} caller - Nombre de la función para el registro de advertencias
+ * @returns {string} Identificador de chat listo para whatsappClient.sendMessage
+ */
+export const resolveChatId = (target, caller = "whatsapp.service") => {
+  if (!target) {
+    throw new Error(`[${caller}] Destinatario no proporcionado (se requiere whatsappChatId o phone)`);
+  }
+
+  const cleaned = String(target).trim();
+  if (cleaned.includes("@")) {
+    return cleaned;
+  }
+
+  console.warn(
+    `⚠️ [FALLBACK ${caller}] Destinatario '${cleaned}' no incluye '@'. Reconstruyendo '${cleaned}@c.us'. ` +
+    `Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.`
+  );
+  return `${cleaned}@c.us`;
+};
+
+export const sendVerificationCode = async (whatsappChatId, code) => {
   try {
-    const chatId = `${phone}@c.us`;
+    const chatId = resolveChatId(whatsappChatId, "sendVerificationCode");
     const message = `Tu código de verificación es: *${code}*`;
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
-    console.log(`📤 Código enviado a ${phone}: ${code}`);
+    console.log(`📤 Código enviado a ${chatId}: ${code}`);
   } catch (error) {
-    console.error(`Error enviando código de verificación a ${phone}:`, error);
+    console.error(`Error enviando código de verificación a ${whatsappChatId}:`, error);
   }
 };
 
-export const sendWelcomeMessage = async (phone) => {
-  const chatId = `${phone}@c.us`;
-  const message2 = `*¡Bienvenido a HoDie Tienda de Regalos.🎁!* \n Estamos aquí para ayudarte en lo que necesites. 😊`;
-  await whatsappClient.sendMessage(chatId, message2, { sendSeen: false });
-  console.log(`📤 Mensaje de bienvenida enviado a ${phone}`);
-};
-
-export const sendErrorMessage = async (phone) => {
-  const chatId = `${phone}@c.us`;
-  const message = `❌ Código inválido o expirado. Intenta de nuevo.`;
-  await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
-  console.log(`📤 Mensaje de error enviado a ${phone}`);
-};
-
-export const sendLimitError = async (phone) => {
-  const chatId = `${phone}@c.us`;
-  const message = `❌ Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.`;
-  await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
-  console.log(`📤 Mensaje de limite exedido enviado a ${phone}`);
-};
-
-export const sendOrderPDF = async (phone, pdfPath) => {
+export const sendWelcomeMessage = async (whatsappChatId) => {
   try {
+    const chatId = resolveChatId(whatsappChatId, "sendWelcomeMessage");
+    const message2 = `*¡Bienvenido a HoDie Tienda de Regalos.🎁!* \n Estamos aquí para ayudarte en lo que necesites. 😊`;
+    await whatsappClient.sendMessage(chatId, message2, { sendSeen: false });
+    console.log(`📤 Mensaje de bienvenida enviado a ${chatId}`);
+  } catch (error) {
+    console.error(`Error enviando mensaje de bienvenida a ${whatsappChatId}:`, error);
+  }
+};
+
+export const sendErrorMessage = async (whatsappChatId) => {
+  try {
+    const chatId = resolveChatId(whatsappChatId, "sendErrorMessage");
+    const message = `❌ Código inválido o expirado. Intenta de nuevo.`;
+    await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
+    console.log(`📤 Mensaje de error enviado a ${chatId}`);
+  } catch (error) {
+    console.error(`Error enviando mensaje de error a ${whatsappChatId}:`, error);
+  }
+};
+
+export const sendLimitError = async (whatsappChatId) => {
+  try {
+    const chatId = resolveChatId(whatsappChatId, "sendLimitError");
+    const message = `❌ Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.`;
+    await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
+    console.log(`📤 Mensaje de límite excedido enviado a ${chatId}`);
+  } catch (error) {
+    console.error(`Error enviando mensaje de límite a ${whatsappChatId}:`, error);
+  }
+};
+
+export const sendOrderPDF = async (whatsappChatId, pdfPath) => {
+  try {
+    const chatId = resolveChatId(whatsappChatId, "sendOrderPDF");
     const pdfBuffer = fs.readFileSync(pdfPath);
     const base64 = pdfBuffer.toString("base64");
 
@@ -44,7 +84,7 @@ export const sendOrderPDF = async (phone, pdfPath) => {
       `pedido-${Date.now()}.pdf`
     );
 
-    await whatsappClient.sendMessage(`${phone}@c.us`, media, { sendSeen: false });
+    await whatsappClient.sendMessage(chatId, media, { sendSeen: false });
 
     return true;
   } catch (err) {
@@ -56,17 +96,16 @@ export const sendOrderPDF = async (phone, pdfPath) => {
 /**
  * Envía un mensaje con el estado del pedido al cliente por WhatsApp.
  *
- * @param {string} phone - Número del cliente sin @c.us (ej: 595981234567)
+ * @param {string} whatsappChatId - Identificador de chat (@c.us o @lid) o teléfono fallback
  * @param {string} status - Estado del pedido
  * @param {number | null} amount - Monto total a pagar del pedido
  */
-export const sendOrderStatus = async (phone, status, amount) => {
+export const sendOrderStatus = async (whatsappChatId, status, amount) => {
   try {
-    if (!phone) throw new Error("Número de teléfono requerido");
+    if (!whatsappChatId) throw new Error("Identificador de destinatario (whatsappChatId) requerido");
     if (!status) throw new Error("Estado requerido");
 
-    // Normalizar número
-    const chatId = `${phone}@c.us`;
+    const chatId = resolveChatId(whatsappChatId, "sendOrderStatus");
 
     // Textos por estado
     const statusMessages = {
@@ -86,7 +125,7 @@ export const sendOrderStatus = async (phone, status, amount) => {
     const message = statusMessages[status];
 
     if (status === "pending") {
-      await sendWelcomeMessage(phone);
+      await sendWelcomeMessage(whatsappChatId);
     }
 
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });

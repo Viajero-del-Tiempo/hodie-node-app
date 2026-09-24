@@ -49,21 +49,32 @@ whatsappClient.on("message", async (mensaje) => {
   try {
     if (!mensaje.body) return;
 
-    // Usamos mensaje.from directamente para evitar el bug de compatibilidad de whatsapp-web.js con WA Web 2.3000.x-alpha
-    // (mensaje.getChat() llama internamente a Client.getChatById que falla en Puppeteer evaluate con error 'r: r')
-    const chatId = mensaje.from;
+    // 1. Identificador de chat tal cual lo entrega WhatsApp (@c.us o @lid) para respuestas exclusivas
+    const whatsappChatId = mensaje.from;
+
+    // 2. Número canónico de teléfono del contacto (E.164) para identificación y lógica de negocio
+    let userPhoneNumber = "";
+    try {
+      const contact = await mensaje.getContact();
+      userPhoneNumber = contact?.number || "";
+    } catch (contactErr) {
+      console.warn("⚠️ No se pudo obtener contacto del mensaje:", contactErr.message);
+      // Fallback si getContact() falla y el mensaje proviene de @c.us
+      userPhoneNumber = mensaje.from.includes("@c.us") ? mensaje.from.replace("@c.us", "") : "";
+    }
+
     const texto = mensaje.body.toLowerCase().trim();
 
     switch (texto) {
       case "hola":
-        await whatsappClient.sendMessage(chatId, "Hola 👋", {
+        await whatsappClient.sendMessage(whatsappChatId, "Hola 👋", {
           quotedMessageId: mensaje.id._serialized,
           sendSeen: false,
         });
         break;
       case "info":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "ℹ️ Podés encontrar más información en nuestro sitio web: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -74,7 +85,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "ubicación":
       case "ubicacion":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "📍 Nos encontramos en la ciudad de Minga Guazú, Alto Paraná - Paraguay. Realizamos envíos a todo el país. Para ver nuestro catálogo completo, visitá: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -87,7 +98,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "¿precios?":
       case "¿precio?":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "💰 Nuestros precios están disponibles en: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -98,7 +109,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "catalogo":
       case "catálogo":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "🛍️ Aquí tenés nuestro catálogo completo: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -109,7 +120,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "buenos dias":
       case "buenos días":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "☀️ ¡Muy buenos días! ¿En qué puedo ayudarte hoy?😊",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -120,7 +131,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "buen día":
       case "buen dia":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "☀️ ¡buen día! En qué puedo ayudarte?",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -130,7 +141,7 @@ whatsappClient.on("message", async (mensaje) => {
         break;
       case "buenas tardes":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "🌇 ¡Buenas tardes! ¿En qué puedo ayudarte?",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -140,7 +151,7 @@ whatsappClient.on("message", async (mensaje) => {
         break;
       case "buenas noches":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "🌙 ¡Buenas noches! ¿En qué puedo ayudarte? 😊",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -149,7 +160,7 @@ whatsappClient.on("message", async (mensaje) => {
         );
         break;
       case "gracias":
-        await whatsappClient.sendMessage(chatId, "¡De nada! 😊", {
+        await whatsappClient.sendMessage(whatsappChatId, "¡De nada! 😊", {
           quotedMessageId: mensaje.id._serialized,
           sendSeen: false,
         });
@@ -159,7 +170,7 @@ whatsappClient.on("message", async (mensaje) => {
       case "adios":
       case "hasta luego":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "👋 ¡Hasta luego! Que tengas un excelente día.",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -169,7 +180,7 @@ whatsappClient.on("message", async (mensaje) => {
         break;
       case "ayuda":
         await whatsappClient.sendMessage(
-          chatId,
+          whatsappChatId,
           "🆘 Para asistencia, visitá: https://hodie.com.py",
           {
             quotedMessageId: mensaje.id._serialized,
@@ -180,7 +191,13 @@ whatsappClient.on("message", async (mensaje) => {
       default:
         break;
     }
-    console.log("Mensaje recibido:", mensaje.body, "de:", mensaje.from);
+    console.log(
+      "Mensaje recibido:",
+      mensaje.body,
+      "de:",
+      userPhoneNumber,
+      `(${whatsappChatId})`
+    );
   } catch (error) {
     console.error("Error processing message:", error);
   }

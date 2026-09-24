@@ -100,7 +100,22 @@ export const AgentStateAnnotation = Annotation.Root({
    * Identificador canónico del usuario (número de teléfono normalizado, ej. "595981234567")
    */
   userPhoneNumber: Annotation({
-    reducer: (_, next) => next,
+    reducer: (prev, next) => {
+      if (next && typeof next === "object" && next.reset === true) return "";
+      return next !== undefined ? next : prev;
+    },
+    default: () => "",
+  }),
+
+  /**
+   * Identificador de chat de WhatsApp tal cual lo entrega WhatsApp (@c.us o @lid).
+   * Utilizado EXCLUSIVAMENTE para enviar mensajes de respuesta a través de WhatsApp.
+   */
+  whatsappChatId: Annotation({
+    reducer: (prev, next) => {
+      if (next && typeof next === "object" && next.reset === true) return "";
+      return next !== undefined ? next : prev;
+    },
     default: () => "",
   }),
 

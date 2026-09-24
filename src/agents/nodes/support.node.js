@@ -103,7 +103,14 @@ export const getLatestOrderForUser = async (userPhoneNumber) => {
 };
 
 /**
- * Notifica al administrador por WhatsApp sobre un evento relevante (comprobante recibido, handoff)
+ * Notifica al administrador por WhatsApp sobre un evento relevante (comprobante recibido, handoff).
+ *
+ * NOTA / TAREA 6: A diferencia de los clientes finales que cambian dinámicamente de identificador
+ * entre @c.us y @lid según el dispositivo vinculado, el número del administrador es estático y
+ * proviene de la variable de entorno ADMIN_WHATSAPP_PHONE. Por consistencia, si ADMIN_WHATSAPP_PHONE
+ * ya incluye un identificador completo (con '@'), se utiliza directamente; de lo contrario, se mantiene
+ * `${adminPhone}@c.us` como destino predeterminado.
+ *
  * @param {string} message
  */
 const notifyAdminViaWhatsApp = async (message) => {
@@ -111,7 +118,7 @@ const notifyAdminViaWhatsApp = async (message) => {
   if (!adminPhone) return;
 
   try {
-    const chatId = `${adminPhone}@c.us`;
+    const chatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
     console.log(`📢 Alerta enviada al WhatsApp del admin (${adminPhone})`);
   } catch (err) {

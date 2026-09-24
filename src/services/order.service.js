@@ -72,6 +72,7 @@ export const processAndSendOrder = async (orderData) => {
     orderNumber,
     createdAt,
     status: orderData.status || "pending",
+    whatsappChatId: orderData.whatsappChatId || "",
     updatedAt: new Date(),
   };
 
@@ -85,8 +86,9 @@ export const processAndSendOrder = async (orderData) => {
   // 5. Generar PDF premium con PDFKit
   const pdfPath = await generateOrderPDF(orderToSave);
 
-  // 6. Enviar PDF por WhatsApp al número del cliente
-  const sent = await sendOrderPDF(orderToSave.userPhoneNumber, pdfPath);
+  // 6. Enviar PDF por WhatsApp al chat del cliente (preferir whatsappChatId sobre userPhoneNumber)
+  const recipient = orderToSave.whatsappChatId || orderToSave.userPhoneNumber;
+  const sent = await sendOrderPDF(recipient, pdfPath);
 
   if (!sent) {
     const error = new Error("El PDF se generó, pero no se pudo enviar por WhatsApp.");
@@ -117,22 +119,40 @@ export const processAndSendOrder = async (orderData) => {
 /**
  * Actualiza el estado de un pedido y notifica al cliente por WhatsApp
  * @param {Object} params
- * @param {string} params.phone
+ * @param {string} [params.phone] - Número telefónico (fallback)
+ * @param {string} [params.whatsappChatId] - Identificador de chat de WhatsApp (@c.us o @lid)
  * @param {string} params.status
  * @param {number} [params.amount]
  * @param {string} [params.orderId]
  * @returns {Promise<{ success: boolean, message: string }>}
  */
-export const updateOrderStatusAndNotify = async ({ phone, status, amount, orderId }) => {
-  if (!phone || !status) {
-    const error = new Error("Los campos 'phone' y 'status' son requeridos");
+export const updateOrderStatusAndNotify = async ({ phone, status, amount, orderId, whatsappChatId }) => {
+  if (!phone && !whatsappChatId && !orderId) {
+    const error = new Error("Se requiere 'whatsappChatId', 'phone' o 'orderId'");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!status) {
+    const error = new Error("El campo 'status' es requerido");
     error.statusCode = 400;
     throw error;
   }
 
-  // Si se proporciona orderId, actualizar el estado en Firestore
+  let recipient = whatsappChatId;
+
+  // Si se proporciona orderId, actualizar el estado en Firestore y rescatar whatsappChatId si no se proveyó
   if (orderId) {
     try {
+      const orderDoc = await db.collection("orders").doc(orderId).get();
+      if (orderDoc.exists) {
+        const orderData = orderDoc.data();
+        if (!recipient && orderData?.whatsappChatId) {
+          recipient = orderData.whatsappChatId;
+        }
+        if (!recipient && orderData?.userPhoneNumber) {
+          recipient = orderData.userPhoneNumber;
+        }
+      }
       await db.collection("orders").doc(orderId).update({
         status,
         updatedAt: new Date(),
@@ -143,8 +163,19 @@ export const updateOrderStatusAndNotify = async ({ phone, status, amount, orderI
     }
   }
 
+  // Fallback a phone si no se pudo determinar recipient
+  if (!recipient) {
+    recipient = phone;
+  }
+
+  if (!recipient) {
+    const error = new Error("No se pudo determinar el destinatario para notificar el estado del pedido");
+    error.statusCode = 400;
+    throw error;
+  }
+
   // Enviar mensaje por WhatsApp
-  await sendOrderStatus(phone, status, amount);
+  await sendOrderStatus(recipient, status, amount);
 
   return {
     success: true,

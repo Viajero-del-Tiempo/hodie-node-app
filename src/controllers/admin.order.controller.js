@@ -202,10 +202,11 @@ export const updateAdminOrderStatus = async (req, res) => {
       updatedAt: new Date(),
     });
 
-    // 4. Notificar al cliente por WhatsApp
-    if (order.userPhoneNumber) {
+    // 4. Notificar al cliente por WhatsApp (preferir whatsappChatId sobre userPhoneNumber)
+    const recipient = order.whatsappChatId || order.userPhoneNumber;
+    if (recipient) {
       try {
-        await sendOrderStatus(order.userPhoneNumber, newStatus, order.total);
+        await sendOrderStatus(recipient, newStatus, order.total);
       } catch (wsErr) {
         console.warn("⚠️ No se pudo enviar notificación WhatsApp:", wsErr.message);
       }

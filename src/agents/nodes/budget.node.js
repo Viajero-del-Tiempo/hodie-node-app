@@ -552,6 +552,7 @@ export const budgetAgentNode = async (state) => {
         userId: state.user?.uid || `usr-${state.userPhoneNumber}`,
         userDisplayName: currentContext.shippingAddress?.recipientName || state.user?.displayName || "Cliente",
         userPhoneNumber: state.userPhoneNumber,
+        whatsappChatId: state.whatsappChatId || "",
         items: [
           {
             productId: currentContext.selectedProductId || "prod-custom",
@@ -589,7 +590,7 @@ export const budgetAgentNode = async (state) => {
         await processAndSendOrder(orderPayload);
 
         // Envía el mensaje con los datos bancarios para la transferencia (status pending)
-        await sendOrderStatus(state.userPhoneNumber, "pending", orderPayload.total);
+        await sendOrderStatus(state.whatsappChatId || state.userPhoneNumber, "pending", orderPayload.total);
 
         const successMessage =
           `🎉 *¡Tu pedido #${orderNumber} ha sido generado con éxito!*\n\n` +
