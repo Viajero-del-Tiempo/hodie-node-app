@@ -1,21 +1,25 @@
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { db } from "../../config/firebase.js";
-import { whatsappClient } from "../../config/whatsapp.js";
+import { toDate } from "../../utils/date.util.js";
 
 /**
  * Base de conocimiento estática de HoDie Tienda de Regalos
  */
 const HODIE_KNOWLEDGE_BASE = `
 INFORMACIÓN DE HODIE TIENDA DE REGALOS:
-- Ubicación física: Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay.
+- Ubicación física de la tienda: Barrio Centro, Minga Guazú, Alto Paraná, Paraguay.
 - Sitio web oficial: https://hodie.com.py
 - Tipos de productos: Regalos personalizados (tazas personalizadas, termos, indumentaria, cajas y empaques de regalo premium).
-- Envíos: Se realizan a todo el país a través de transportadora. El costo de envío es "Pago contra entrega" (el cliente abona el flete al retirar o recibir).
+- Políticas y Costos de Envío:
+  * Cliente en Minga Guazú (donde está la tienda): Envío local gratuito (costo 0 Gs.).
+  * Resto del país: Se envían a cualquier localidad del país mediante empresas transportadoras. El cliente paga el flete con la modalidad "Pago contra entrega", abonando el importe del envío directamente a la transportadora al recibir o retirar su paquete.
+  * Costo en el pedido de Hodie: Siempre figura 0 Gs. de envío en la orden, ya que Hodie no cobra ni recarga costo de flete.
+  * REGLA ANTI-ALUCINACIÓN (ESTRICTA): No inventes montos o tarifas de flete de transportadoras ni plazos de entrega que no figuren aquí. Si el cliente consulta cuánto le cobrará la transportadora para su ciudad, responde amablemente que el monto exacto lo establece la empresa de encomiendas de acuerdo al peso/volumen y la localidad de destino, o que puede coordinar con un asesor humano.
 - Tiempos de entrega y despacho:
   * Si el comprobante de pago ingresa antes del mediodía, el pedido se prepara y despacha en el día.
   * Si ingresa después del mediodía, se despacha al día hábil siguiente.
-  * Tiempo de entrega de la transportadora: 24 a 48 horas hábiles.
+  * Tiempo estimado de entrega de la transportadora: 24 a 48 horas hábiles.
 - Formas de pago: Transferencia bancaria o depósito. Los datos bancarios se entregan en el comprobante en PDF al confirmar el pedido.
   * IMPORTANTE: La confirmación de pagos es 100% manual por parte del equipo humano. No existe cobro por QR ni pasarela automática.
 `;
@@ -81,12 +85,8 @@ export const getLatestOrderForUser = async (userPhoneNumber) => {
 
         const orders = fallbackSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         orders.sort((a, b) => {
-          const timeA =
-            a.createdAt?.seconds ||
-            (a.createdAt instanceof Date ? a.createdAt.getTime() / 1000 : 0);
-          const timeB =
-            b.createdAt?.seconds ||
-            (b.createdAt instanceof Date ? b.createdAt.getTime() / 1000 : 0);
+          const timeA = toDate(a.createdAt)?.getTime() || 0;
+          const timeB = toDate(b.createdAt)?.getTime() || 0;
           return timeB - timeA;
         });
 
@@ -118,6 +118,7 @@ const notifyAdminViaWhatsApp = async (message) => {
   if (!adminPhone) return;
 
   try {
+    const { whatsappClient } = await import("../../config/whatsapp.js");
     const chatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
     console.log(`📢 Alerta enviada al WhatsApp del admin (${adminPhone})`);
@@ -300,11 +301,23 @@ export const supportAgentNode = async (state) => {
   const hasComplaint = complaintWords.some((w) => lastText.includes(w));
   if (hasComplaint) {
     console.log(`⚠️ Reclamo detectado en SupportAgent para ${userPhone}. Escalando a HumanHandoff.`);
+    const complaintResponse =
+      `Lamentamos mucho los inconvenientes con tu pedido. 😔\n\n` +
+      `Ya derivé tu reclamo con un asesor humano de nuestro equipo para darte una solución inmediata. En breve te responderán por este medio.`;
+
+    const adminSummary = `🚨 Reclamo detectado en soporte para +${userPhone}: "${lastText.slice(0, 100)}"`;
+    await notifyAdminViaWhatsApp(adminSummary);
+
     return {
+      messages: [new AIMessage(complaintResponse)],
       humanHandoffRequired: true,
       humanHandoffReason: `Reclamo del cliente: "${lastText.slice(0, 100)}"`,
       intent: "human_handoff",
       activeAgent: null,
+      adminNotification: {
+        type: "human_handoff",
+        summary: adminSummary,
+      },
     };
   }
 
@@ -372,11 +385,12 @@ DIRECTRICES ESTRICTAS:
   if (lastText.includes("envio") || lastText.includes("entrega") || lastText.includes("costo de envio")) {
     fallbackText =
       "🚚 *Envíos en HoDie:*\n\n" +
-      "• Enviamos a todo el país vía transportadora con pago contra entrega.\n" +
-      "• Si tu pago ingresa antes del mediodía, se despacha en el día; si ingresa después, al día hábil siguiente.\n" +
-      "• Tiempo de entrega: 24 a 48 hs hábiles.";
+      "• *Minga Guazú:* Envío local gratuito (0 Gs.).\n" +
+      "• *Resto del país:* Envío por transportadora con flete a abonar contra entrega al recibir.\n" +
+      "• *Despacho:* Si tu pago ingresa antes del mediodía, se despacha en el día; si ingresa después, al día hábil siguiente.\n" +
+      "• *Tiempo estimado transportadora:* 24 a 48 hs hábiles.";
   } else if (lastText.includes("donde") || lastText.includes("ubicacion") || lastText.includes("direccion")) {
-    fallbackText = "📍 Nos encontramos en Chaco Boreal 1021 casi Capitán Dominguez, Caacupé, Paraguay.";
+    fallbackText = "📍 Nuestra tienda HoDie se encuentra en Barrio Centro, Minga Guazú, Alto Paraná, Paraguay. Hacemos envíos a todo el país.";
   } else if (lastText.includes("pago") || lastText.includes("transferencia") || lastText.includes("cuenta")) {
     fallbackText =
       "💳 *Métodos de pago:*\n\n" +

@@ -1,3 +1,4 @@
+import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
 
 export const ALLOWED_PACKAGING_KEYS = ["caja", "bolsa", "envoltorio"];
@@ -117,8 +118,8 @@ export const createAdminProduct = async (req, res) => {
       stock: Number(productData.stock || 0),
       sku: productData.sku || `HOD-${Date.now().toString().slice(-5)}`,
       active: true, // Soft-delete flag: producto activo
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
     };
 
     await newDocRef.set(newProduct);
@@ -165,7 +166,7 @@ export const updateAdminProduct = async (req, res) => {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    updateData.updatedAt = new Date();
+    updateData.updatedAt = Timestamp.now();
     await docRef.update(updateData);
 
     return res.json({ success: true, message: "Producto actualizado correctamente" });
@@ -202,8 +203,8 @@ export const deleteAdminProduct = async (req, res) => {
     // Soft-delete por defecto
     await docRef.update({
       active: false,
-      deletedAt: new Date(),
-      updatedAt: new Date(),
+      deletedAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
     });
 
     return res.json({
@@ -233,7 +234,7 @@ export const reactivateAdminProduct = async (req, res) => {
     await docRef.update({
       active: true,
       deletedAt: null,
-      updatedAt: new Date(),
+      updatedAt: Timestamp.now(),
     });
 
     return res.json({

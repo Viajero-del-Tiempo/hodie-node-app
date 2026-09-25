@@ -10,6 +10,7 @@ import {
   MAX_CODE_REQUESTS,
 } from '../config/auth.js';
 import { JWT_SECRET, JWT_EXPIRATION } from '../config/jwt.js';
+import { Timestamp } from 'firebase-admin/firestore';
 import { db } from '../config/firebase.js';
 
 export const inMemoryStorage = {};
@@ -87,8 +88,8 @@ export const verifyCode = async (req, res) => {
             addresses: [],
             billingAddress: null,
             active: true,
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
           };
           await newDocRef.set(userData);
         } else {
@@ -96,7 +97,7 @@ export const verifyCode = async (req, res) => {
           userData = { uid: userDoc.id, ...userDoc.data(), whatsapp_verified: true };
           await userDoc.ref.update({
             whatsapp_verified: true,
-            updatedAt: new Date(),
+            updatedAt: Timestamp.now(),
           });
         }
 

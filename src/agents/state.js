@@ -166,11 +166,22 @@ export const AgentStateAnnotation = Annotation.Root({
   }),
 
   /**
-   * Archivo multimedia entrante en el turno actual
+   * Archivo multimedia entrante en el turno actual.
+   * NOTA: Ningún nodo del sistema (router, budget, support) consume el binario o base64
+   * de la imagen; solo requieren constatar la presencia del archivo y sus metadatos (mimetype, filename).
+   * En cumplimiento con la opción (b), el reducer descarta cualquier payload pesado ('data')
+   * para nunca exceder el límite de 1 MiB por documento en Firestore.
    * @type {IncomingMedia | null}
    */
   incomingMedia: Annotation({
-    reducer: (_, next) => next,
+    reducer: (_, next) => {
+      if (!next) return null;
+      if (typeof next === "object" && next.data) {
+        const { data, ...metadata } = next;
+        return metadata;
+      }
+      return next;
+    },
     default: () => null,
   }),
 

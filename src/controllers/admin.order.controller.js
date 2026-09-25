@@ -1,3 +1,4 @@
+import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
 import { sendOrderStatus } from "../services/whatsapp.service.js";
 
@@ -53,7 +54,7 @@ export const deductStockInTransaction = async (orderItems) => {
 
       transaction.update(ref, {
         stock: newStock,
-        updatedAt: new Date(),
+        updatedAt: Timestamp.now(),
       });
     }
   });
@@ -94,7 +95,7 @@ export const restoreStockInTransaction = async (orderItems) => {
 
       transaction.update(ref, {
         stock: newStock,
-        updatedAt: new Date(),
+        updatedAt: Timestamp.now(),
       });
     }
   });
@@ -199,7 +200,7 @@ export const updateAdminOrderStatus = async (req, res) => {
     // 3. Persistir nuevo estado en Firestore
     await orderRef.update({
       status: newStatus,
-      updatedAt: new Date(),
+      updatedAt: Timestamp.now(),
     });
 
     // 4. Notificar al cliente por WhatsApp (preferir whatsappChatId sobre userPhoneNumber)

@@ -34,6 +34,46 @@ export const requireAuth = async (req, res, next) => {
 };
 
 /**
+ * Middleware para endpoints transaccionales (como POST /orders/order/send).
+ * Se aplica exclusivamente después de requireAuth.
+ * Consulta la colección 'users' de Firestore por phoneNumber:
+ * - 401 si el usuario no existe en la base de datos.
+ * - 403 si el usuario tiene active === false.
+ * Inyecta req.user = { uid: doc.id, ...doc.data() }.
+ */
+export const loadActiveUser = async (req, res, next) => {
+  try {
+    const phone = req.userPhone;
+    if (!phone) {
+      return res.status(401).json({ error: "No se identificó el teléfono del usuario en la sesión." });
+    }
+
+    const snapshot = await db
+      .collection("users")
+      .where("phoneNumber", "==", phone)
+      .limit(1)
+      .get();
+
+    if (snapshot.empty) {
+      return res.status(401).json({ error: "Usuario no registrado en el sistema." });
+    }
+
+    const doc = snapshot.docs[0];
+    const userData = doc.data() || {};
+
+    if (userData.active === false) {
+      return res.status(403).json({ error: "Usuario inactivo o suspendido." });
+    }
+
+    req.user = { uid: doc.id, ...userData };
+    next();
+  } catch (err) {
+    console.error("Error en middleware loadActiveUser:", err);
+    return res.status(500).json({ error: "Error validando el estado del usuario." });
+  }
+};
+
+/**
  * Middleware para validar que la petición provenga de un usuario autenticado
  * con rol de administrador (role === 'admin') en la colección 'users'.
  * Inyecta req.user (con uid y datos del usuario) en la petición.

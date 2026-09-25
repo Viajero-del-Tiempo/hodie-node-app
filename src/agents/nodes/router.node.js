@@ -8,6 +8,7 @@ export const VALID_INTENTS = [
   "order_status",
   "ambiguous_media",
   "human_handoff",
+  "handoff_active_silence",
 ];
 
 /**
@@ -100,11 +101,15 @@ export const routerNode = async (state) => {
     // 1. ESTADO DE HANDOFF HUMANO BLOQUEANTE
     // Si la conversación ya está bajo atención humana y no fue cerrada
     // manualmente por el operador desde el dashboard, no responder automáticamente.
+    // Retorna intent explícito "handoff_active_silence" y limpia disparadores secundarios
+    // para garantizar silencio total sin depender de lo que otros nodos hayan dejado en el estado.
     // -------------------------------------------------------------
     if (state.humanHandoffRequired) {
       console.log(`🔒 Handoff humano activo para ${state.userPhoneNumber}. Manteniendo intervención.`);
       return {
-        intent: "human_handoff",
+        intent: "handoff_active_silence",
+        humanHandoffReason: null,
+        adminNotification: null,
       };
     }
 

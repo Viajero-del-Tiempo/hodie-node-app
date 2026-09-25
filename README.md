@@ -205,8 +205,8 @@ sequenceDiagram
     }
   ],
   "shippingAddress": {
-    "city": "Caacupé",
-    "department": "Cordillera",
+    "city": "Minga Guazú",
+    "department": "Alto Paraná",
     "street": "Calle Palma 123",
     "instructions": "Entregar en portón negro"
   },

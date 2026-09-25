@@ -1,8 +1,8 @@
 import express from 'express';
-import { sendOrder, updateOrderStatus } from '../controllers/order.controller.js';
+import { sendOrder } from '../controllers/order.controller.js';
+import { requireAuth, loadActiveUser } from '../middlewares/auth.middleware.js';
 
 export const router = express.Router();
 
-router.post('/order/send', sendOrder);
-router.post('/order/status', updateOrderStatus);
+router.post('/order/send', requireAuth, loadActiveUser, sendOrder);
 

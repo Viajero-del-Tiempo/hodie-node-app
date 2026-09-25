@@ -1,6 +1,11 @@
 import { AIMessage } from "@langchain/core/messages";
 import { db } from "../../config/firebase.js";
-import { processAndSendOrder, generateUniqueOrderNumber } from "../../services/order.service.js";
+import {
+  processAndSendOrder,
+  generateUniqueOrderNumber,
+  calculateQuoteTotals,
+  determineShippingMethod,
+} from "../../services/order.service.js";
 import { sendOrderStatus } from "../../services/whatsapp.service.js";
 
 /**
@@ -52,33 +57,6 @@ export const PACKAGING_LABELS = {
   bolsa: "Bolsa Decorativa",
   envoltorio: "Envoltorio Especial",
   estandar: "Empaque Estándar",
-};
-
-/**
- * Calcula el subtotal y total de la cotización
- *
- * LÓGICA DE NEGOCIO:
- * - Precio unitario del producto base
- * - Precio adicional del packaging elegido (packagingPrices)
- * - Multiplicado por la cantidad
- * - Costo de envío: Pago contra entrega (0 Gs. a cobrar por adelantado)
- *
- * @param {number} unitPrice
- * @param {number} packagingPrice
- * @param {number} quantity
- * @returns {{ subtotal: number, shippingCost: number, total: number }}
- */
-export const calculateQuoteTotals = (unitPrice, packagingPrice, quantity) => {
-  const safeUnitPrice = Number(unitPrice) || 0;
-  const safePackagingPrice = Number(packagingPrice) || 0;
-  const safeQuantity = Math.max(1, Number(quantity) || 1);
-
-  const pricePerItem = safeUnitPrice + safePackagingPrice;
-  const subtotal = pricePerItem * safeQuantity;
-  const shippingCost = 0; // Envíos con pago contra entrega en destino
-  const total = subtotal + shippingCost;
-
-  return { subtotal, shippingCost, total };
 };
 
 /**
@@ -427,7 +405,7 @@ export const budgetAgentNode = async (state) => {
       return {
         messages: [
           new AIMessage(
-            `¡Muchas gracias, *${recipientName}*! 👍\n\nAhora, ¿en qué *ciudad y departamento* se realizará la entrega? (Por ejemplo: _Caacupé, Cordillera_ o _Asunción, Central_) 🏙️`
+            `¡Muchas gracias, *${recipientName}*! 👍\n\nAhora, ¿en qué *ciudad y departamento* se realizará la entrega? (Por ejemplo: _Minga Guazú, Alto Paraná_ o _Asunción, Central_) 🏙️`
           ),
         ],
         activeAgent: "budget",
@@ -495,8 +473,8 @@ export const budgetAgentNode = async (state) => {
           currentContext.shippingAddress?.recipientName ||
           state.user?.displayName ||
           "Cliente",
-        city: currentContext.shippingAddress?.city || "Caacupé",
-        department: currentContext.shippingAddress?.department || "Cordillera",
+        city: currentContext.shippingAddress?.city || "Minga Guazú",
+        department: currentContext.shippingAddress?.department || "Alto Paraná",
         street,
         instructions: street,
       };
@@ -505,12 +483,19 @@ export const budgetAgentNode = async (state) => {
         ? `${finalShippingAddress.city}, ${finalShippingAddress.department}`
         : finalShippingAddress.city;
 
+      const shippingMethod = determineShippingMethod(finalShippingAddress.city);
+      const shippingLabel =
+        shippingMethod === "local_gratis"
+          ? "Envío local gratuito (Minga Guazú)"
+          : "Envío por transportadora (flete con pago contra entrega)";
+
       const confirmPrompt =
         `🔍 *Confirmación Final de tu Pedido HoDie:*\n\n` +
         `• *Destinatario:* ${finalShippingAddress.recipientName}\n` +
         `• *Teléfono:* +${state.userPhoneNumber}\n` +
         `• *Ubicación:* ${locationStr}\n` +
         `• *Dirección:* ${finalShippingAddress.street}\n` +
+        `• *Modalidad de Envío:* ${shippingLabel}\n` +
         `• *Producto:* ${currentContext.selectedProductName} (x${currentContext.quantity})\n` +
         `• *Empaque:* ${currentContext.selectedPackaging?.name || "Estándar"}\n` +
         `• *Total:* *${(currentContext.total || 0).toLocaleString()} Gs.*\n\n` +
@@ -571,29 +556,38 @@ export const budgetAgentNode = async (state) => {
           },
         ],
         shippingAddress: {
-          city: currentContext.shippingAddress?.city || "Caacupé",
-          department: currentContext.shippingAddress?.department || "Cordillera",
+          city: currentContext.shippingAddress?.city || "Minga Guazú",
+          department: currentContext.shippingAddress?.department || "Alto Paraná",
           street: currentContext.shippingAddress?.street || "Dirección a coordinar",
           instructions: currentContext.shippingAddress?.instructions || "",
         },
         status: "pending",
         subtotal: currentContext.subtotal || 0,
         shippingCost: 0,
+        shippingMethod: determineShippingMethod(currentContext.shippingAddress?.city),
         total: currentContext.total || 0,
-        createdAt: {
-          seconds: Math.floor(Date.now() / 1000),
-        },
       };
 
       try {
         // Reutilización directa del servicio de órdenes existente
-        await processAndSendOrder(orderPayload);
+        const orderResult = await processAndSendOrder(orderPayload);
 
         // Envía el mensaje con los datos bancarios para la transferencia (status pending)
-        await sendOrderStatus(state.whatsappChatId || state.userPhoneNumber, "pending", orderPayload.total);
+        await sendOrderStatus(
+          state.whatsappChatId || state.userPhoneNumber,
+          "pending",
+          orderResult.total || orderPayload.total
+        );
+
+        const shippingLabel =
+          orderResult.shippingMethod === "local_gratis"
+            ? "Envío local gratuito (Minga Guazú)"
+            : "Envío por transportadora (flete con pago contra entrega)";
 
         const successMessage =
           `🎉 *¡Tu pedido #${orderNumber} ha sido generado con éxito!*\n\n` +
+          `📦 *Modalidad de entrega:* ${shippingLabel}\n` +
+          `💰 *Total a transferir:* *${(orderResult.total || orderPayload.total).toLocaleString()} Gs.*\n\n` +
           `Te acabamos de enviar el comprobante oficial en PDF con todos los detalles y los datos de la cuenta bancaria para realizar la transferencia.\n\n` +
           `Cuando hagas la transferencia, simplemente envianos una foto del comprobante por este chat para que nuestro equipo lo verifique e inicie la producción. ¡Muchas gracias! 🎁✨`;
 

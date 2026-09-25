@@ -1,3 +1,4 @@
+import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
 
 // ==========================================
@@ -53,7 +54,7 @@ export const updateMyProfile = async (req, res) => {
     }
 
     const docRef = snapshot.docs[0].ref;
-    const updateData = { updatedAt: new Date() };
+    const updateData = { updatedAt: Timestamp.now() };
 
     if (displayName !== undefined) updateData.displayName = displayName;
     if (addresses !== undefined) updateData.addresses = addresses;
@@ -125,8 +126,8 @@ export const createAdminUser = async (req, res) => {
       addresses: addresses || [],
       billingAddress: billingAddress || null,
       active: true,
-      createdAt: new Date(),
-      updatedAt: new Date(),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
     };
 
     await newDocRef.set(newUser);
@@ -167,7 +168,7 @@ export const updateAdminUser = async (req, res) => {
       }
     }
 
-    updateData.updatedAt = new Date();
+    updateData.updatedAt = Timestamp.now();
     await userRef.update(updateData);
 
     return res.json({ success: true, message: "Usuario actualizado correctamente" });
@@ -212,7 +213,7 @@ export const updateAdminUserRole = async (req, res) => {
 
     await userRef.update({
       role,
-      updatedAt: new Date(),
+      updatedAt: Timestamp.now(),
     });
 
     return res.json({ success: true, message: `Rol actualizado a ${role}` });
@@ -252,8 +253,8 @@ export const deleteAdminUser = async (req, res) => {
     // Soft-delete por defecto para preservar histórico de pedidos
     await userRef.update({
       active: false,
-      deletedAt: new Date(),
-      updatedAt: new Date(),
+      deletedAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
     });
 
     return res.json({

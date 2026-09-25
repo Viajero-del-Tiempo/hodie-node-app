@@ -2,6 +2,7 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
 import { loadImageFromUrl } from "../services/image.service.js";
+import { toDate } from "../utils/date.util.js";
 
 export const generateOrderPDF = async (order) => {
   return new Promise(async (resolve, reject) => {
@@ -110,9 +111,7 @@ export const generateOrderPDF = async (order) => {
         .text(`Nombre: ${order.userDisplayName}`)
         .text(`Teléfono: ${order.userPhoneNumber}`)
         .text(
-          `Fecha del pedido: ${new Date(
-            order.createdAt.seconds * 1000
-          ).toLocaleString("es-PY", {
+          `Fecha del pedido: ${(toDate(order.createdAt) || new Date()).toLocaleString("es-PY", {
             timeZone: "America/Asuncion", // GMT-3
             year: "numeric",
             month: "2-digit",
@@ -168,7 +167,18 @@ export const generateOrderPDF = async (order) => {
         if (spaceLeftItem < 50) doc.addPage();
 
         // Mostrar imagen si existe
-        if (productImage) doc.image(productImage, { width: 85 });
+        if (productImage) {
+          try {
+            doc.image(productImage, { width: 85 });
+          } catch (err) {
+            console.log(
+              `Falló al incrustar la imagen de ${
+                item.selectedPackaging ? "packaging" : "producto"
+              } en el PDF:`,
+              err.message
+            );
+          }
+        }
 
         // Definir estilo de texto una sola vez
         doc.font("Poppins").fontSize(15).fillColor("#333");
@@ -236,12 +246,21 @@ export const generateOrderPDF = async (order) => {
 
       doc.moveDown(0.7);
 
+      const isLocalGratis = order.shippingMethod === "local_gratis";
+      const shippingTypeLabel = isLocalGratis
+        ? "Envío local gratuito (Minga Guazú)"
+        : "Envío por transportadora (pago contra entrega)";
+      const shippingCostLabel = isLocalGratis
+        ? "Gratis (0 Gs.)"
+        : "Pago contra entrega (a abonar a transportadora)";
+
       doc
         .font("Poppins")
         .fontSize(16)
         .fillColor("#333")
         .text(`Subtotal: ${order.subtotal.toLocaleString()} Gs.`)
-        .text(`Costo de envío: Pago contra entrega`)
+        .text(`Tipo de envío: ${shippingTypeLabel}`)
+        .text(`Costo de envío: ${shippingCostLabel}`)
         .moveDown(0.5);
 
       doc
