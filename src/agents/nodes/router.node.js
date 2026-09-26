@@ -33,7 +33,7 @@ const getLatestUserText = (messages) => {
  * @param {number} timeoutMs
  * @returns {Promise<{ intent: string, reason?: string }>}
  */
-const classifyIntentWithTimeout = async (userText, timeoutMs = 4000) => {
+const classifyIntentWithTimeout = async (userText, timeoutMs = 10000) => {
   const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
   // Si no hay API key configurada todavía en el entorno, simulamos el fallo o usamos heurística segura
@@ -46,6 +46,9 @@ const classifyIntentWithTimeout = async (userText, timeoutMs = 4000) => {
     model: modelName,
     apiKey,
     temperature: 0,
+    thinkingConfig: {
+      thinkingBudget: 0,
+    },
   });
 
   const prompt = `Eres el clasificador de intenciones para una tienda de regalos personalizados llamada HoDie.
@@ -253,7 +256,7 @@ export const routerNode = async (state) => {
     // -------------------------------------------------------------
     // 6. CLASIFICACIÓN DE INTENCIÓN VÍA LLM CON TIMEOUT
     // -------------------------------------------------------------
-    const classification = await classifyIntentWithTimeout(lastText, 4000);
+    const classification = await classifyIntentWithTimeout(lastText, 10000);
 
     if (!classification || !VALID_INTENTS.includes(classification.intent)) {
       throw new Error(`Clasificación ambigua o desconocida: ${JSON.stringify(classification)}`);
