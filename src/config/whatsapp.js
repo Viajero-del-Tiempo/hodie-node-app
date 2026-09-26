@@ -2,7 +2,24 @@ import pkg from "whatsapp-web.js";
 const { Client, LocalAuth, MessageMedia } = pkg;
 import qrcode from "qrcode-terminal";
 import { HumanMessage, AIMessage } from "@langchain/core/messages";
+import { Timestamp } from "firebase-admin/firestore";
 import { compiledGraph } from "../agents/graph.js";
+import { db } from "./firebase.js";
+
+/**
+ * Tipos de mensajes permitidos para procesamiento.
+ * Se descartan notificaciones de sistema, e2e_notification, plantillas, etc.
+ */
+export const ALLOWED_MESSAGE_TYPES = new Set([
+  "chat",
+  "image",
+  "document",
+  "audio",
+  "video",
+  "sticker",
+  "ptt",
+  "location",
+]);
 
 export const whatsappClient = new Client({
   authStrategy: new LocalAuth({
@@ -183,13 +200,25 @@ whatsappClient.on("message", async (mensaje) => {
   // Ignorar mensajes enviados por el propio bot (fromMe)
   if (mensaje.fromMe) return;
 
-  // 1. Filtrar mensajes de grupos (@g.us) o estados/historias (status@broadcast)
-  // El bot opera exclusivamente en chats individuales
-  if (!mensaje.from || mensaje.from.endsWith("@g.us") || mensaje.from === "status@broadcast") {
+  // 1. Filtrar cuenta del sistema "0@c.us", grupos (@g.us) o estados/historias (status@broadcast)
+  // El bot opera exclusivamente en chats individuales reales
+  if (
+    !mensaje.from ||
+    mensaje.from === "0@c.us" ||
+    mensaje.from.endsWith("@g.us") ||
+    mensaje.from === "status@broadcast"
+  ) {
     return;
   }
 
-  // 2. Identificador de chat tal cual lo entrega WhatsApp (@c.us o @lid) para respuestas exclusivas
+  // 2. Filtrar tipos de mensajes: solo procesar chat, image, document, audio, video, sticker, ptt y location
+  // Descartar notificaciones, e2e_notification, call_log, etc.
+  const messageType = mensaje.type || "chat";
+  if (!ALLOWED_MESSAGE_TYPES.has(messageType)) {
+    return;
+  }
+
+  // 3. Identificador de chat tal cual lo entrega WhatsApp (@c.us o @lid) para respuestas exclusivas
   const whatsappChatId = mensaje.from;
 
   // Punto 2: Encolar inmediatamente al inicio usando whatsappChatId para preservar el orden estricto de llegada.
@@ -197,10 +226,10 @@ whatsappClient.on("message", async (mensaje) => {
   // para que un mensaje de texto posterior nunca se adelante a una foto enviada antes.
   try {
     await runInThreadQueue(whatsappChatId, async (signal) => {
-      // Si no hay texto ni archivo adjunto, no procesar
-      if (!mensaje.body && !mensaje.hasMedia) return;
+      // Si no hay texto, archivo adjunto ni ubicación, no procesar
+      if (!mensaje.body && !mensaje.hasMedia && mensaje.type !== "location") return;
 
-      // 3. Número canónico de teléfono del contacto (E.164) para identificación, checkpointer y lógica de negocio
+      // 4. Número canónico de teléfono del contacto (E.164) para identificación, checkpointer y lógica de negocio
       let userPhoneNumber = "";
       try {
         const contact = await mensaje.getContact();
@@ -211,7 +240,7 @@ whatsappClient.on("message", async (mensaje) => {
         userPhoneNumber = mensaje.from.includes("@c.us") ? mensaje.from.replace("@c.us", "") : "";
       }
 
-      // 4. Procesar metadatos de archivo adjunto sin llamar a downloadMedia()
+      // 5. Procesar metadatos de archivo adjunto sin llamar a downloadMedia()
       // NOTA DE ARQUITECTURA: Ningún agente actual consume el binario de la imagen.
       // Leemos directamente el mimetype que ya trae el mensaje (mensaje._data?.mimetype o mensaje.type)
       // sin descargar el archivo, ahorrando CPU, ancho de banda y evitando saturar el límite de 1 MiB de Firestore.
@@ -224,12 +253,31 @@ whatsappClient.on("message", async (mensaje) => {
         };
       }
 
-      // Punto 4: Descripción amigable según mimetype sin descargar media
-      const mediaMime = mensaje._data?.mimetype;
-      const userText = mensaje.body || (incomingMedia ? getMediaDescription(mediaMime, mensaje.type) : "");
+      // 6. Construir userText contextualmente según tipo de mensaje
+      let rawUserText = "";
+      if (mensaje.type === "location") {
+        const loc = mensaje.location;
+        if (loc && (loc.latitude !== undefined || loc.longitude !== undefined)) {
+          rawUserText = `Ubicación compartida: ${loc.latitude}, ${loc.longitude}`;
+          const locDesc = loc.description || loc.name || mensaje.body;
+          if (locDesc && locDesc.trim()) {
+            rawUserText += ` (${locDesc.trim()})`;
+          }
+        } else if (mensaje.body && mensaje.body.trim()) {
+          rawUserText = `Ubicación compartida: ${mensaje.body.trim()}`;
+        } else {
+          rawUserText = "Ubicación compartida";
+        }
+      } else {
+        const mediaMime = mensaje._data?.mimetype;
+        rawUserText = mensaje.body || (incomingMedia ? getMediaDescription(mediaMime, mensaje.type) : "");
+      }
+
+      // Recortar userText a 1000 caracteres antes de invocar el grafo para proteger el LLM
+      const userText = rawUserText ? String(rawUserText).slice(0, 1000) : "";
       console.log(`📩 Mensaje entrante de +${userPhoneNumber || "desconocido"} (${whatsappChatId}): "${userText}"`);
 
-      // 5. Invocación reactiva del grafo multi-agente
+      // 7. Invocación reactiva del grafo multi-agente
       // El thread_id del grafo sigue siendo userPhoneNumber con fallback a whatsappChatId
       let threadId = userPhoneNumber;
       if (!threadId) {
@@ -263,6 +311,30 @@ whatsappClient.on("message", async (mensaje) => {
         if (signal.aborted) {
           console.log(`🛑 Tarea abortada para ${whatsappChatId}. Omitiendo envío de respuesta tardía.`);
           return;
+        }
+
+        // 8. Índice handoff_threads: si finalState.humanHandoffRequired es true, upsert en Firestore
+        if (finalState.humanHandoffRequired) {
+          try {
+            const handoffRef = db.collection("handoff_threads").doc(threadId);
+            const existingDoc = await handoffRef.get();
+            const customerMsgSnippet = (userText || "").slice(0, 200);
+            const upsertData = {
+              thread_id: threadId,
+              whatsappChatId: finalState.whatsappChatId || whatsappChatId,
+              userPhoneNumber: finalState.userPhoneNumber || userPhoneNumber,
+              motivo: finalState.humanHandoffReason || "Atención humana requerida",
+              lastCustomerMessage: customerMsgSnippet,
+              updatedAt: Timestamp.now(),
+            };
+            if (!existingDoc.exists) {
+              upsertData.fecha = Timestamp.now();
+            }
+            await handoffRef.set(upsertData, { merge: true });
+            console.log(`📋 Hilo ${threadId} registrado en índice handoff_threads.`);
+          } catch (idxErr) {
+            console.warn(`⚠️ Error actualizando índice handoff_threads para ${threadId}:`, idxErr.message);
+          }
         }
 
         // 6. Extraer y enviar la respuesta generada por los agentes

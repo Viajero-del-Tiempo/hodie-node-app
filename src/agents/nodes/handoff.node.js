@@ -51,7 +51,7 @@ export const handoffNode = async (state) => {
   return {
     messages: [new AIMessage(clientResponse)],
     humanHandoffRequired: true,
-    humanHandoffReason: null,
+    humanHandoffReason: reason,
     activeAgent: null,
     adminNotification: null,
   };

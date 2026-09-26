@@ -328,8 +328,9 @@ export const supportAgentNode = async (state) => {
 
   if (apiKey) {
     try {
+      const modelName = process.env.GEMINI_MODEL || "gemini-3.8-flash";
       const model = new ChatGoogleGenerativeAI({
-        model: "gemini-2.0-flash",
+        model: modelName,
         apiKey,
         temperature: 0.2,
       });

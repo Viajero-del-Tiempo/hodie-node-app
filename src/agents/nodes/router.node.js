@@ -41,8 +41,9 @@ const classifyIntentWithTimeout = async (userText, timeoutMs = 4000) => {
     throw new Error("GEMINI_API_KEY no configurada en variables de entorno");
   }
 
+  const modelName = process.env.GEMINI_MODEL || "gemini-3.8-flash";
   const model = new ChatGoogleGenerativeAI({
-    model: "gemini-2.0-flash",
+    model: modelName,
     apiKey,
     temperature: 0,
   });
@@ -108,7 +109,6 @@ export const routerNode = async (state) => {
       console.log(`🔒 Handoff humano activo para ${state.userPhoneNumber}. Manteniendo intervención.`);
       return {
         intent: "handoff_active_silence",
-        humanHandoffReason: null,
         adminNotification: null,
       };
     }

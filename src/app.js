@@ -7,6 +7,7 @@ import { router as adminOrderRouter } from "./routes/admin.order.routes.js";
 import { router as adminProductRouter } from "./routes/admin.product.routes.js";
 import { router as userRouter } from "./routes/user.routes.js";
 import { router as adminUserRouter } from "./routes/admin.user.routes.js";
+import { router as adminChatRouter } from "./routes/admin.chat.routes.js";
 
 const app = express();
 
@@ -40,5 +41,6 @@ app.use("/users", userRouter);
 app.use("/admin", adminOrderRouter);
 app.use("/admin", adminProductRouter);
 app.use("/admin", adminUserRouter);
+app.use("/admin", adminChatRouter);
 
 export default app;
