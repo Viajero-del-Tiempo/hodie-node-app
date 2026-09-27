@@ -7,6 +7,7 @@ import {
   determineShippingMethod,
 } from "../../services/order.service.js";
 import { sendOrderStatus } from "../../services/whatsapp.service.js";
+import { notifyAdminHandoffAlert } from "./handoff.node.js";
 
 /**
  * Normaliza cadenas eliminando acentos y espacios
@@ -95,6 +96,79 @@ export const extractQuantity = (text) => {
 };
 
 /**
+ * Normaliza y valida un número de teléfono paraguayo según reglas de negocio:
+ * - Formato canónico: 595 + 9 dígitos (12 dígitos numéricos en total, ej. 595985930912).
+ * - Si empieza con '09' (10 dígitos, ej. 0985930912), se normaliza a 595 + 9 dígitos (595985930912).
+ * - Si empieza con '9' (9 dígitos, ej. 985930912), se antepone '595'.
+ * - Si ya tiene 12 dígitos comenzando con '5959', se retorna tal cual.
+ * - Cualquier otro formato, longitud o prefijo retorna null.
+ *
+ * @param {string} input
+ * @returns {string | null}
+ */
+export const normalizeParaguayanPhone = (input) => {
+  if (!input || typeof input !== "string") return null;
+  // Quitar espacios, guiones, paréntesis, puntos y el "+" antes de validar
+  const cleaned = input.replace(/[\s\-\(\)\.\+]/g, "").trim();
+  const digits = cleaned.replace(/\D/g, "");
+
+  // Si contenía caracteres inválidos no permitidos (ej. letras u otros símbolos)
+  if (!digits || digits.length !== cleaned.length) {
+    return null;
+  }
+
+  // 1. Si empieza con 09 y tiene 10 dígitos -> 595 + 9 dígitos
+  if (/^09\d{8}$/.test(digits)) {
+    return `595${digits.slice(1)}`;
+  }
+
+  // 2. Si tiene 12 dígitos y empieza con 5959
+  if (/^5959\d{8}$/.test(digits)) {
+    return digits;
+  }
+
+  // 3. Si tiene 9 dígitos y empieza con 9
+  if (/^9\d{8}$/.test(digits)) {
+    return `595${digits}`;
+  }
+
+  return null;
+};
+
+/**
+ * Construye el mensaje de confirmación final con el resumen de la orden
+ * @param {any} shippingAddress
+ * @param {string} phone
+ * @param {any} quoteContext
+ * @returns {string}
+ */
+const buildConfirmationPrompt = (shippingAddress, phone, quoteContext) => {
+  const locationStr = shippingAddress.department
+    ? `${shippingAddress.city}, ${shippingAddress.department}`
+    : shippingAddress.city;
+
+  const shippingMethod = determineShippingMethod(shippingAddress.city);
+  const shippingLabel =
+    shippingMethod === "local_gratis"
+      ? "Envío local gratuito (Minga Guazú)"
+      : "Envío por transportadora (flete con pago contra entrega)";
+
+  return (
+    `🔍 *Confirmación Final de tu Pedido HoDie:*\n\n` +
+    `• *Destinatario:* ${shippingAddress.recipientName}\n` +
+    `• *Teléfono:* +${phone}\n` +
+    `• *Ubicación:* ${locationStr}\n` +
+    `• *Dirección:* ${shippingAddress.street}\n` +
+    `• *Modalidad de Envío:* ${shippingLabel}\n` +
+    `• *Producto:* ${quoteContext.selectedProductName} (x${quoteContext.quantity})\n` +
+    `• *Empaque:* ${quoteContext.selectedPackaging?.name || "Estándar"}\n` +
+    `• *Total:* *${(quoteContext.total || 0).toLocaleString()} Gs.*\n\n` +
+    `¿Confirmás el pedido para generar el comprobante oficial en PDF con los datos para la transferencia? 📄\n\n` +
+    `👉 Respondé *"Sí, confirmo"* para emitir tu orden, o *"Cancelar"* para anular.`
+  );
+};
+
+/**
  * Nodo Presupuestador (BudgetAgent)
  *
  * Orquesta el flujo guiado multi-turno de presupuestación paso a paso:
@@ -153,6 +227,13 @@ export const budgetAgentNode = async (state) => {
   // -------------------------------------------------------------
   const products = await getAvailableProducts();
   if (!products || products.length === 0) {
+    const reason = "Catálogo de productos no disponible o vacío en Firestore";
+    await notifyAdminHandoffAlert({
+      userPhoneNumber: state.userPhoneNumber,
+      whatsappChatId: state.whatsappChatId,
+      pushname: state.pushname,
+      reason,
+    });
     return {
       messages: [
         new AIMessage(
@@ -160,7 +241,7 @@ export const budgetAgentNode = async (state) => {
         ),
       ],
       humanHandoffRequired: true,
-      humanHandoffReason: "Catálogo de productos no disponible o vacío en Firestore",
+      humanHandoffReason: reason,
       activeAgent: null,
     };
   }
@@ -468,7 +549,7 @@ export const budgetAgentNode = async (state) => {
       }
 
       const street = rawText;
-      const finalShippingAddress = {
+      const updatedShippingAddress = {
         recipientName:
           currentContext.shippingAddress?.recipientName ||
           state.user?.displayName ||
@@ -479,36 +560,111 @@ export const budgetAgentNode = async (state) => {
         instructions: street,
       };
 
-      const locationStr = finalShippingAddress.department
-        ? `${finalShippingAddress.city}, ${finalShippingAddress.department}`
-        : finalShippingAddress.city;
+      // Si no tenemos un userPhoneNumber válido (ej. cliente desde @lid),
+      // solicitamos el teléfono paraguayo antes de pasar a la confirmación
+      if (!state.userPhoneNumber) {
+        return {
+          messages: [
+            new AIMessage(
+              "Excelente. Para coordinar la entrega y mantenerte informado sobre tu paquete, ¿cuál es tu *número de teléfono paraguayo*? (Por ejemplo: _0981 123456_ o _595981123456_) 📱"
+            ),
+          ],
+          activeAgent: "budget",
+          quoteContext: {
+            shippingAddress: updatedShippingAddress,
+            shippingStep: "phone",
+          },
+        };
+      }
 
-      const shippingMethod = determineShippingMethod(finalShippingAddress.city);
-      const shippingLabel =
-        shippingMethod === "local_gratis"
-          ? "Envío local gratuito (Minga Guazú)"
-          : "Envío por transportadora (flete con pago contra entrega)";
-
-      const confirmPrompt =
-        `🔍 *Confirmación Final de tu Pedido HoDie:*\n\n` +
-        `• *Destinatario:* ${finalShippingAddress.recipientName}\n` +
-        `• *Teléfono:* +${state.userPhoneNumber}\n` +
-        `• *Ubicación:* ${locationStr}\n` +
-        `• *Dirección:* ${finalShippingAddress.street}\n` +
-        `• *Modalidad de Envío:* ${shippingLabel}\n` +
-        `• *Producto:* ${currentContext.selectedProductName} (x${currentContext.quantity})\n` +
-        `• *Empaque:* ${currentContext.selectedPackaging?.name || "Estándar"}\n` +
-        `• *Total:* *${(currentContext.total || 0).toLocaleString()} Gs.*\n\n` +
-        `¿Confirmás el pedido para generar el comprobante oficial en PDF con los datos para la transferencia? 📄\n\n` +
-        `👉 Respondé *"Sí, confirmo"* para emitir tu orden, o *"Cancelar"* para anular.`;
+      const confirmPrompt = buildConfirmationPrompt(
+        updatedShippingAddress,
+        state.userPhoneNumber,
+        currentContext
+      );
 
       return {
         messages: [new AIMessage(confirmPrompt)],
         activeAgent: "budget",
         quoteContext: {
+          shippingAddress: updatedShippingAddress,
+          shippingStep: null,
+          step: "confirmation",
+        },
+      };
+    }
+
+    // 4.4 Número de teléfono de contacto (cuando el cliente escribió desde @lid sin número resuelto)
+    if (subStep === "phone") {
+      const normalizedPhone = normalizeParaguayanPhone(rawText);
+      if (!normalizedPhone) {
+        const attempts = (currentContext.invalidPhoneAttempts || 0) + 1;
+        if (attempts >= 3) {
+          const reason = "Dificultad al registrar número de teléfono (3 intentos fallidos)";
+          console.log(`⚠️ Cliente superó límite de 3 intentos fallidos ingresando teléfono. Derivando a HumanHandoff.`);
+          await notifyAdminHandoffAlert({
+            userPhoneNumber: state.userPhoneNumber,
+            whatsappChatId: state.whatsappChatId,
+            pushname: state.pushname,
+            reason,
+          });
+
+          const handoffMsg =
+            "Veo que tenemos dificultades para registrar tu número de teléfono. 👤\n\n" +
+            "Te transfiero con un asesor humano de nuestro equipo para asistirte con la orden y coordinar los datos personalmente. ¡En breve te escriben por este chat! ✨";
+          return {
+            messages: [new AIMessage(handoffMsg)],
+            humanHandoffRequired: true,
+            humanHandoffReason: reason,
+            intent: "human_handoff",
+            activeAgent: null,
+            quoteContext: {
+              ...currentContext,
+              invalidPhoneAttempts: attempts,
+            },
+          };
+        }
+
+        return {
+          messages: [
+            new AIMessage(
+              "El número ingresado no parece ser un número de teléfono válido de Paraguay. Por favor ingresá un número paraguayo de contacto (ej. _0981 123456_ o _595981123456_): 📱"
+            ),
+          ],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            invalidPhoneAttempts: attempts,
+          },
+        };
+      }
+
+      const finalShippingAddress = {
+        recipientName:
+          currentContext.shippingAddress?.recipientName ||
+          state.user?.displayName ||
+          "Cliente",
+        city: currentContext.shippingAddress?.city || "Minga Guazú",
+        department: currentContext.shippingAddress?.department || "Alto Paraná",
+        street: currentContext.shippingAddress?.street || "",
+        instructions: currentContext.shippingAddress?.street || "",
+      };
+
+      const confirmPrompt = buildConfirmationPrompt(
+        finalShippingAddress,
+        normalizedPhone,
+        currentContext
+      );
+
+      return {
+        messages: [new AIMessage(confirmPrompt)],
+        activeAgent: "budget",
+        userPhoneNumber: normalizedPhone,
+        quoteContext: {
           shippingAddress: finalShippingAddress,
           shippingStep: null,
           step: "confirmation",
+          invalidPhoneAttempts: 0,
         },
       };
     }
@@ -598,12 +754,19 @@ export const budgetAgentNode = async (state) => {
         };
       } catch (orderErr) {
         console.error("❌ Error emitiendo pedido en BudgetAgent:", orderErr);
+        const reason = `Fallo al emitir pedido: ${orderErr.message}`;
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: state.userPhoneNumber,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
         const errorMessage =
           "Hubo un inconveniente al generar tu orden. Un asesor de nuestro equipo se comunicará contigo enseguida para finalizar tu pedido.";
         return {
           messages: [new AIMessage(errorMessage)],
           humanHandoffRequired: true,
-          humanHandoffReason: `Fallo al emitir pedido: ${orderErr.message}`,
+          humanHandoffReason: reason,
           activeAgent: null,
         };
       }

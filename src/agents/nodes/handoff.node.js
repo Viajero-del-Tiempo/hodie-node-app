@@ -1,17 +1,43 @@
 import { AIMessage } from "@langchain/core/messages";
 
 /**
- * Notifica al administrador por WhatsApp sobre un evento relevante de derivación a asesor humano
- * @param {string} message
+ * Notifica al administrador por WhatsApp sobre un evento relevante de derivación a asesor humano.
+ * Compartido por los tres caminos de derivación: handoffNode, supportNode y budgetNode.
+ *
+ * @param {Object} params
+ * @param {string} [params.userPhoneNumber]
+ * @param {string} [params.whatsappChatId]
+ * @param {string} [params.pushname]
+ * @param {string} [params.reason]
  */
-const notifyAdminViaWhatsApp = async (message) => {
+export const notifyAdminHandoffAlert = async ({
+  userPhoneNumber,
+  whatsappChatId,
+  pushname,
+  reason,
+}) => {
   const adminPhone = process.env.ADMIN_WHATSAPP_PHONE;
   if (!adminPhone) return;
 
+  const hasPhone = Boolean(userPhoneNumber && !userPhoneNumber.includes("@"));
+  const clientDisplay = hasPhone
+    ? `+${userPhoneNumber}`
+    : `${pushname || "Contacto WhatsApp"} (${whatsappChatId || "ID no disponible"}) [número no disponible]`;
+
+  const formalReason = reason || "Solicitud de atención humana o derivación";
+
+  console.log(`🚨 Activando HumanHandoff para ${clientDisplay}. Motivo: ${formalReason}`);
+
   try {
     const { whatsappClient } = await import("../../config/whatsapp.js");
-    const chatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
-    await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
+    const adminChatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
+    const adminAlert =
+      `🚨 *Derivación a Asesor Humano*\n\n` +
+      `• *Cliente:* ${clientDisplay}\n` +
+      `• *Motivo:* ${formalReason}\n\n` +
+      `👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
+
+    await whatsappClient.sendMessage(adminChatId, adminAlert, { sendSeen: false });
     console.log(`📢 Alerta de handoff enviada al WhatsApp del admin (${adminPhone})`);
   } catch (err) {
     console.warn("⚠️ No se pudo enviar notificación WhatsApp al admin:", err.message);
@@ -29,19 +55,15 @@ const notifyAdminViaWhatsApp = async (message) => {
  * @returns {Promise<Partial<import("../state.js").AgentState>>}
  */
 export const handoffNode = async (state) => {
-  const userPhone = state.userPhoneNumber || "cliente";
   const reason = state.humanHandoffReason || "Solicitud de atención humana o derivación";
 
-  console.log(`🚨 Activando HumanHandoff para ${userPhone}. Motivo: ${reason}`);
-
-  // 1. Notificar al administrador por WhatsApp
-  const adminAlert =
-    `🚨 *Derivación a Asesor Humano*\n\n` +
-    `• *Cliente:* +${userPhone}\n` +
-    `• *Motivo:* ${reason}\n\n` +
-    `👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
-
-  await notifyAdminViaWhatsApp(adminAlert);
+  // 1. Notificar al administrador por WhatsApp mediante helper compartido
+  await notifyAdminHandoffAlert({
+    userPhoneNumber: state.userPhoneNumber,
+    whatsappChatId: state.whatsappChatId,
+    pushname: state.pushname,
+    reason,
+  });
 
   // 2. Respuesta cordial al cliente
   const clientResponse =

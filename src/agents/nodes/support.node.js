@@ -2,6 +2,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { db } from "../../config/firebase.js";
 import { toDate } from "../../utils/date.util.js";
+import { notifyAdminHandoffAlert } from "./handoff.node.js";
 
 /**
  * Base de conocimiento estática de HoDie Tienda de Regalos
@@ -187,16 +188,20 @@ export const supportAgentNode = async (state) => {
   // Alerta al administrador y envía acuse de recibo al cliente.
   // -------------------------------------------------------------
   if (intent === "payment_proof") {
-    console.log(`📄 Procesando recepción de comprobante de pago de ${userPhone}`);
-    const latestOrder = await getLatestOrderForUser(userPhone);
+    console.log(`📄 Procesando recepción de comprobante de pago de ${userPhone || "cliente sin número"}`);
+    const latestOrder = userPhone ? await getLatestOrderForUser(userPhone) : null;
 
     const orderNumber = latestOrder ? `#${latestOrder.orderNumber}` : "(sin número vinculado)";
     const orderTotal = latestOrder?.total ? `${latestOrder.total.toLocaleString()} Gs.` : "N/A";
 
-    const adminSummary = `Comprobante de pago recibido de ${userPhone} para el pedido ${orderNumber} (Monto: ${orderTotal}).`;
+    const clientDisplay = userPhone
+      ? `+${userPhone}`
+      : `${state.pushname || "Contacto WhatsApp"} (${state.whatsappChatId}) [número no disponible]`;
+
+    const adminSummary = `Comprobante de pago recibido de ${clientDisplay} para el pedido ${orderNumber} (Monto: ${orderTotal}).`;
 
     // Notificar al administrador
-    await notifyAdminViaWhatsApp(`🔔 *Nuevo Comprobante de Pago*\n\nCliente: +${userPhone}\nPedido: ${orderNumber}\nMonto: ${orderTotal}\n\n👉 Por favor verificar la acreditación bancaria y confirmar el pago manualmente en el dashboard.`);
+    await notifyAdminViaWhatsApp(`🔔 *Nuevo Comprobante de Pago*\n\nCliente: ${clientDisplay}\nPedido: ${orderNumber}\nMonto: ${orderTotal}\n\n👉 Por favor verificar la acreditación bancaria y confirmar el pago manualmente en el dashboard.`);
 
     const clientResponse =
       `¡Muchas gracias! Hemos recibido tu comprobante de pago 📄✨\n\n` +
@@ -240,12 +245,48 @@ export const supportAgentNode = async (state) => {
   // CASO 3: CONSULTA DE ESTADO DE PEDIDO
   // -------------------------------------------------------------
   if (intent === "order_status" || lastText.includes("estado") || lastText.includes("seguimiento") || lastText.includes("tracking")) {
-    console.log(`🔍 Consultando estado del pedido para ${userPhone}`);
-    const latestOrder = await getLatestOrderForUser(userPhone);
+    let latestOrder = null;
+
+    // Si no disponemos de un número telefónico (ej. chat originado desde @lid)
+    if (!userPhone) {
+      // Verificar si el cliente proporcionó número de pedido o teléfono en el mensaje
+      const rawMsg = typeof lastMessage === "string" ? lastMessage : "";
+      const orderNumMatch = rawMsg.match(/#?\s*(\d{4,6})\b/);
+      const phoneMatch = rawMsg.match(/(?:09\d{8}|5959\d{8}|9\d{8})/);
+
+      if (orderNumMatch) {
+        const searchedNum = parseInt(orderNumMatch[1], 10);
+        try {
+          const snap = await db.collection("orders").where("orderNumber", "==", searchedNum).limit(1).get();
+          if (!snap.empty) {
+            latestOrder = { id: snap.docs[0].id, ...snap.docs[0].data() };
+          }
+        } catch (err) {
+          console.warn("⚠️ Error buscando pedido por orderNumber:", err.message);
+        }
+      } else if (phoneMatch) {
+        const phoneCandidate = phoneMatch[0];
+        latestOrder = await getLatestOrderForUser(phoneCandidate);
+      }
+
+      // Si no tenemos pedido localizado por el mensaje, solicitar número de pedido o teléfono sin consultar Firestore con ""
+      if (!latestOrder) {
+        const askDetailsResponse =
+          "Para poder consultar el estado de tu pedido, por favor indicanos tu *número de pedido* (ej. #1024) o el *número de teléfono* con el que realizaste la compra. 📦🔍";
+
+        return {
+          messages: [new AIMessage(askDetailsResponse)],
+          activeAgent: "support",
+        };
+      }
+    } else {
+      console.log(`🔍 Consultando estado del pedido para ${userPhone}`);
+      latestOrder = await getLatestOrderForUser(userPhone);
+    }
 
     if (!latestOrder) {
       const notFoundResponse =
-        `No encontramos ningún pedido registrado con tu número (+${userPhone}) en nuestro sistema.\n\n` +
+        `No encontramos ningún pedido registrado con tus datos en nuestro sistema.\n\n` +
         `Si deseás realizar una compra o solicitar un presupuesto, escribinos qué producto te interesa y te ayudamos con gusto. 🛍️`;
 
       return {
@@ -300,23 +341,27 @@ export const supportAgentNode = async (state) => {
 
   const hasComplaint = complaintWords.some((w) => lastText.includes(w));
   if (hasComplaint) {
-    console.log(`⚠️ Reclamo detectado en SupportAgent para ${userPhone}. Escalando a HumanHandoff.`);
+    const reason = `Reclamo del cliente: "${lastText.slice(0, 100)}"`;
+    await notifyAdminHandoffAlert({
+      userPhoneNumber: userPhone,
+      whatsappChatId: state.whatsappChatId,
+      pushname: state.pushname,
+      reason,
+    });
+
     const complaintResponse =
       `Lamentamos mucho los inconvenientes con tu pedido. 😔\n\n` +
       `Ya derivé tu reclamo con un asesor humano de nuestro equipo para darte una solución inmediata. En breve te responderán por este medio.`;
 
-    const adminSummary = `🚨 Reclamo detectado en soporte para +${userPhone}: "${lastText.slice(0, 100)}"`;
-    await notifyAdminViaWhatsApp(adminSummary);
-
     return {
       messages: [new AIMessage(complaintResponse)],
       humanHandoffRequired: true,
-      humanHandoffReason: `Reclamo del cliente: "${lastText.slice(0, 100)}"`,
+      humanHandoffReason: reason,
       intent: "human_handoff",
       activeAgent: null,
       adminNotification: {
         type: "human_handoff",
-        summary: adminSummary,
+        summary: reason,
       },
     };
   }
@@ -355,14 +400,21 @@ DIRECTRICES ESTRICTAS:
 
       if (content.includes("[HANDOFF_REQUIRED]")) {
         const cleanContent = content.replace("[HANDOFF_REQUIRED]", "").trim();
+        const reason = "Consulta fuera de base de conocimiento o reclamo detectado en FAQ";
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: userPhone,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
         return {
           messages: [new AIMessage(cleanContent)],
           humanHandoffRequired: true,
-          humanHandoffReason: "Consulta fuera de base de conocimiento o reclamo detectado en FAQ",
+          humanHandoffReason: reason,
           activeAgent: null,
           adminNotification: {
             type: "human_handoff",
-            summary: `Derivación por consulta fuera de base de conocimiento para ${userPhone}: "${lastText.slice(0, 100)}"`,
+            summary: `Derivación por consulta fuera de base de conocimiento para ${userPhone || state.whatsappChatId}: "${lastText.slice(0, 100)}"`,
             details: { phone: userPhone, question: lastText },
           },
         };

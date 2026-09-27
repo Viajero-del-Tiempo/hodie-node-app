@@ -38,7 +38,7 @@ import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 /**
  * @typedef {Object} QuoteContext
  * @property {"idle" | "product_selection" | "customization" | "packaging_selection" | "shipping_info" | "confirmation" | "completed"} step
- * @property {"name" | "city" | "street" | null} [shippingStep]
+ * @property {"name" | "city" | "street" | "phone" | null} [shippingStep]
  * @property {string | null} [selectedProductId]
  * @property {string | null} [selectedProductName]
  * @property {string | null} [selectedProductSku]
@@ -116,6 +116,14 @@ export const AgentStateAnnotation = Annotation.Root({
       if (next && typeof next === "object" && next.reset === true) return "";
       return next !== undefined ? next : prev;
     },
+    default: () => "",
+  }),
+
+  /**
+   * Nombre público del contacto en WhatsApp (pushname / notifyName)
+   */
+  pushname: Annotation({
+    reducer: (prev, next) => (next !== undefined ? next : prev),
     default: () => "",
   }),
 

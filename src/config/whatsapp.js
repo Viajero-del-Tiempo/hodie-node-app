@@ -196,6 +196,94 @@ export const runInThreadQueue = async (queueKey, taskFn, timeoutMs = 60000) => {
   }
 };
 
+/**
+ * Resuelve el número de teléfono canónico (E.164, sólo dígitos) a partir del identificador de chat de WhatsApp.
+ * - @c.us: extrae directamente los dígitos del ID.
+ * - @lid: consulta primero la colección 'lid_phone_map/{lid}' en Firestore. Si no está en caché,
+ *   llama a whatsappClient.getContactLidAndPhone([queryId]). Si devuelve un 'pn' terminado en '@c.us',
+ *   persiste el par en 'lid_phone_map' y devuelve los dígitos del 'pn'.
+ * - Si falla o no hay 'pn': devuelve "" y loguea una advertencia. NUNCA devuelve el LID como si fuera teléfono.
+ *
+ * @param {string} whatsappChatId
+ * @returns {Promise<string>} Número de teléfono resuelto o cadena vacía "" si no se puede resolver.
+ */
+export const resolvePhoneFromChatId = async (whatsappChatId) => {
+  if (!whatsappChatId || typeof whatsappChatId !== "string") {
+    return "";
+  }
+
+  // 1. @c.us -> dígitos del id
+  if (whatsappChatId.endsWith("@c.us")) {
+    return whatsappChatId.replace("@c.us", "").replace(/\D/g, "");
+  }
+
+  // 2. @lid -> buscar primero en Firestore lid_phone_map/{lid}
+  if (whatsappChatId.endsWith("@lid") || whatsappChatId.includes("@lid")) {
+    const lidKey = whatsappChatId.replace("@lid", "").trim();
+
+    // Buscar primero en Firestore
+    try {
+      const docSnap = await db.collection("lid_phone_map").doc(lidKey).get();
+      if (docSnap.exists) {
+        const data = docSnap.data();
+        if (data?.phoneNumber) {
+          const cachedPhone = String(data.phoneNumber).replace(/\D/g, "");
+          if (cachedPhone) return cachedPhone;
+        }
+      }
+    } catch (dbErr) {
+      console.warn(`⚠️ Error consultando lid_phone_map para LID ${lidKey}:`, dbErr.message);
+    }
+
+    // Si no está, llamar a whatsappClient.getContactLidAndPhone([lid])
+    try {
+      if (typeof whatsappClient?.getContactLidAndPhone === "function") {
+        const queryId = whatsappChatId.endsWith("@lid") ? whatsappChatId : `${lidKey}@lid`;
+        const results = await whatsappClient.getContactLidAndPhone([queryId]);
+        const contactInfo = Array.isArray(results) ? results[0] : null;
+
+        if (
+          contactInfo?.pn &&
+          typeof contactInfo.pn === "string" &&
+          contactInfo.pn.endsWith("@c.us")
+        ) {
+          const phoneNumber = contactInfo.pn.replace("@c.us", "").replace(/\D/g, "");
+          if (phoneNumber) {
+            // Guardar el par en lid_phone_map
+            await db
+              .collection("lid_phone_map")
+              .doc(lidKey)
+              .set(
+                {
+                  lid: lidKey,
+                  phoneNumber,
+                  pn: contactInfo.pn,
+                  updatedAt: Timestamp.now(),
+                },
+                { merge: true }
+              );
+
+            return phoneNumber;
+          }
+        }
+      }
+      console.warn(
+        `⚠️ No se pudo resolver número de teléfono para @lid (${whatsappChatId}): no se obtuvo pn válido terminado en @c.us.`
+      );
+    } catch (clientErr) {
+      console.warn(
+        `⚠️ Error llamando a getContactLidAndPhone para ${whatsappChatId}:`,
+        clientErr.message
+      );
+    }
+
+    return "";
+  }
+
+  console.warn(`⚠️ whatsappChatId con formato no reconocido (${whatsappChatId}). Devolviendo "".`);
+  return "";
+};
+
 whatsappClient.on("message", async (mensaje) => {
   // Ignorar mensajes enviados por el propio bot (fromMe)
   if (mensaje.fromMe) return;
@@ -229,15 +317,16 @@ whatsappClient.on("message", async (mensaje) => {
       // Si no hay texto, archivo adjunto ni ubicación, no procesar
       if (!mensaje.body && !mensaje.hasMedia && mensaje.type !== "location") return;
 
-      // 4. Número canónico de teléfono del contacto (E.164) para identificación, checkpointer y lógica de negocio
-      let userPhoneNumber = "";
+      // 4. Resolver número canónico de teléfono del contacto (E.164) mediante resolvePhoneFromChatId
+      const userPhoneNumber = await resolvePhoneFromChatId(whatsappChatId);
+
+      // Obtener pushname/nombre de contacto de WhatsApp para alertas y auditoría
+      let pushname = "";
       try {
         const contact = await mensaje.getContact();
-        userPhoneNumber = contact?.number || "";
-      } catch (contactErr) {
-        console.warn("⚠️ No se pudo obtener contacto del mensaje:", contactErr.message);
-        // Fallback si getContact() falla y el mensaje proviene de @c.us
-        userPhoneNumber = mensaje.from.includes("@c.us") ? mensaje.from.replace("@c.us", "") : "";
+        pushname = contact?.pushname || contact?.name || mensaje._data?.notifyName || "";
+      } catch {
+        pushname = mensaje._data?.notifyName || "";
       }
 
       // 5. Procesar metadatos de archivo adjunto sin llamar a downloadMedia()
@@ -275,26 +364,21 @@ whatsappClient.on("message", async (mensaje) => {
 
       // Recortar userText a 1000 caracteres antes de invocar el grafo para proteger el LLM
       const userText = rawUserText ? String(rawUserText).slice(0, 1000) : "";
-      console.log(`📩 Mensaje entrante de +${userPhoneNumber || "desconocido"} (${whatsappChatId}): "${userText}"`);
+      const clientLabel = userPhoneNumber
+        ? `+${userPhoneNumber}`
+        : `${pushname || "Contacto WhatsApp"} (${whatsappChatId}) [número no disponible]`;
+      console.log(`📩 Mensaje entrante de ${clientLabel}: "${userText}"`);
 
       // 7. Invocación reactiva del grafo multi-agente
-      // El thread_id del grafo sigue siendo userPhoneNumber con fallback a whatsappChatId
-      let threadId = userPhoneNumber;
-      if (!threadId) {
-        console.warn(`⚠️ userPhoneNumber no disponible para ${whatsappChatId}. Usando whatsappChatId como fallback de thread_id.`);
-        threadId = whatsappChatId;
-      }
-
-      if (!threadId) {
-        console.error(`❌ Imposible invocar el grafo: tanto userPhoneNumber como whatsappChatId están vacíos.`);
-        return;
-      }
+      // El thread_id es SIEMPRE whatsappChatId en todos los casos
+      const threadId = whatsappChatId;
 
       try {
         const inputState = {
           messages: [new HumanMessage(userText)],
-          userPhoneNumber,
+          ...(userPhoneNumber ? { userPhoneNumber } : {}),
           whatsappChatId,
+          pushname,
           incomingMedia,
         };
 
@@ -322,7 +406,8 @@ whatsappClient.on("message", async (mensaje) => {
             const upsertData = {
               thread_id: threadId,
               whatsappChatId: finalState.whatsappChatId || whatsappChatId,
-              userPhoneNumber: finalState.userPhoneNumber || userPhoneNumber,
+              userPhoneNumber: finalState.userPhoneNumber || userPhoneNumber || "",
+              pushname: finalState.pushname || pushname || "",
               motivo: finalState.humanHandoffReason || "Atención humana requerida",
               lastCustomerMessage: customerMsgSnippet,
               updatedAt: Timestamp.now(),
@@ -394,9 +479,12 @@ whatsappClient.on("message", async (mensaje) => {
           const adminPhone = process.env.ADMIN_WHATSAPP_PHONE;
           if (adminPhone) {
             const adminChatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
+            const clientDisplay = userPhoneNumber
+              ? `+${userPhoneNumber}`
+              : `${pushname || "Contacto WhatsApp"} (${whatsappChatId}) [número no disponible]`;
             const adminAlert =
               `🚨 *Error Crítico Inesperado en Bot de WhatsApp*\n\n` +
-              `• *Cliente:* +${userPhoneNumber || "desconocido"}\n` +
+              `• *Cliente:* ${clientDisplay}\n` +
               `• *ChatId:* ${whatsappChatId}\n` +
               `• *Mensaje recibido:* "${userText}"\n` +
               `• *Error:* ${error.message || "Error no controlado"}\n\n` +
