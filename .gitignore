@@ -65,6 +65,7 @@ coverage/
 ._*
 .Spotlight-V100
 .Trashes
+.npmrc
 ehthumbs.db
 Thumbs.db
 Thumbs.db:encryptable
