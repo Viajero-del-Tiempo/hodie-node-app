@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { loadImageFromUrl } from "../services/image.service.js";
 import { toDate } from "../utils/date.util.js";
+import { BANK_CONFIG } from "../config/bank.config.js";
 
 export const generateOrderPDF = async (order) => {
   return new Promise(async (resolve, reject) => {
@@ -275,29 +276,50 @@ export const generateOrderPDF = async (order) => {
       divider();
 
       // ======================================================
-      // IMAGEN BANCARIA (CON PREVENCIÓN DE OVERFLOW)
+      // INFORMACIÓN BANCARIA Y DE PAGO
       // ======================================================
       const bankImagePath = path.join(process.cwd(), "assets", "banco.png");
 
+      // nueva página para datos bancarios
+      doc.addPage();
+
+      doc
+        .font("Poppins-Bold")
+        .fontSize(22)
+        .fillColor(golden)
+        .text("Información de Pago");
+
+      doc.moveDown(0.8);
+
       if (fs.existsSync(bankImagePath)) {
-        const spaceLeft = doc.page.height - doc.y - 100; // margen de seguridad
-
-        // nueva página
-        doc.addPage();
-
-        doc
-          .font("Poppins-Bold")
-          .fontSize(22)
-          .fillColor(golden)
-          .text("Información de Pago");
-
         doc.image(bankImagePath, {
-          //fit: [doc.page.width - 60, 360], // ajuste perfecto sin desbordar
-          //align: "center",
+          width: 250,
+          align: "center",
         });
-
+        doc.moveDown(1);
+      } else {
+        // Fallback textual dinámico desde la fuente única BANK_CONFIG
+        doc
+          .font("Poppins")
+          .fontSize(16)
+          .fillColor("#333")
+          .text(`Entidad: ${BANK_CONFIG.bankName}`)
+          .text(`Titular: ${BANK_CONFIG.accountHolder}`)
+          .text(`Cédula / RUC: ${BANK_CONFIG.documentId}`)
+          .text(`Nro. de Cuenta: ${BANK_CONFIG.accountNumber}`)
+          .text(`Moneda: ${BANK_CONFIG.currency}`)
+          .text(`Alias: ${BANK_CONFIG.alias}`);
         doc.moveDown(1.5);
       }
+
+      // Recordatorio del alias para transferencias desde BANK_CONFIG
+      doc
+        .font("Poppins-Bold")
+        .fontSize(14)
+        .fillColor("#333")
+        .text(`Alias para transferencia: ${BANK_CONFIG.alias}`, { align: "center" });
+
+      doc.moveDown(1);
 
       // ======================================================
       // PIE

@@ -1,4 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { db } from "../../config/firebase.js";
 import {
   processAndSendOrder,
@@ -8,6 +9,123 @@ import {
 } from "../../services/order.service.js";
 import { sendOrderStatus } from "../../services/whatsapp.service.js";
 import { notifyAdminHandoffAlert } from "./handoff.node.js";
+
+/**
+ * Lematizador básico de español para normalizar tildes y plurales.
+ * Permite emparejar "vasos" -> "vaso", "térmico"/"Térmicos" -> "termico", "termos" -> "termo".
+ *
+ * @param {string} word
+ * @returns {string}
+ */
+export const stemSpanish = (word) => {
+  if (!word || typeof word !== "string") return "";
+  let w = word.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (w.endsWith("ces") && w.length > 4) return w.slice(0, -3) + "z";
+  if (w.endsWith("es") && w.length > 4) {
+    const root = w.slice(0, -2);
+    if (/[bcdfghjklmnpqrstvwxyz]$/.test(root)) return root;
+  }
+  if (w.endsWith("s") && w.length > 3 && !w.endsWith("is") && !w.endsWith("us")) {
+    return w.slice(0, -1);
+  }
+  return w;
+};
+
+/**
+ * Determina si un texto representa una afirmación o confirmación en español.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export const isAffirmative = (text) => {
+  const norm = (text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const affirmativeWords = [
+    "si",
+    "correcto",
+    "exacto",
+    "asies",
+    "asi es",
+    "dale",
+    "ok",
+    "confirmo",
+    "confirmar",
+    "claro",
+    "esta bien",
+    "está bien",
+    "perfecto",
+    "de una",
+    "deacuerdo",
+    "de acuerdo",
+    "ese",
+    "ese mismo",
+    "esa",
+    "esa misma",
+  ];
+  return affirmativeWords.includes(norm) || affirmativeWords.some((w) => norm === w || norm.startsWith(`${w} `) || norm.endsWith(` ${w}`));
+};
+
+/**
+ * Extrae con LLM el texto a grabar EXACTAMENTE como lo escribió el cliente:
+ * sin corregir ortografía, tildes, mayúsculas ni puntuación, solo quitando comillas envolventes
+ * y frases conversacionales introductorias.
+ *
+ * @param {string} rawText
+ * @returns {Promise<string>}
+ */
+export const extractEngravingTextWithLLM = async (rawText) => {
+  if (!rawText || typeof rawText !== "string") return "";
+
+  const norm = rawText.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  if (
+    norm === "sin personalizacion" ||
+    norm === "sin grabado" ||
+    norm === "nada" ||
+    norm === "ninguno" ||
+    norm === "ninguna" ||
+    norm.includes("sin personalizacion") ||
+    norm.includes("sin grabado")
+  ) {
+    return "Sin grabado";
+  }
+
+  try {
+    const model = new ChatGoogleGenerativeAI({
+      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+      temperature: 0,
+      apiKey: process.env.GOOGLE_API_KEY,
+    });
+
+    const prompt = [
+      "Eres un extractor de texto a grabar en productos personalizados.",
+      "Tu única tarea es identificar el texto, nombre o dedicatoria que el cliente desea grabar en su producto a partir de su mensaje.",
+      "",
+      "REGLAS ESTRICTAS E INVIOLABLES:",
+      "1. Extrae el texto EXACTAMENTE como lo escribió el cliente. NUNCA corrijas la ortografía, tildes, mayúsculas, minúsculas ni signos de puntuación.",
+      "   - Si el cliente escribió \"analia\", devuelve \"analia\" (NO \"Analia\" ni \"Analía\").",
+      "   - Si el cliente escribió \"Quiero que diga «Feliz cumple Ma»\", devuelve \"Feliz cumple Ma\".",
+      "   - Si el cliente escribió \"Ponle 'Te amo'\", devuelve \"Te amo\".",
+      "2. Elimina ÚNICAMENTE las frases conversacionales que introducen la petición (ej: \"Quiero que tenga mi nombre\", \"Quiero que diga\", \"Ponle\", \"Que tenga el nombre\", \"Grabar\", \"A nombre de\", \"Que diga\", \"Quisiera que diga\") y las comillas que envuelven al texto (\", ', «, », “, ”).",
+      "3. Si el cliente indica que no desea personalizar (ej. \"sin personalización\", \"ninguno\", \"nada\"), devuelve exactamente \"Sin grabado\".",
+      "4. Devuelve ÚNICAMENTE el texto extraído sin comillas, sin explicaciones ni palabras adicionales.",
+      "",
+      `Mensaje del cliente: "${rawText}"`,
+      "Texto a grabar:"
+    ].join("\n");
+
+    const res = await model.invoke(prompt);
+    let extracted = (typeof res?.content === "string" ? res.content : "").trim();
+    extracted = extracted.replace(/^["'«“](.*)["'»”]$/, "$1").trim();
+    if (extracted) return extracted;
+  } catch (err) {
+    console.warn("⚠️ Fallo en LLM para extracción de grabado, usando extractor regex de respaldo:", err.message);
+  }
+
+  // Respaldo regex determinista sin LLM
+  let fallback = rawText.trim();
+  const prefixRegex = /^(?:quiero\s+que\s+(?:diga|tenga(?:\s+el\s+nombre)?)|ponle|poner|grabar|que\s+diga|a\s+nombre\s+de)\s*:?\s*/i;
+  fallback = fallback.replace(prefixRegex, "").trim();
+  fallback = fallback.replace(/^["'«“](.*)["'»”]$/, "$1").trim();
+  return fallback;
+};
 
 /**
  * Normaliza cadenas eliminando acentos y espacios
@@ -274,23 +392,110 @@ export const budgetAgentNode = async (state) => {
   if (currentContext.step === "product_selection") {
     let selectedProduct = null;
 
-    // 1. Coincidencia por índice numérico (1, 2, 3...)
-    const parsedIdx = parseInt(normalizedText, 10);
-    if (!isNaN(parsedIdx) && parsedIdx >= 1 && parsedIdx <= products.length) {
-      selectedProduct = products[parsedIdx - 1];
+    // A. Si estábamos esperando confirmación de un producto sugerido por palabra clave
+    if (currentContext.pendingProductConfirmation) {
+      const candidate = currentContext.pendingProductConfirmation;
+      if (isAffirmative(normalizedText)) {
+        selectedProduct = candidate;
+      } else {
+        // El cliente dijo no o prefirió otra cosa, limpiar sugerencia
+        currentContext.pendingProductConfirmation = null;
+      }
     }
 
-    // 2. Coincidencia por nombre o SKU
+    // B. Selección directa por número (1, 2, 3...)
     if (!selectedProduct) {
-      selectedProduct = products.find((p) => {
-        const normName = normalize(p.name);
-        const normSku = normalize(p.sku);
-        return normalizedText.includes(normName) || normalizedText.includes(normSku) ||
-          normName.split(" ").some((word) => word.length > 4 && normalizedText.includes(word));
-      });
+      // Si había candidatos filtrados previamente, el índice se evalúa contra ellos
+      const pool = currentContext.candidateProductIds?.length
+        ? products.filter((p) => currentContext.candidateProductIds.includes(p.id))
+        : products;
+
+      const parsedIdx = parseInt(normalizedText, 10);
+      if (!isNaN(parsedIdx) && parsedIdx >= 1 && parsedIdx <= pool.length) {
+        selectedProduct = pool[parsedIdx - 1];
+      }
     }
 
-    // Manejo de respuesta inesperada: repreguntar amablemente
+    // C. Búsqueda por palabras clave con stemmer de español (tildes y plurales normalizados)
+    if (!selectedProduct) {
+      const STOPWORDS = new Set([
+        "el", "la", "los", "las", "un", "una", "unos", "unas",
+        "de", "del", "con", "para", "por", "favor", "quiero",
+        "quisiera", "cotizar", "me", "gustaria", "interesa",
+        "precio", "cuanto", "cuesta", "producto", "hola",
+        "buenos", "dias", "tardes", "noches", "que", "en"
+      ]);
+
+      const userTokens = rawText
+        .split(/[\s,\.\-]+/)
+        .map(stemSpanish)
+        .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+
+      if (userTokens.length > 0) {
+        const scoredMatches = products
+          .map((p) => {
+            const pNameTokens = p.name.split(/[\s,\.\-]+/).map(stemSpanish);
+            const pSkuTokens = (p.sku || "").split(/[\s,\.\-]+/).map(stemSpanish);
+            const allPTokens = [...pNameTokens, ...pSkuTokens];
+
+            const score = userTokens.filter((uToken) =>
+              allPTokens.some((pToken) => pToken === uToken || pToken.includes(uToken) || uToken.includes(pToken))
+            ).length;
+
+            return { product: p, score };
+          })
+          .filter((item) => item.score > 0);
+
+        if (scoredMatches.length > 0) {
+          // Obtener el puntaje máximo de coincidencias
+          const maxScore = Math.max(...scoredMatches.map((m) => m.score));
+          // Filtrar los productos con la mayor coincidencia
+          const topMatches = scoredMatches
+            .filter((m) => m.score === maxScore)
+            .map((m) => m.product);
+
+          // Caso 1: Coincidencia única -> Confirmar explícitamente
+          if (topMatches.length === 1) {
+            const matched = topMatches[0];
+            const detectedQty = extractQuantity(rawText) || 1;
+            return {
+              messages: [
+                new AIMessage(
+                  `¿Te referís al *${matched.name}*? (Respondé *"Sí"* para continuar o elegí otra opción).`
+                ),
+              ],
+              activeAgent: "budget",
+              quoteContext: {
+                ...currentContext,
+                pendingProductConfirmation: matched,
+                quantity: detectedQty,
+              },
+            };
+          }
+
+          // Caso 2: Múltiples coincidencias -> Mostrar solo esas opciones
+          if (topMatches.length > 1) {
+            let filterMessage = `Encontramos estas opciones relacionadas con tu búsqueda:\n\n`;
+            topMatches.forEach((p, idx) => {
+              filterMessage += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n   _${p.description || ""}_\n\n`;
+            });
+            filterMessage += `¿Cuál de ellos te gustaría cotizar? (Respondé con el número o nombre).`;
+
+            return {
+              messages: [new AIMessage(filterMessage)],
+              activeAgent: "budget",
+              quoteContext: {
+                ...currentContext,
+                candidateProductIds: topMatches.map((p) => p.id),
+                pendingProductConfirmation: null,
+              },
+            };
+          }
+        }
+      }
+    }
+
+    // Manejo de respuesta inesperada: repreguntar amablemente mostrando el catálogo
     if (!selectedProduct) {
       let retryMessage = "No logré identificar qué producto deseás cotizar. 🤔\n\nPor favor respondé con el número de la opción:\n";
       products.forEach((p, idx) => {
@@ -302,9 +507,8 @@ export const budgetAgentNode = async (state) => {
       };
     }
 
-    // Si el usuario incluyó una cantidad en el mensaje (ej: "2 unidades", "x3")
-    const detectedQty = extractQuantity(rawText) || 1;
-
+    // Producto seleccionado con éxito
+    const detectedQty = extractQuantity(rawText) || currentContext.quantity || 1;
     const responseText =
       `¡Excelente elección! Elegiste *${selectedProduct.name}* (Precio base: ${selectedProduct.price.toLocaleString()} Gs.). 🎨\n\n` +
       `¿Qué personalización te gustaría que lleve? Podés escribir una frase, nombre o dedicatoria, o enviarnos una foto/logo que quieras estampar o grabar.`;
@@ -320,6 +524,10 @@ export const budgetAgentNode = async (state) => {
         unitPrice: selectedProduct.price,
         quantity: detectedQty,
         step: "customization",
+        customizationSubStep: null,
+        customizationProposed: null,
+        candidateProductIds: null,
+        pendingProductConfirmation: null,
       },
     };
   }
@@ -336,32 +544,87 @@ export const budgetAgentNode = async (state) => {
       },
     };
 
-    // Guardar detalles del texto y foto si fue recibida
-    const customizationText = rawText || "Diseño según imagen adjunta";
-    const rawOptions = Object.entries(product.packagingPrices || {});
-    const packagingOptions = [...rawOptions];
-    if (!packagingOptions.some(([key, price]) => price === 0 || key === "estandar")) {
-      packagingOptions.push(["estandar", 0]);
+    // Sub-paso B: El cliente está respondiendo a la confirmación previa del texto a grabar
+    if (currentContext.customizationSubStep === "confirm") {
+      if (isAffirmative(normalizedText)) {
+        // Confirmado por el cliente
+        const finalCustomization = currentContext.customizationProposed || "Sin grabado";
+
+        const rawOptions = Object.entries(product.packagingPrices || {});
+        const packagingOptions = [...rawOptions];
+        if (!packagingOptions.some(([key, price]) => price === 0 || key === "estandar")) {
+          packagingOptions.push(["estandar", 0]);
+        }
+
+        let packagingMessage =
+          `¡Genial! Personalización confirmada: _"${finalCustomization}"_. ✍️✨\n\n` +
+          `Ahora, elegí la presentación o empaque para tu regalo:\n\n`;
+
+        packagingOptions.forEach(([key, price], idx) => {
+          const label = PACKAGING_LABELS[key.toLowerCase()] || key;
+          const priceText = price > 0 ? `+${price.toLocaleString()} Gs.` : "Incluido (0 Gs.)";
+          packagingMessage += `${idx + 1}. *${label}* (${priceText})\n`;
+        });
+
+        packagingMessage += `\n¿Cuál de estas opciones de empaque preferís? (Respondé con el número o nombre).`;
+
+        return {
+          messages: [new AIMessage(packagingMessage)],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            customizationDetails: finalCustomization,
+            customizationProposed: null,
+            customizationSubStep: null,
+            step: "packaging_selection",
+          },
+        };
+      } else {
+        // El cliente corrigió o envió un texto diferente
+        let newProposed = "";
+        if (state.incomingMedia || lastMessage?.hasMedia) {
+          newProposed = "Diseño según imagen adjunta";
+        } else {
+          newProposed = await extractEngravingTextWithLLM(rawText);
+        }
+
+        const confirmPrompt =
+          newProposed === "Sin grabado"
+            ? `Vamos a procesar tu producto *sin grabado*. ¿Es correcto? (Respondé *"Sí"* para continuar o escribí la personalización que desees).`
+            : `Vamos a grabar: *${newProposed}*. ¿Es correcto? (Respondé *"Sí"* para continuar o escribí la corrección).`;
+
+        return {
+          messages: [new AIMessage(confirmPrompt)],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            customizationProposed: newProposed,
+            customizationSubStep: "confirm",
+          },
+        };
+      }
     }
 
-    let packagingMessage =
-      `¡Genial! Personalización registrada: _"${customizationText}"_. ✍️✨\n\n` +
-      `Ahora, elegí la presentación o empaque para tu regalo:\n\n`;
+    // Sub-paso A: Primera recepción de texto o imagen de personalización
+    let proposedText = "";
+    if (state.incomingMedia || lastMessage?.hasMedia) {
+      proposedText = "Diseño según imagen adjunta";
+    } else {
+      proposedText = await extractEngravingTextWithLLM(rawText);
+    }
 
-    packagingOptions.forEach(([key, price], idx) => {
-      const label = PACKAGING_LABELS[key.toLowerCase()] || key;
-      const priceText = price > 0 ? `+${price.toLocaleString()} Gs.` : "Incluido (0 Gs.)";
-      packagingMessage += `${idx + 1}. *${label}* (${priceText})\n`;
-    });
-
-    packagingMessage += `\n¿Cuál de estas opciones de empaque preferís? (Respondé con el número o nombre).`;
+    const confirmPrompt =
+      proposedText === "Sin grabado"
+        ? `Vamos a procesar tu producto *sin grabado*. ¿Es correcto? (Respondé *"Sí"* para continuar o escribí la personalización que desees).`
+        : `Vamos a grabar: *${proposedText}*. ¿Es correcto? (Respondé *"Sí"* para continuar o escribí la corrección).`;
 
     return {
-      messages: [new AIMessage(packagingMessage)],
+      messages: [new AIMessage(confirmPrompt)],
       activeAgent: "budget",
       quoteContext: {
-        customizationDetails: customizationText,
-        step: "packaging_selection",
+        ...currentContext,
+        customizationProposed: proposedText,
+        customizationSubStep: "confirm",
       },
     };
   }
@@ -432,10 +695,10 @@ export const budgetAgentNode = async (state) => {
       `📋 *Resumen de tu Cotización HoDie:*\n\n` +
       `• *Producto:* ${currentContext.selectedProductName} (${(currentContext.unitPrice || product.price).toLocaleString()} Gs. c/u)\n` +
       `• *Cantidad:* ${finalQuantity} unidad(es)\n` +
-      `• *Personalización:* ${currentContext.customizationDetails || "A convenir"}\n` +
+      `• *Personalización:* ${currentContext.customizationDetails || "Sin grabado"}\n` +
       `• *Empaque:* ${selectedPkg.name} (${selectedPkg.price > 0 ? `+${selectedPkg.price.toLocaleString()} Gs.` : "Incluido"})\n` +
       `• *Subtotal:* ${subtotal.toLocaleString()} Gs.\n` +
-      `• *Envío:* Pago contra entrega al recibir 🚚\n\n` +
+      `• *Envío:* Se define según tu ciudad 🚚\n\n` +
       `💰 *TOTAL A PAGAR:* *${total.toLocaleString()} Gs.*\n\n` +
       `Para coordinar la entrega de tu pedido, necesitamos algunos datos de envío.\n` +
       `¿Cuál es el *nombre y apellido* de la persona que recibirá el paquete? 👤`;
@@ -555,7 +818,7 @@ export const budgetAgentNode = async (state) => {
           state.user?.displayName ||
           "Cliente",
         city: currentContext.shippingAddress?.city || "Minga Guazú",
-        department: currentContext.shippingAddress?.department || "Alto Paraná",
+        department: currentContext.shippingAddress?.department || "",
         street,
         instructions: street,
       };
@@ -645,7 +908,7 @@ export const budgetAgentNode = async (state) => {
           state.user?.displayName ||
           "Cliente",
         city: currentContext.shippingAddress?.city || "Minga Guazú",
-        department: currentContext.shippingAddress?.department || "Alto Paraná",
+        department: currentContext.shippingAddress?.department || "",
         street: currentContext.shippingAddress?.street || "",
         instructions: currentContext.shippingAddress?.street || "",
       };
@@ -713,7 +976,7 @@ export const budgetAgentNode = async (state) => {
         ],
         shippingAddress: {
           city: currentContext.shippingAddress?.city || "Minga Guazú",
-          department: currentContext.shippingAddress?.department || "Alto Paraná",
+          department: currentContext.shippingAddress?.department || "",
           street: currentContext.shippingAddress?.street || "Dirección a coordinar",
           instructions: currentContext.shippingAddress?.instructions || "",
         },
@@ -728,30 +991,46 @@ export const budgetAgentNode = async (state) => {
         // Reutilización directa del servicio de órdenes existente
         const orderResult = await processAndSendOrder(orderPayload);
 
-        // Envía el mensaje con los datos bancarios para la transferencia (status pending)
-        await sendOrderStatus(
-          state.whatsappChatId || state.userPhoneNumber,
-          "pending",
-          orderResult.total || orderPayload.total
-        );
-
         const shippingLabel =
           orderResult.shippingMethod === "local_gratis"
             ? "Envío local gratuito (Minga Guazú)"
             : "Envío por transportadora (flete con pago contra entrega)";
 
-        const successMessage =
-          `🎉 *¡Tu pedido #${orderNumber} ha sido generado con éxito!*\n\n` +
-          `📦 *Modalidad de entrega:* ${shippingLabel}\n` +
-          `💰 *Total a transferir:* *${(orderResult.total || orderPayload.total).toLocaleString()} Gs.*\n\n` +
-          `Te acabamos de enviar el comprobante oficial en PDF con todos los detalles y los datos de la cuenta bancaria para realizar la transferencia.\n\n` +
-          `Cuando hagas la transferencia, simplemente envianos una foto del comprobante por este chat para que nuestro equipo lo verifique e inicie la producción. ¡Muchas gracias! 🎁✨`;
+        if (orderResult.pdfDelivered) {
+          // Envía el mensaje con los datos bancarios para la transferencia (status pending)
+          await sendOrderStatus(
+            state.whatsappChatId || state.userPhoneNumber,
+            "pending",
+            orderResult.total || orderPayload.total
+          );
 
-        return {
-          messages: [new AIMessage(successMessage)],
-          activeAgent: null,
-          quoteContext: { reset: true },
-        };
+          const successMessage =
+            `🎉 *¡Tu pedido #${orderNumber} ha sido generado con éxito!*\n\n` +
+            `📦 *Modalidad de entrega:* ${shippingLabel}\n` +
+            `💰 *Total a transferir:* *${(orderResult.total || orderPayload.total).toLocaleString()} Gs.*\n\n` +
+            `Te acabamos de enviar el comprobante oficial en PDF con todos los detalles y los datos de la cuenta bancaria para realizar la transferencia.\n\n` +
+            `Cuando hagas la transferencia, simplemente envianos una foto del comprobante por este chat para que nuestro equipo lo verifique e inicie la producción. ¡Muchas gracias! 🎁✨`;
+
+          return {
+            messages: [new AIMessage(successMessage)],
+            activeAgent: null,
+            quoteContext: { reset: true },
+          };
+        } else {
+          // El PDF no pudo ser entregado de inmediato, pero la orden existe y processAndSendOrder ya envió datos bancarios
+          const pendingPdfMessage =
+            `🎉 *¡Tu pedido #${orderNumber} está confirmado!*\n\n` +
+            `📦 *Modalidad de entrega:* ${shippingLabel}\n` +
+            `💰 *Total a transferir:* *${(orderResult.total || orderPayload.total).toLocaleString()} Gs.*\n\n` +
+            `Tu comprobante en PDF está siendo preparado y te lo haremos llegar a la brevedad. ` +
+            `Con los datos que te enviamos arriba ya podés realizar la transferencia y remitirnos el comprobante por acá. ¡Muchas gracias! 🎁✨`;
+
+          return {
+            messages: [new AIMessage(pendingPdfMessage)],
+            activeAgent: null,
+            quoteContext: { reset: true },
+          };
+        }
       } catch (orderErr) {
         console.error("❌ Error emitiendo pedido en BudgetAgent:", orderErr);
         const reason = `Fallo al emitir pedido: ${orderErr.message}`;

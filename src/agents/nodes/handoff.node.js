@@ -9,24 +9,71 @@ import { AIMessage } from "@langchain/core/messages";
  * @param {string} [params.whatsappChatId]
  * @param {string} [params.pushname]
  * @param {string} [params.reason]
+ * @param {Object} [params.quoteContext]
+ * @param {string} [params.orderNumber]
+ * @param {Object} [params.state]
  */
 export const notifyAdminHandoffAlert = async ({
   userPhoneNumber,
   whatsappChatId,
   pushname,
   reason,
+  quoteContext,
+  orderNumber,
+  state,
 }) => {
   const adminPhone = process.env.ADMIN_WHATSAPP_PHONE;
   if (!adminPhone) return;
 
-  const hasPhone = Boolean(userPhoneNumber && !userPhoneNumber.includes("@"));
-  const clientDisplay = hasPhone
-    ? `+${userPhoneNumber}`
-    : `${pushname || "Contacto WhatsApp"} (${whatsappChatId || "ID no disponible"}) [número no disponible]`;
+  const phone = userPhoneNumber || state?.userPhoneNumber;
+  const chatId = whatsappChatId || state?.whatsappChatId;
+  const name = pushname || state?.pushname;
+  const ctx = quoteContext || state?.quoteContext;
+  const ordNum = orderNumber || ctx?.orderNumber;
 
-  const formalReason = reason || "Solicitud de atención humana o derivación";
+  const hasPhone = Boolean(phone && !phone.includes("@"));
+  const clientDisplay = hasPhone
+    ? `+${phone}`
+    : `${name || "Contacto WhatsApp"} (${chatId || "ID no disponible"}) [número no disponible]`;
+
+  const formalReason = reason || state?.humanHandoffReason || "Solicitud de atención humana o derivación";
 
   console.log(`🚨 Activando HumanHandoff para ${clientDisplay}. Motivo: ${formalReason}`);
+
+  // Construir líneas de contexto detallado de cotización/pedido si existen en el estado
+  const contextLines = [];
+
+  if (ctx?.step) {
+    const stepLabel = ctx.shippingStep ? `${ctx.step} (${ctx.shippingStep})` : ctx.step;
+    contextLines.push(`• *Paso de cotización:* ${stepLabel}`);
+  }
+  if (ctx?.selectedProductName) {
+    contextLines.push(`• *Producto:* ${ctx.selectedProductName}`);
+  }
+  if (ctx?.quantity) {
+    contextLines.push(`• *Cantidad:* ${ctx.quantity}`);
+  }
+  const customization = ctx?.customizationDetails || ctx?.customizationProposed;
+  if (customization) {
+    contextLines.push(`• *Personalización:* ${customization}`);
+  }
+  if (ctx?.selectedPackaging?.name) {
+    contextLines.push(`• *Empaque:* ${ctx.selectedPackaging.name}`);
+  }
+  if (ctx?.shippingAddress?.city) {
+    contextLines.push(`• *Ciudad:* ${ctx.shippingAddress.city}`);
+  }
+  if (ctx?.shippingAddress?.street) {
+    contextLines.push(`• *Dirección:* ${ctx.shippingAddress.street}`);
+  }
+  if (ctx?.total) {
+    contextLines.push(`• *Total:* ${ctx.total.toLocaleString()} Gs.`);
+  }
+  if (ordNum) {
+    contextLines.push(`• *Pedido:* #${ordNum}`);
+  }
+
+  const contextSection = contextLines.length > 0 ? `\n${contextLines.join("\n")}\n` : "";
 
   try {
     const { whatsappClient } = await import("../../config/whatsapp.js");
@@ -34,8 +81,10 @@ export const notifyAdminHandoffAlert = async ({
     const adminAlert =
       `🚨 *Derivación a Asesor Humano*\n\n` +
       `• *Cliente:* ${clientDisplay}\n` +
-      `• *Motivo:* ${formalReason}\n\n` +
-      `👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
+      `• *ChatId:* ${chatId || "no provisto"}\n` +
+      `• *Motivo:* ${formalReason}\n` +
+      contextSection +
+      `\n👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
 
     await whatsappClient.sendMessage(adminChatId, adminAlert, { sendSeen: false });
     console.log(`📢 Alerta de handoff enviada al WhatsApp del admin (${adminPhone})`);
@@ -57,12 +106,14 @@ export const notifyAdminHandoffAlert = async ({
 export const handoffNode = async (state) => {
   const reason = state.humanHandoffReason || "Solicitud de atención humana o derivación";
 
-  // 1. Notificar al administrador por WhatsApp mediante helper compartido
+  // 1. Notificar al administrador por WhatsApp mediante helper compartido con contexto
   await notifyAdminHandoffAlert({
     userPhoneNumber: state.userPhoneNumber,
     whatsappChatId: state.whatsappChatId,
     pushname: state.pushname,
     reason,
+    quoteContext: state.quoteContext,
+    state,
   });
 
   // 2. Respuesta cordial al cliente

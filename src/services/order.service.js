@@ -340,6 +340,7 @@ export const processAndSendOrder = async (orderData) => {
   const updatedAt = Timestamp.now();
 
   // 6. Persistir o actualizar en Firestore con status 'pending' (si no tiene status previo)
+  let pdfDelivered = false;
   const orderToSave = {
     ...orderData,
     id: orderId,
@@ -352,6 +353,7 @@ export const processAndSendOrder = async (orderData) => {
     createdAt,
     status: orderData.status || "pending",
     whatsappChatId: orderData.whatsappChatId || "",
+    pdfDelivered: false,
     updatedAt,
   };
 
@@ -362,33 +364,96 @@ export const processAndSendOrder = async (orderData) => {
     console.warn("⚠️ No se pudo persistir pedido en Firestore (se continúa con PDF):", dbErr.message);
   }
 
-  // 7. Generar PDF premium con PDFKit
-  const pdfPath = await generateOrderPDF(orderToSave);
-
-  // 8. Enviar PDF por WhatsApp al chat del cliente (preferir whatsappChatId sobre userPhoneNumber)
+  // 7 y 8. Generar PDF premium con PDFKit y enviarlo por WhatsApp
+  let pdfPath = null;
   const recipient = orderToSave.whatsappChatId || orderToSave.userPhoneNumber;
-  const sent = await sendOrderPDF(recipient, pdfPath);
 
-  if (!sent) {
-    const error = new Error("El PDF se generó, pero no se pudo enviar por WhatsApp.");
-    error.statusCode = 500;
-    throw error;
+  try {
+    pdfPath = await generateOrderPDF(orderToSave);
+    const sent = await sendOrderPDF(recipient, pdfPath);
+    pdfDelivered = Boolean(sent);
+  } catch (err) {
+    console.warn(`⚠️ Error generando o enviando PDF para el pedido ${orderNumber}:`, err.message);
+    pdfDelivered = false;
+  }
+
+  // Actualizar pdfDelivered en el documento de Firestore
+  try {
+    await db.collection("orders").doc(orderToSave.id).update({
+      pdfDelivered,
+      updatedAt: Timestamp.now(),
+    });
+  } catch (updateErr) {
+    console.warn(`⚠️ Error actualizando pdfDelivered en Firestore para ${orderToSave.id}:`, updateErr.message);
+  }
+
+  // Si el PDF no se pudo entregar, activar contingencia: texto al cliente y alerta al admin
+  if (!pdfDelivered) {
+    console.warn(`⚠️ PDF no entregado para el pedido #${orderNumber}. Activando flujo de contingencia.`);
+
+    // Mensaje de texto al cliente con número, total, datos bancarios y aviso de PDF posterior
+    try {
+      const { whatsappClient } = await import("../config/whatsapp.js");
+      const { resolveChatId } = await import("./whatsapp.service.js");
+      const { BANK_CONFIG } = await import("../config/bank.config.js");
+      const targetChatId = resolveChatId(recipient, "orderFallbackText");
+
+      const shippingLabel =
+        orderToSave.shippingMethod === "local_gratis"
+          ? "Gratis (Minga Guazú)"
+          : "Pago contra entrega (transportadora)";
+
+      const fallbackCustomerMessage =
+        `📝 *Tu pedido #${orderNumber} ha sido generado con éxito*\n\n` +
+        `• *Total:* *${orderToSave.total.toLocaleString()} Gs.*\n` +
+        `• *Modalidad de entrega:* ${shippingLabel}\n` +
+        `• *Alias para el pago:* ${BANK_CONFIG.alias}\n\n` +
+        `📄 Tu comprobante oficial en PDF está siendo procesado y te lo haremos llegar a la brevedad por este medio.\n` +
+        `Aguardamos tu comprobante de transferencia para iniciar la preparación. ¡Muchas gracias! 🎁✨`;
+
+      await whatsappClient.sendMessage(targetChatId, fallbackCustomerMessage, { sendSeen: false });
+    } catch (clientMsgErr) {
+      console.warn("⚠️ No se pudo enviar mensaje de texto de contingencia al cliente:", clientMsgErr.message);
+    }
+
+    // Alertar al admin: "Pedido <número> creado, falta enviar el PDF"
+    try {
+      const { notifyAdminViaWhatsApp } = await import("./whatsapp.service.js");
+      const clientDisplay = orderToSave.userPhoneNumber
+        ? `+${orderToSave.userPhoneNumber}`
+        : `${orderToSave.userDisplayName || "Cliente"} (${orderToSave.whatsappChatId || "sin chat"})`;
+
+      await notifyAdminViaWhatsApp(
+        `⚠️ *Pedido #${orderNumber} creado, falta enviar el PDF*\n\n` +
+        `• *Cliente:* ${clientDisplay}\n` +
+        `• *Total:* ${orderToSave.total.toLocaleString()} Gs.\n` +
+        `• *Estado:* Guardado en Firestore con pdfDelivered: false.\n\n` +
+        `👉 Por favor verificar y enviar el comprobante PDF manualmente al cliente.`
+      );
+    } catch (adminAlertErr) {
+      console.warn("⚠️ No se pudo alertar al admin sobre PDF pendiente:", adminAlertErr.message);
+    }
   }
 
   // 9. Programar limpieza del archivo temporal (30 segundos)
-  setTimeout(() => {
-    try {
-      if (fs.existsSync(pdfPath)) {
-        fs.unlinkSync(pdfPath);
+  if (pdfPath) {
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(pdfPath)) {
+          fs.unlinkSync(pdfPath);
+        }
+      } catch (err) {
+        console.error("Error eliminando archivo temporal:", err);
       }
-    } catch (err) {
-      console.error("Error eliminando archivo temporal:", err);
-    }
-  }, 30000);
+    }, 30000);
+  }
 
   return {
     success: true,
-    message: `Pedido ${orderNumber} procesado y enviado al cliente.`,
+    pdfDelivered,
+    message: pdfDelivered
+      ? `Pedido ${orderNumber} procesado y enviado al cliente.`
+      : `Pedido ${orderNumber} procesado (PDF pendiente de envío).`,
     file: pdfPath,
     orderId: orderToSave.id,
     orderNumber: orderNumber,

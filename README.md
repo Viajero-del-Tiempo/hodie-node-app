@@ -279,3 +279,29 @@ JWT_SECRET=tu_clave_secreta_super_segura
 3. **Escaneo del Código QR:**
    Al arrancar por primera vez, el servidor imprimirá un código QR en la terminal. Escanéalo usando la aplicación móvil de WhatsApp (Sección *Dispositivos Vinculados*).
    Una vez emparejado, se creará la carpeta `./sessions/` para mantener activa la sesión y no requerir el escaneo en futuros reinicios.
+
+---
+
+## 🚀 Despliegue en VM de Producción
+
+Para desplegar en la VM de producción, el script [`deploy.sh`](file:///home/arnaldoguerrero/Hodie/hodie-node-app/deploy.sh) automatiza el ciclo asegurando que Chrome siempre esté instalado tras la instalación de dependencias:
+
+```bash
+#!/usr/bin/env bash
+# exit on error
+set -o errexit
+
+# 1. Instala dependencias y ejecuta patch-package via postinstall
+npm install
+
+# 2. Garantiza la instalación de Chromium para Puppeteer (evita fallos de arranque tras cambios de versión)
+npx puppeteer browsers install chrome
+
+# 3. Reinicia el proceso en PM2
+pm2 restart hodie-node-app || pm2 start server.js --name hodie-node-app
+```
+
+Para ejecutar el despliegue manualmente en la VM:
+```bash
+./deploy.sh
+```

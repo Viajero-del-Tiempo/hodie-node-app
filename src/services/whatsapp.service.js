@@ -108,10 +108,11 @@ export const sendOrderStatus = async (whatsappChatId, status, amount) => {
     const chatId = resolveChatId(whatsappChatId, "sendOrderStatus");
 
     // Textos por estado
+    const { BANK_CONFIG } = await import("../config/bank.config.js");
     const statusMessages = {
       pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\nSi tu pago ingresa después del medio día, el mismo será enviado al día siguiente\n*Monto:* ${
         amount ? amount.toLocaleString() : "N/A"
-      } Gs.\n*Costo de envío:* Pago contra entrega\n*Alias para el pago:* +595987305945 (celular)\nMás abajo los detalles completos 👇`,
+      } Gs.\n*Costo de envío:* Pago contra entrega\n*Alias para el pago:* ${BANK_CONFIG.alias}\nMás abajo los detalles completos 👇`,
       paid: `💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
@@ -134,5 +135,22 @@ export const sendOrderStatus = async (whatsappChatId, status, amount) => {
   } catch (err) {
     console.error("Error enviando estado del pedido:", err);
     throw err;
+  }
+};
+
+/**
+ * Envía una alerta informativa o de contingencia al WhatsApp del administrador
+ * @param {string} message - Contenido de la alerta
+ */
+export const notifyAdminViaWhatsApp = async (message) => {
+  const adminPhone = process.env.ADMIN_WHATSAPP_PHONE;
+  if (!adminPhone) return;
+
+  try {
+    const chatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
+    await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
+    console.log(`📢 Alerta enviada al WhatsApp del admin (${adminPhone})`);
+  } catch (err) {
+    console.warn("⚠️ No se pudo enviar notificación WhatsApp al admin:", err.message);
   }
 };

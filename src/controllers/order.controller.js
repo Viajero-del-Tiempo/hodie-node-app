@@ -69,16 +69,21 @@ export const sendOrder = async (req, res) => {
 
     const result = await processAndSendOrder(cleanPayload);
 
-    // Enviar mensaje de estado inicial con datos bancarios por WhatsApp al cliente
-    const targetChatId = cleanPayload.whatsappChatId || cleanPayload.userPhoneNumber;
-    try {
-      await sendOrderStatus(targetChatId, "pending", result.total);
-    } catch (statusErr) {
-      console.warn("⚠️ No se pudo enviar notificación de estado inicial por WhatsApp:", statusErr.message);
+    // Enviar mensaje de estado inicial con datos bancarios solo si el PDF fue entregado
+    // (si falló el PDF, processAndSendOrder ya envió el mensaje de contingencia con datos bancarios)
+    if (result.pdfDelivered) {
+      const targetChatId = cleanPayload.whatsappChatId || cleanPayload.userPhoneNumber;
+      try {
+        await sendOrderStatus(targetChatId, "pending", result.total);
+      } catch (statusErr) {
+        console.warn("⚠️ No se pudo enviar notificación de estado inicial por WhatsApp:", statusErr.message);
+      }
     }
 
     return res.json({
       success: result.success,
+      status: "success",
+      pdfDelivered: result.pdfDelivered,
       message: result.message,
       orderId: result.orderId,
       orderNumber: result.orderNumber,
