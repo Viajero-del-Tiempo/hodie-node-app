@@ -41,12 +41,16 @@ export const sendOrder = async (req, res) => {
     // Solo se aceptan items (productId, quantity, packaging, personalización) y dirección del body.
     // Identidad viene exclusivamente de req.user del JWT.
     // id, orderNumber, status, price, subtotal, shippingMethod, total se ignoran / fuerzan por el servidor.
-    const cleanItems = body.items.map((it) => ({
-      productId: it.productId || it.id,
-      quantity: it.quantity,
-      selectedPackaging: it.selectedPackaging || null,
-      customization: it.customization || it.instructions || undefined,
-    }));
+    const cleanItems = body.items.map((it) => {
+      const cust = it.customization ? String(it.customization).trim() : (it.instructions ? String(it.instructions).trim() : "");
+      return {
+        productId: it.productId || it.id,
+        quantity: it.quantity,
+        selectedPackaging: it.selectedPackaging || null,
+        customization: cust,
+        customizationPending: !cust,
+      };
+    });
 
     const cleanShippingAddress = {
       alias: body.shippingAddress.alias || "",
@@ -74,7 +78,9 @@ export const sendOrder = async (req, res) => {
     if (result.pdfDelivered) {
       const targetChatId = cleanPayload.whatsappChatId || cleanPayload.userPhoneNumber;
       try {
-        await sendOrderStatus(targetChatId, "pending", result.total);
+        await sendOrderStatus(targetChatId, "pending", result.total, result.shippingMethod, {
+          hasPendingCustomization: Boolean(result.customizationPending),
+        });
       } catch (statusErr) {
         console.warn("⚠️ No se pudo enviar notificación de estado inicial por WhatsApp:", statusErr.message);
       }
@@ -89,6 +95,7 @@ export const sendOrder = async (req, res) => {
       orderNumber: result.orderNumber,
       file: result.file,
       shippingMethod: result.shippingMethod,
+      customizationPending: result.customizationPending,
       total: result.total,
     });
   } catch (error) {

@@ -207,7 +207,7 @@ export const updateAdminOrderStatus = async (req, res) => {
     const recipient = order.whatsappChatId || order.userPhoneNumber;
     if (recipient) {
       try {
-        await sendOrderStatus(recipient, newStatus, order.total);
+        await sendOrderStatus(recipient, newStatus, order.total, order.shippingMethod);
       } catch (wsErr) {
         console.warn("⚠️ No se pudo enviar notificación WhatsApp:", wsErr.message);
       }
@@ -228,5 +228,64 @@ export const updateAdminOrderStatus = async (req, res) => {
     return res.status(isClientError ? 400 : 500).json({
       error: err.message || "Error al actualizar estado del pedido",
     });
+  }
+};
+
+/**
+ * PATCH /admin/orders/:id/customization
+ * Permite al administrador cargar o editar la personalización de un ítem del pedido,
+ * limpiando la bandera 'customizationPending'.
+ */
+export const updateAdminOrderCustomization = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { itemIndex, customization } = req.body;
+
+    if (itemIndex === undefined || itemIndex === null || isNaN(Number(itemIndex))) {
+      return res.status(400).json({ error: "Índice de ítem (itemIndex) requerido." });
+    }
+
+    const idx = Number(itemIndex);
+    const orderRef = db.collection("orders").doc(id);
+    const orderDoc = await orderRef.get();
+
+    if (!orderDoc.exists) {
+      return res.status(404).json({ error: "Pedido no encontrado." });
+    }
+
+    const orderData = orderDoc.data() || {};
+    const items = [...(orderData.items || [])];
+
+    if (idx < 0 || idx >= items.length) {
+      return res.status(400).json({ error: `Índice de ítem ${idx} fuera de rango.` });
+    }
+
+    const updatedText = typeof customization === "string" ? customization.trim() : "";
+    items[idx] = {
+      ...items[idx],
+      customization: updatedText,
+      customizationPending: false,
+    };
+
+    // Si ningún ítem tiene customizationPending, marcar la orden como customizationPending: false
+    const stillHasPending = items.some((it) => it.customizationPending === true);
+
+    await orderRef.update({
+      items,
+      customizationPending: stillHasPending,
+      updatedAt: Timestamp.now(),
+    });
+
+    console.log(`✍️ Personalización actualizada para pedido #${orderData.orderNumber}, ítem ${idx}: "${updatedText}"`);
+
+    const updatedDoc = await orderRef.get();
+    return res.json({
+      success: true,
+      message: "Personalización actualizada exitosamente.",
+      order: { id: updatedDoc.id, ...updatedDoc.data() },
+    });
+  } catch (err) {
+    console.error("Error en updateAdminOrderCustomization:", err);
+    return res.status(500).json({ error: err.message || "Error al actualizar personalización." });
   }
 };

@@ -329,17 +329,73 @@ whatsappClient.on("message", async (mensaje) => {
         pushname = mensaje._data?.notifyName || "";
       }
 
-      // 5. Procesar metadatos de archivo adjunto sin llamar a downloadMedia()
-      // NOTA DE ARQUITECTURA: Ningún agente actual consume el binario de la imagen.
-      // Leemos directamente el mimetype que ya trae el mensaje (mensaje._data?.mimetype o mensaje.type)
-      // sin descargar el archivo, ahorrando CPU, ancho de banda y evitando saturar el límite de 1 MiB de Firestore.
+      // 5. Procesar archivo adjunto
       let incomingMedia = null;
       if (mensaje.hasMedia) {
-        const mime = mensaje._data?.mimetype || "";
+        const mime = (mensaje._data?.mimetype || "").toLowerCase();
         incomingMedia = {
           mimetype: mime || "application/octet-stream",
           filename: mensaje._data?.filename || `adjunto-${Date.now()}`,
         };
+
+        // Regla: Subir a Cloudinary SOLO si activeAgent === "budget" y el paso es "customization"
+        let shouldUploadCustomization = false;
+        try {
+          const threadState = await compiledGraph.getState({
+            configurable: { thread_id: whatsappChatId },
+          });
+          const activeAgent = threadState?.values?.activeAgent;
+          const currentStep = threadState?.values?.quoteContext?.step;
+          if (activeAgent === "budget" && currentStep === "customization") {
+            shouldUploadCustomization = true;
+          }
+        } catch (stateErr) {
+          console.warn(`⚠️ Error consultando estado de hilo ${whatsappChatId} para media:`, stateErr.message);
+        }
+
+        if (shouldUploadCustomization) {
+          const MAX_MEDIA_BYTES = 10 * 1024 * 1024; // 10 MB
+          const allowedImageMimes = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+          const isAllowedImage = allowedImageMimes.includes(mime);
+
+          // Límite de tamaño informado por WhatsApp antes de descargar
+          const reportedSize = Number(mensaje._data?.size || mensaje._data?.fileLength || 0);
+
+          if (!isAllowedImage || (reportedSize > 0 && reportedSize > MAX_MEDIA_BYTES)) {
+            console.warn(
+              `⚠️ Archivo no apto para Cloudinary (MIME: ${mime}, Tamaño: ${reportedSize} bytes). Marcando customizationImagePending.`
+            );
+            incomingMedia.uploadFailed = true;
+            incomingMedia.reason = !isAllowedImage ? "unsupported_format" : "size_exceeded";
+          } else {
+            try {
+              const media = await mensaje.downloadMedia();
+              if (media && media.data) {
+                const binarySize = Buffer.byteLength(media.data, "base64");
+                if (binarySize > MAX_MEDIA_BYTES) {
+                  console.warn(`⚠️ Imagen descargada supera 10 MB (${binarySize} bytes). Marcando customizationImagePending.`);
+                  incomingMedia.uploadFailed = true;
+                  incomingMedia.reason = "size_exceeded";
+                } else {
+                  const { uploadCustomizationImageToCloudinary } = await import("../services/cloudinary.service.js");
+                  const uploadedUrl = await uploadCustomizationImageToCloudinary({
+                    base64: media.data,
+                    mimetype: media.mimetype || mime,
+                  });
+                  incomingMedia.url = uploadedUrl;
+                  console.log(`☁️ Imagen de personalización subida a Cloudinary: ${uploadedUrl}`);
+                }
+              } else {
+                incomingMedia.uploadFailed = true;
+                incomingMedia.reason = "empty_media";
+              }
+            } catch (uploadErr) {
+              console.warn("⚠️ Error descargando/subiendo imagen a Cloudinary:", uploadErr.message);
+              incomingMedia.uploadFailed = true;
+              incomingMedia.reason = uploadErr.message;
+            }
+          }
+        }
       }
 
       // 6. Construir userText contextualmente según tipo de mensaje

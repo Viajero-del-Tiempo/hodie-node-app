@@ -76,6 +76,8 @@ export const createDefaultQuoteContext = () => ({
   selectedProductSku: null,
   unitPrice: 0,
   customizationDetails: null,
+  customizationImageUrl: null,
+  customizationImagePending: false,
   customizationMedia: null,
   selectedPackaging: null,
   shippingAddress: null,

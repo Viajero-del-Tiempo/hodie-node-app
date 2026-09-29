@@ -219,6 +219,9 @@ export const calculateOrderPricing = async (rawItems) => {
       selectedPackaging: sanitizedPackaging,
       imageUrl: itemImageUrl,
       ...(item.customization ? { customization: String(item.customization).trim() } : {}),
+      ...(item.customizationPending !== undefined ? { customizationPending: Boolean(item.customizationPending) } : {}),
+      ...(item.customizationImageUrl ? { customizationImageUrl: String(item.customizationImageUrl).trim() } : {}),
+      ...(item.customizationImagePending !== undefined ? { customizationImagePending: Boolean(item.customizationImagePending) } : {}),
       ...(item.instructions ? { instructions: String(item.instructions).trim() } : {}),
     });
   }
@@ -341,6 +344,9 @@ export const processAndSendOrder = async (orderData) => {
 
   // 6. Persistir o actualizar en Firestore con status 'pending' (si no tiene status previo)
   let pdfDelivered = false;
+  const hasPendingCustomization = pricing.sanitizedItems.some((it) => it.customizationPending === true);
+  const hasPendingImage = pricing.sanitizedItems.some((it) => it.customizationImagePending === true);
+
   const orderToSave = {
     ...orderData,
     id: orderId,
@@ -354,6 +360,8 @@ export const processAndSendOrder = async (orderData) => {
     status: orderData.status || "pending",
     whatsappChatId: orderData.whatsappChatId || "",
     pdfDelivered: false,
+    customizationPending: Boolean(orderData.customizationPending || hasPendingCustomization),
+    customizationImagePending: Boolean(orderData.customizationImagePending || hasPendingImage),
     updatedAt,
   };
 
@@ -403,11 +411,16 @@ export const processAndSendOrder = async (orderData) => {
           ? "Gratis (Minga Guazú)"
           : "Pago contra entrega (transportadora)";
 
+      let pendingCustomizationText = "";
+      if (orderToSave.customizationPending) {
+        pendingCustomizationText = `\n\n✨ *Personalización:* Notamos que tenés productos con grabado pendiente. Respondé a este mensaje con el texto, dedicatoria o foto/logo que quieras grabar. ✍️🎁`;
+      }
+
       const fallbackCustomerMessage =
         `📝 *Tu pedido #${orderNumber} ha sido generado con éxito*\n\n` +
         `• *Total:* *${orderToSave.total.toLocaleString()} Gs.*\n` +
         `• *Modalidad de entrega:* ${shippingLabel}\n` +
-        `• *Alias para el pago:* ${BANK_CONFIG.alias}\n\n` +
+        `• *Alias para el pago:* ${BANK_CONFIG.alias}${pendingCustomizationText}\n\n` +
         `📄 Tu comprobante oficial en PDF está siendo procesado y te lo haremos llegar a la brevedad por este medio.\n` +
         `Aguardamos tu comprobante de transferencia para iniciar la preparación. ¡Muchas gracias! 🎁✨`;
 
@@ -451,6 +464,8 @@ export const processAndSendOrder = async (orderData) => {
   return {
     success: true,
     pdfDelivered,
+    customizationPending: orderToSave.customizationPending,
+    customizationImagePending: orderToSave.customizationImagePending,
     message: pdfDelivered
       ? `Pedido ${orderNumber} procesado y enviado al cliente.`
       : `Pedido ${orderNumber} procesado (PDF pendiente de envío).`,

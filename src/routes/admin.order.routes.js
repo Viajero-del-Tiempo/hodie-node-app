@@ -4,6 +4,7 @@ import {
   getAdminOrders,
   getAdminOrderById,
   updateAdminOrderStatus,
+  updateAdminOrderCustomization,
 } from "../controllers/admin.order.controller.js";
 
 export const router = express.Router();
@@ -14,3 +15,4 @@ router.use(requireAdmin);
 router.get("/orders", getAdminOrders);
 router.get("/orders/:id", getAdminOrderById);
 router.patch("/orders/:id", updateAdminOrderStatus);
+router.patch("/orders/:id/customization", updateAdminOrderCustomization);

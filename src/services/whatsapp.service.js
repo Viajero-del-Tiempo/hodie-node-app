@@ -100,7 +100,7 @@ export const sendOrderPDF = async (whatsappChatId, pdfPath) => {
  * @param {string} status - Estado del pedido
  * @param {number | null} amount - Monto total a pagar del pedido
  */
-export const sendOrderStatus = async (whatsappChatId, status, amount) => {
+export const sendOrderStatus = async (whatsappChatId, status, amount, shippingMethod = "transportadora_contra_entrega", options = {}) => {
   try {
     if (!whatsappChatId) throw new Error("Identificador de destinatario (whatsappChatId) requerido");
     if (!status) throw new Error("Estado requerido");
@@ -109,10 +109,20 @@ export const sendOrderStatus = async (whatsappChatId, status, amount) => {
 
     // Textos por estado
     const { BANK_CONFIG } = await import("../config/bank.config.js");
+    const shippingText =
+      shippingMethod === "local_gratis"
+        ? "Envío gratis (Minga Guazú)"
+        : "Pago contra entrega a la transportadora";
+
+    let pendingExtra = "";
+    if (options.hasPendingCustomization || options.customizationPending) {
+      pendingExtra = `\n\n✨ *Personalización:* Notamos que tenés productos con grabado pendiente. Respondé a este mensaje con el texto, dedicatoria o foto/logo a grabar para tu regalo. ✍️🎁`;
+    }
+
     const statusMessages = {
       pending: `📝 *Tu pedido ha sido recibido con éxito*\nAguardamos tu comprobante de pago para procesarlo!\nSi tu pago ingresa después del medio día, el mismo será enviado al día siguiente\n*Monto:* ${
         amount ? amount.toLocaleString() : "N/A"
-      } Gs.\n*Costo de envío:* Pago contra entrega\n*Alias para el pago:* ${BANK_CONFIG.alias}\nMás abajo los detalles completos 👇`,
+      } Gs.\n*Costo de envío:* ${shippingText}\n*Alias para el pago:* ${BANK_CONFIG.alias}${pendingExtra}\nMás abajo los detalles completos 👇`,
       paid: `💳 *Hemos recibido tu pago*\nTu pedido ahora está confirmado y te vamos a estar actualizando sobre el estado del mismo.\n¡Muchas gracias!`,
       preparing:
         "⚙️ *Estamos preparando tu pedido*\nMuy pronto estará listo para ser enviado.",
@@ -124,10 +134,6 @@ export const sendOrderStatus = async (whatsappChatId, status, amount) => {
     };
 
     const message = statusMessages[status];
-
-    if (status === "pending") {
-      await sendWelcomeMessage(whatsappChatId);
-    }
 
     await whatsappClient.sendMessage(chatId, message, { sendSeen: false });
 

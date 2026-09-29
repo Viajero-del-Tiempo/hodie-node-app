@@ -191,8 +191,21 @@ export const generateOrderPDF = async (order) => {
           .text(`Cantidad: ${item.quantity}`)
           .text(
             `Precio unitario del producto: ${item.price.toLocaleString()} Gs.`
-          )
-          .moveDown(1);
+          );
+
+        // Información de personalización
+        if (item.customization) {
+          doc.text(`Personalización: ${item.customization}`);
+        } else if (item.customizationPending) {
+          doc.text(`Personalización: Pendiente de confirmación`);
+        }
+        if (item.customizationImageUrl) {
+          doc.text(`Diseño adjunto: Imagen digital recibida`);
+        } else if (item.customizationImagePending) {
+          doc.text(`Diseño adjunto: Pendiente de recepción en WhatsApp`);
+        }
+
+        doc.moveDown(1);
 
         // Información del packaging si existe
         if (item.selectedPackaging) {

@@ -7,7 +7,7 @@ import {
   calculateQuoteTotals,
   determineShippingMethod,
 } from "../../services/order.service.js";
-import { sendOrderStatus } from "../../services/whatsapp.service.js";
+import { sendOrderStatus, notifyAdminViaWhatsApp } from "../../services/whatsapp.service.js";
 import { notifyAdminHandoffAlert } from "./handoff.node.js";
 
 /**
@@ -199,18 +199,124 @@ export const extractQuantity = (text) => {
     /\bx\s*(\d+)\b/i,
     /\b(\d+)\s*x\b/i,
     /\bcantidad[:\s]+(\d+)\b/i,
-    /\b(?:quiero|necesito|serian|serían|pedir)\s+(\d+)\b/i,
+    /\b(?:quiero|necesito|serian|serían|pedir|dame|mandame)\s+(\d+)\b/i,
+    /\b(\d+)\s+(?:vasos?|termos?|tazas?|billeteras?|remeras?|champañeras?|cuadros?|chopps?|regalos?|productos?)\b/i,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
       const num = parseInt(match[1], 10);
-      if (num > 0 && num <= 500) return num;
+      if (num > 0) return num;
     }
   }
 
   return null;
+};
+
+export const SPANISH_NUMBER_WORDS = {
+  uno: 1, una: 1, un: 1,
+  dos: 2,
+  tres: 3,
+  cuatro: 4,
+  cinco: 5,
+  seis: 6,
+  siete: 7,
+  ocho: 8,
+  nueve: 9,
+  diez: 10,
+  once: 11,
+  doce: 12,
+  trece: 13,
+  catorce: 14,
+  quince: 15,
+  dieciseis: 16,
+  diecisiete: 17,
+  dieciocho: 18,
+  diecinueve: 19,
+  veinte: 20,
+  veintiuno: 21,
+  veintidos: 22,
+  veintitres: 23,
+  veinticuatro: 24,
+  veinticinco: 25,
+  treinta: 30,
+  cuarenta: 40,
+  cincuenta: 50,
+  sesenta: 60,
+  setenta: 70,
+  ochenta: 80,
+  noventa: 90,
+  cien: 100,
+};
+
+export const parseQuantity = (text) => {
+  if (!text || typeof text !== "string") return null;
+  const fromRegex = extractQuantity(text);
+  if (fromRegex !== null) return fromRegex;
+
+  const trimmed = text.trim();
+  const directNum = parseInt(trimmed, 10);
+  if (!isNaN(directNum) && String(directNum) === trimmed) {
+    return directNum;
+  }
+
+  const matchDigits = text.match(/\b(\d+)\b/);
+  if (matchDigits) {
+    const num = parseInt(matchDigits[1], 10);
+    if (!isNaN(num)) return num;
+  }
+
+  const norm = (text || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  const words = norm.split(/[\s,\.\-]+/);
+  for (const word of words) {
+    if (SPANISH_NUMBER_WORDS[word]) {
+      return SPANISH_NUMBER_WORDS[word];
+    }
+  }
+
+  return null;
+};
+
+const STOPWORDS = new Set([
+  "el", "la", "los", "las", "un", "una", "unos", "unas",
+  "de", "del", "con", "para", "por", "favor", "quiero",
+  "quisiera", "cotizar", "me", "gustaria", "interesa",
+  "precio", "cuanto", "cuesta", "producto", "hola",
+  "buenos", "dias", "tardes", "noches", "que", "en"
+]);
+
+export const searchProductMatches = (text, products) => {
+  if (!text || typeof text !== "string" || !Array.isArray(products) || products.length === 0) {
+    return [];
+  }
+  const userTokens = text
+    .split(/[\s,\.\-]+/)
+    .map(stemSpanish)
+    .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
+
+  if (userTokens.length === 0) return [];
+
+  const scoredMatches = products
+    .map((p) => {
+      const pNameTokens = p.name.split(/[\s,\.\-]+/).map(stemSpanish);
+      const pSkuTokens = (p.sku || "").split(/[\s,\.\-]+/).map(stemSpanish);
+      const allPTokens = [...pNameTokens, ...pSkuTokens];
+
+      const score = userTokens.filter((uToken) =>
+        allPTokens.some((pToken) => pToken === uToken || pToken.includes(uToken) || uToken.includes(pToken))
+      ).length;
+
+      return { product: p, score };
+    })
+    .filter((item) => item.score > 0);
+
+  if (scoredMatches.length === 0) return [];
+
+  const maxScore = Math.max(...scoredMatches.map((m) => m.score));
+  return scoredMatches
+    .filter((m) => m.score === maxScore)
+    .map((m) => m.product);
 };
 
 /**
@@ -300,7 +406,7 @@ const buildConfirmationPrompt = (shippingAddress, phone, quoteContext) => {
  * @param {import("../state.js").AgentState} state
  * @returns {Promise<Partial<import("../state.js").AgentState>>}
  */
-export const budgetAgentNode = async (state) => {
+export async function budgetAgentNode(state) {
   const lastMessage = state.messages[state.messages.length - 1]?.content || "";
   const rawText = typeof lastMessage === "string" ? lastMessage.trim() : "";
   const normalizedText = normalize(rawText);
@@ -368,6 +474,74 @@ export const budgetAgentNode = async (state) => {
   // PASO 0: INICIO (DESDE IDLE) O REINICIO
   // -------------------------------------------------------------
   if (!currentContext.step || currentContext.step === "idle") {
+    const wantsCatalog = normalizedText.includes("catalogo");
+
+    if (!wantsCatalog) {
+      const topMatches = searchProductMatches(rawText, products);
+      const detectedQty = extractQuantity(rawText);
+
+      // Si el cliente pide más de 100 unidades en el primer mensaje -> handoff corporativo inmediato
+      if (detectedQty && detectedQty > 100 && topMatches.length >= 1) {
+        const matched = topMatches[0];
+        const reason = `pedido corporativo de ${detectedQty} unidades de ${matched.name}`;
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: state.userPhoneNumber,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
+        return {
+          messages: [
+            new AIMessage(
+              `¡Hola! Para pedidos corporativos o mayoristas de ${detectedQty} unidades de *${matched.name}*, un asesor de nuestro equipo te va a atender de forma personalizada para ofrecerte la mejor tarifa y coordinar los detalles. Enseguida te escriben por acá. 🧑‍💼✨`
+            ),
+          ],
+          humanHandoffRequired: true,
+          humanHandoffReason: reason,
+          activeAgent: null,
+          quoteContext: { reset: true },
+        };
+      }
+
+      // Coincidencia única en el primer mensaje
+      if (topMatches.length === 1) {
+        const matched = topMatches[0];
+        return {
+          messages: [
+            new AIMessage(
+              `¡Hola! Con mucho gusto te ayudo a cotizar en HoDie. 🎁✨\n\n¿Te referís al *${matched.name}*? (Respondé *"Sí"* para continuar o si preferís ver todas las opciones, escribí *"catálogo"*).`
+            ),
+          ],
+          activeAgent: "budget",
+          quoteContext: {
+            step: "product_selection",
+            pendingProductConfirmation: matched,
+            detectedQuantity: detectedQty || null,
+          },
+        };
+      }
+
+      // Múltiples coincidencias en el primer mensaje
+      if (topMatches.length > 1) {
+        let filterMessage = `¡Hola! Con mucho gusto te ayudo a cotizar en HoDie. 🎁✨\n\nEncontramos estas opciones relacionadas con tu búsqueda:\n\n`;
+        topMatches.forEach((p, idx) => {
+          filterMessage += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n   _${p.description || ""}_\n\n`;
+        });
+        filterMessage += `¿Cuál de ellos te gustaría cotizar? (Respondé con el número o nombre, o escribí *"catálogo"* para ver todas las opciones).`;
+
+        return {
+          messages: [new AIMessage(filterMessage)],
+          activeAgent: "budget",
+          quoteContext: {
+            step: "product_selection",
+            candidateProductIds: topMatches.map((p) => p.id),
+            detectedQuantity: detectedQty || null,
+          },
+        };
+      }
+    }
+
+    // Catálogo completo
     let catalogMessage = "¡Hola! Con mucho gusto te ayudo a cotizar tu regalo personalizado en HoDie. 🎁✨\n\nEstos son nuestros productos disponibles:\n\n";
 
     products.forEach((p, idx) => {
@@ -390,6 +564,24 @@ export const budgetAgentNode = async (state) => {
   // PASO 1: SELECCIÓN DE PRODUCTO (product_selection)
   // -------------------------------------------------------------
   if (currentContext.step === "product_selection") {
+    // Si el usuario pide el catálogo completo
+    if (normalizedText.includes("catalogo")) {
+      let catalogMessage = "Estos son todos nuestros productos disponibles en el catálogo:\n\n";
+      products.forEach((p, idx) => {
+        catalogMessage += `${idx + 1}. *${p.name}* — ${p.price.toLocaleString()} Gs.\n   _${p.description}_\n\n`;
+      });
+      catalogMessage += "¿Cuál de ellos te gustaría cotizar? (Respondé con el número o nombre).";
+      return {
+        messages: [new AIMessage(catalogMessage)],
+        activeAgent: "budget",
+        quoteContext: {
+          ...currentContext,
+          candidateProductIds: null,
+          pendingProductConfirmation: null,
+        },
+      };
+    }
+
     let selectedProduct = null;
 
     // A. Si estábamos esperando confirmación de un producto sugerido por palabra clave
@@ -398,14 +590,12 @@ export const budgetAgentNode = async (state) => {
       if (isAffirmative(normalizedText)) {
         selectedProduct = candidate;
       } else {
-        // El cliente dijo no o prefirió otra cosa, limpiar sugerencia
         currentContext.pendingProductConfirmation = null;
       }
     }
 
     // B. Selección directa por número (1, 2, 3...)
     if (!selectedProduct) {
-      // Si había candidatos filtrados previamente, el índice se evalúa contra ellos
       const pool = currentContext.candidateProductIds?.length
         ? products.filter((p) => currentContext.candidateProductIds.includes(p.id))
         : products;
@@ -416,82 +606,50 @@ export const budgetAgentNode = async (state) => {
       }
     }
 
-    // C. Búsqueda por palabras clave con stemmer de español (tildes y plurales normalizados)
+    // C. Búsqueda por palabras clave con stemmer
     if (!selectedProduct) {
-      const STOPWORDS = new Set([
-        "el", "la", "los", "las", "un", "una", "unos", "unas",
-        "de", "del", "con", "para", "por", "favor", "quiero",
-        "quisiera", "cotizar", "me", "gustaria", "interesa",
-        "precio", "cuanto", "cuesta", "producto", "hola",
-        "buenos", "dias", "tardes", "noches", "que", "en"
-      ]);
+      const topMatches = searchProductMatches(rawText, products);
 
-      const userTokens = rawText
-        .split(/[\s,\.\-]+/)
-        .map(stemSpanish)
-        .filter((w) => w.length >= 3 && !STOPWORDS.has(w));
-
-      if (userTokens.length > 0) {
-        const scoredMatches = products
-          .map((p) => {
-            const pNameTokens = p.name.split(/[\s,\.\-]+/).map(stemSpanish);
-            const pSkuTokens = (p.sku || "").split(/[\s,\.\-]+/).map(stemSpanish);
-            const allPTokens = [...pNameTokens, ...pSkuTokens];
-
-            const score = userTokens.filter((uToken) =>
-              allPTokens.some((pToken) => pToken === uToken || pToken.includes(uToken) || uToken.includes(pToken))
-            ).length;
-
-            return { product: p, score };
-          })
-          .filter((item) => item.score > 0);
-
-        if (scoredMatches.length > 0) {
-          // Obtener el puntaje máximo de coincidencias
-          const maxScore = Math.max(...scoredMatches.map((m) => m.score));
-          // Filtrar los productos con la mayor coincidencia
-          const topMatches = scoredMatches
-            .filter((m) => m.score === maxScore)
-            .map((m) => m.product);
-
-          // Caso 1: Coincidencia única -> Confirmar explícitamente
-          if (topMatches.length === 1) {
-            const matched = topMatches[0];
-            const detectedQty = extractQuantity(rawText) || 1;
-            return {
-              messages: [
-                new AIMessage(
-                  `¿Te referís al *${matched.name}*? (Respondé *"Sí"* para continuar o elegí otra opción).`
-                ),
-              ],
-              activeAgent: "budget",
-              quoteContext: {
-                ...currentContext,
-                pendingProductConfirmation: matched,
-                quantity: detectedQty,
-              },
-            };
-          }
-
-          // Caso 2: Múltiples coincidencias -> Mostrar solo esas opciones
-          if (topMatches.length > 1) {
-            let filterMessage = `Encontramos estas opciones relacionadas con tu búsqueda:\n\n`;
-            topMatches.forEach((p, idx) => {
-              filterMessage += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n   _${p.description || ""}_\n\n`;
-            });
-            filterMessage += `¿Cuál de ellos te gustaría cotizar? (Respondé con el número o nombre).`;
-
-            return {
-              messages: [new AIMessage(filterMessage)],
-              activeAgent: "budget",
-              quoteContext: {
-                ...currentContext,
-                candidateProductIds: topMatches.map((p) => p.id),
-                pendingProductConfirmation: null,
-              },
-            };
-          }
+      if (topMatches.length === 1) {
+        selectedProduct = topMatches[0];
+      } else if (topMatches.length > 1) {
+        const detectedQty = extractQuantity(rawText) || currentContext.detectedQuantity || null;
+        if (detectedQty && detectedQty > 100) {
+          const reason = `pedido corporativo de ${detectedQty} unidades de ${topMatches[0].name}`;
+          await notifyAdminHandoffAlert({
+            userPhoneNumber: state.userPhoneNumber,
+            whatsappChatId: state.whatsappChatId,
+            pushname: state.pushname,
+            reason,
+          });
+          return {
+            messages: [
+              new AIMessage(
+                `¡Excelente! Para pedidos corporativos o mayoristas de ${detectedQty} unidades, un asesor de nuestro equipo te va a atender de forma personalizada para ofrecerte la mejor tarifa y coordinar los detalles. Enseguida te escriben por acá. 🧑‍💼✨`
+              ),
+            ],
+            humanHandoffRequired: true,
+            humanHandoffReason: reason,
+            activeAgent: null,
+            quoteContext: { reset: true },
+          };
         }
+
+        let filterMessage = `Encontramos estas opciones relacionadas con tu búsqueda:\n\n`;
+        topMatches.forEach((p, idx) => {
+          filterMessage += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n   _${p.description || ""}_\n\n`;
+        });
+        filterMessage += `¿Cuál de ellos te gustaría cotizar? (Respondé con el número o nombre).`;
+
+        return {
+          messages: [new AIMessage(filterMessage)],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            candidateProductIds: topMatches.map((p) => p.id),
+            pendingProductConfirmation: null,
+          },
+        };
       }
     }
 
@@ -507,27 +665,291 @@ export const budgetAgentNode = async (state) => {
       };
     }
 
-    // Producto seleccionado con éxito
-    const detectedQty = extractQuantity(rawText) || currentContext.quantity || 1;
-    const responseText =
+    // Producto seleccionado con éxito: evaluar si ya se indicó la cantidad
+    const detectedQty = extractQuantity(rawText) || currentContext.detectedQuantity || null;
+
+    if (detectedQty !== null) {
+      // 1. Más de 100 unidades -> derivar a handoff con motivo corporativo
+      if (detectedQty > 100) {
+        const reason = `pedido corporativo de ${detectedQty} unidades de ${selectedProduct.name}`;
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: state.userPhoneNumber,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
+        return {
+          messages: [
+            new AIMessage(
+              `¡Excelente! Para pedidos corporativos o mayoristas de ${detectedQty} unidades de *${selectedProduct.name}*, un asesor de nuestro equipo te va a atender de forma personalizada para ofrecerte la mejor tarifa y coordinar los detalles. Enseguida te escriben por acá. 🧑‍💼✨`
+            ),
+          ],
+          humanHandoffRequired: true,
+          humanHandoffReason: reason,
+          activeAgent: null,
+          quoteContext: { reset: true },
+        };
+      }
+
+      // 2. Supera stock disponible
+      const currentStock = Number(selectedProduct.stock);
+      if (selectedProduct.stock !== undefined && selectedProduct.stock !== null && !isNaN(currentStock) && detectedQty > currentStock) {
+        if (currentStock > 0) {
+          const promptStock =
+            `Actualmente contamos con *${currentStock} ${currentStock === 1 ? "unidad disponible" : "unidades disponibles"}* de *${selectedProduct.name}*. ` +
+            `¿Te gustaría cotizar esa cantidad, o preferís hablar con un asesor? (Respondé *"sí"* para cotizar ${currentStock}, o *"asesor"* para consultar con nuestro equipo).`;
+
+          return {
+            messages: [new AIMessage(promptStock)],
+            activeAgent: "budget",
+            quoteContext: {
+              ...currentContext,
+              selectedProductId: selectedProduct.id,
+              selectedProductName: selectedProduct.name,
+              selectedProductSku: selectedProduct.sku,
+              selectedProductImageUrl: selectedProduct.imageUrls?.[0] || "",
+              unitPrice: selectedProduct.price,
+              step: "quantity_selection",
+              pendingStockAdjustment: {
+                requestedQty: detectedQty,
+                availableStock: currentStock,
+              },
+              candidateProductIds: null,
+              pendingProductConfirmation: null,
+              detectedQuantity: null,
+            },
+          };
+        } else {
+          const reason = `sin stock para ${selectedProduct.name}`;
+          await notifyAdminHandoffAlert({
+            userPhoneNumber: state.userPhoneNumber,
+            whatsappChatId: state.whatsappChatId,
+            pushname: state.pushname,
+            reason,
+          });
+          return {
+            messages: [
+              new AIMessage(
+                `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. Te comunicamos con un asesor para consultar tiempos de reposición o alternativas similares. 🧑‍💼`
+              ),
+            ],
+            humanHandoffRequired: true,
+            humanHandoffReason: reason,
+            activeAgent: null,
+            quoteContext: { reset: true },
+          };
+        }
+      }
+
+      // 3. Cantidad válida en stock -> avanzar directamente a personalización
+      const responseText =
+        `¡Excelente elección! Elegiste *${selectedProduct.name}* (Cantidad: ${detectedQty} ${detectedQty === 1 ? "unidad" : "unidades"}). 🎨\n\n` +
+        `¿Qué personalización te gustaría que lleve? Podés escribir una frase, nombre o dedicatoria, o enviarnos una foto/logo que quieras estampar o grabar.`;
+
+      return {
+        messages: [new AIMessage(responseText)],
+        activeAgent: "budget",
+        quoteContext: {
+          ...currentContext,
+          selectedProductId: selectedProduct.id,
+          selectedProductName: selectedProduct.name,
+          selectedProductSku: selectedProduct.sku,
+          selectedProductImageUrl: selectedProduct.imageUrls?.[0] || "",
+          unitPrice: selectedProduct.price,
+          quantity: detectedQty,
+          step: "customization",
+          customizationSubStep: null,
+          customizationProposed: null,
+          candidateProductIds: null,
+          pendingProductConfirmation: null,
+          detectedQuantity: null,
+        },
+      };
+    }
+
+    // Cantidad no especificada previamente: solicitar al cliente (1 a 100)
+    const askQuantityText =
       `¡Excelente elección! Elegiste *${selectedProduct.name}* (Precio base: ${selectedProduct.price.toLocaleString()} Gs.). 🎨\n\n` +
+      `¿Cuántas unidades te gustaría cotizar? (Indicá un número del 1 al 100).`;
+
+    return {
+      messages: [new AIMessage(askQuantityText)],
+      activeAgent: "budget",
+      quoteContext: {
+        ...currentContext,
+        selectedProductId: selectedProduct.id,
+        selectedProductName: selectedProduct.name,
+        selectedProductSku: selectedProduct.sku,
+        selectedProductImageUrl: selectedProduct.imageUrls?.[0] || "",
+        unitPrice: selectedProduct.price,
+        step: "quantity_selection",
+        candidateProductIds: null,
+        pendingProductConfirmation: null,
+        detectedQuantity: null,
+      },
+    };
+  }
+
+  // -------------------------------------------------------------
+  // PASO 1.5: SELECCIÓN DE CANTIDAD (quantity_selection)
+  // -------------------------------------------------------------
+  if (currentContext.step === "quantity_selection") {
+    const selectedProduct = products.find((p) => p.id === currentContext.selectedProductId) || {
+      name: currentContext.selectedProductName || "Producto",
+      price: currentContext.unitPrice || 0,
+    };
+
+    // A. Manejo de respuesta a propuesta de ajuste por stock
+    if (currentContext.pendingStockAdjustment) {
+      const { availableStock, requestedQty } = currentContext.pendingStockAdjustment;
+      if (isAffirmative(normalizedText) || normalizedText === String(availableStock) || normalizedText.includes(String(availableStock))) {
+        const responseText =
+          `Anotado: *${availableStock} ${availableStock === 1 ? "unidad" : "unidades"}*. 📝✨\n\n` +
+          `¿Qué personalización te gustaría que lleve? Podés escribir una frase, nombre o dedicatoria, o enviarnos una foto/logo que quieras estampar o grabar.`;
+
+        return {
+          messages: [new AIMessage(responseText)],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            quantity: availableStock,
+            step: "customization",
+            pendingStockAdjustment: null,
+            customizationSubStep: null,
+            customizationProposed: null,
+          },
+        };
+      } else if (normalizedText.includes("asesor") || normalizedText.includes("humano")) {
+        const reason = `consulta por stock de ${requestedQty} unidades de ${selectedProduct.name} (disponible: ${availableStock})`;
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: state.userPhoneNumber,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
+        return {
+          messages: [
+            new AIMessage(
+              `Te comunicamos con un asesor para ayudarte con las existencias de *${selectedProduct.name}*. Enseguida te escriben. 🧑‍💼`
+            ),
+          ],
+          humanHandoffRequired: true,
+          humanHandoffReason: reason,
+          activeAgent: null,
+          quoteContext: { reset: true },
+        };
+      }
+    }
+
+    // B. Si el cliente pide asesor directamente
+    if (normalizedText.includes("asesor") || normalizedText.includes("humano")) {
+      const reason = `cliente solicitó asesor al definir cantidad para ${selectedProduct.name}`;
+      await notifyAdminHandoffAlert({
+        userPhoneNumber: state.userPhoneNumber,
+        whatsappChatId: state.whatsappChatId,
+        pushname: state.pushname,
+        reason,
+      });
+      return {
+        messages: [
+          new AIMessage("Te comunico con un asesor de nuestro equipo para ayudarte. 🧑‍💼"),
+        ],
+        humanHandoffRequired: true,
+        humanHandoffReason: reason,
+        activeAgent: null,
+        quoteContext: { reset: true },
+      };
+    }
+
+    // C. Parsear cantidad
+    const qty = parseQuantity(rawText);
+    if (!qty || qty <= 0) {
+      return {
+        messages: [
+          new AIMessage("Por favor indicá una cantidad válida entre 1 y 100 unidades (ejemplo: *1*, *2*, *5*)."),
+        ],
+        activeAgent: "budget",
+      };
+    }
+
+    // D. Más de 100 unidades -> derivar a handoff con motivo corporativo
+    if (qty > 100) {
+      const reason = `pedido corporativo de ${qty} unidades de ${selectedProduct.name}`;
+      await notifyAdminHandoffAlert({
+        userPhoneNumber: state.userPhoneNumber,
+        whatsappChatId: state.whatsappChatId,
+        pushname: state.pushname,
+        reason,
+      });
+      return {
+        messages: [
+          new AIMessage(
+            `¡Excelente! Para pedidos corporativos o mayoristas de ${qty} unidades de *${selectedProduct.name}*, un asesor de nuestro equipo te va a atender de forma personalizada para ofrecerte la mejor tarifa y coordinar los detalles. Enseguida te escriben por acá. 🧑‍💼✨`
+          ),
+        ],
+        humanHandoffRequired: true,
+        humanHandoffReason: reason,
+        activeAgent: null,
+        quoteContext: { reset: true },
+      };
+    }
+
+    // E. Supera stock disponible
+    const currentStock = Number(selectedProduct.stock);
+    if (selectedProduct.stock !== undefined && selectedProduct.stock !== null && !isNaN(currentStock) && qty > currentStock) {
+      if (currentStock > 0) {
+        const promptStock =
+          `Actualmente contamos con *${currentStock} ${currentStock === 1 ? "unidad disponible" : "unidades disponibles"}* de *${selectedProduct.name}*. ` +
+          `¿Te gustaría cotizar esa cantidad, o preferís hablar con un asesor? (Respondé *"sí"* para cotizar ${currentStock}, o *"asesor"* para consultar con nuestro equipo).`;
+
+        return {
+          messages: [new AIMessage(promptStock)],
+          activeAgent: "budget",
+          quoteContext: {
+            ...currentContext,
+            pendingStockAdjustment: {
+              requestedQty: qty,
+              availableStock: currentStock,
+            },
+          },
+        };
+      } else {
+        const reason = `sin stock para ${selectedProduct.name}`;
+        await notifyAdminHandoffAlert({
+          userPhoneNumber: state.userPhoneNumber,
+          whatsappChatId: state.whatsappChatId,
+          pushname: state.pushname,
+          reason,
+        });
+        return {
+          messages: [
+            new AIMessage(
+              `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. Te comunicamos con un asesor para consultar tiempos de reposición o alternativas similares. 🧑‍💼`
+            ),
+          ],
+          humanHandoffRequired: true,
+          humanHandoffReason: reason,
+          activeAgent: null,
+          quoteContext: { reset: true },
+        };
+      }
+    }
+
+    // F. Cantidad válida: avanzar a personalización
+    const responseText =
+      `Anotado: *${qty} ${qty === 1 ? "unidad" : "unidades"}*. 📝✨\n\n` +
       `¿Qué personalización te gustaría que lleve? Podés escribir una frase, nombre o dedicatoria, o enviarnos una foto/logo que quieras estampar o grabar.`;
 
     return {
       messages: [new AIMessage(responseText)],
       activeAgent: "budget",
       quoteContext: {
-        selectedProductId: selectedProduct.id,
-        selectedProductName: selectedProduct.name,
-        selectedProductSku: selectedProduct.sku,
-        selectedProductImageUrl: selectedProduct.imageUrls?.[0] || "",
-        unitPrice: selectedProduct.price,
-        quantity: detectedQty,
+        ...currentContext,
+        quantity: qty,
         step: "customization",
+        pendingStockAdjustment: null,
         customizationSubStep: null,
         customizationProposed: null,
-        candidateProductIds: null,
-        pendingProductConfirmation: null,
       },
     };
   }
@@ -574,6 +996,8 @@ export const budgetAgentNode = async (state) => {
           quoteContext: {
             ...currentContext,
             customizationDetails: finalCustomization,
+            customizationImageUrl: currentContext.customizationImageUrl || null,
+            customizationImagePending: Boolean(currentContext.customizationImagePending),
             customizationProposed: null,
             customizationSubStep: null,
             step: "packaging_selection",
@@ -582,8 +1006,24 @@ export const budgetAgentNode = async (state) => {
       } else {
         // El cliente corrigió o envió un texto diferente
         let newProposed = "";
+        let newImgUrl = currentContext.customizationImageUrl || null;
+        let newImgPending = Boolean(currentContext.customizationImagePending);
+
         if (state.incomingMedia || lastMessage?.hasMedia) {
-          newProposed = "Diseño según imagen adjunta";
+          if (state.incomingMedia === true || state.incomingMedia?.url) {
+            newProposed = "Diseño según imagen adjunta";
+            newImgUrl = typeof state.incomingMedia === "object" ? state.incomingMedia.url : "https://res.cloudinary.com/test/sample.jpg";
+            newImgPending = false;
+          } else {
+            newProposed = "Diseño según archivo adjunto en chat";
+            newImgPending = true;
+            const clientDisplay = state.userPhoneNumber
+              ? `+${state.userPhoneNumber}`
+              : `${state.pushname || "Cliente"} (${state.whatsappChatId})`;
+            await notifyAdminViaWhatsApp(
+              `⚠️ *Alerta:* El cliente ${clientDisplay} envió un archivo para personalizar (${state.incomingMedia?.mimetype || "imagen/documento"}) que requiere ser tomado directamente del chat de WhatsApp.`
+            );
+          }
         } else {
           newProposed = await extractEngravingTextWithLLM(rawText);
         }
@@ -599,6 +1039,8 @@ export const budgetAgentNode = async (state) => {
           quoteContext: {
             ...currentContext,
             customizationProposed: newProposed,
+            customizationImageUrl: newImgUrl,
+            customizationImagePending: newImgPending,
             customizationSubStep: "confirm",
           },
         };
@@ -607,8 +1049,24 @@ export const budgetAgentNode = async (state) => {
 
     // Sub-paso A: Primera recepción de texto o imagen de personalización
     let proposedText = "";
+    let customizationImageUrl = null;
+    let customizationImagePending = false;
+
     if (state.incomingMedia || lastMessage?.hasMedia) {
-      proposedText = "Diseño según imagen adjunta";
+      if (state.incomingMedia === true || state.incomingMedia?.url) {
+        proposedText = "Diseño según imagen adjunta";
+        customizationImageUrl = typeof state.incomingMedia === "object" ? state.incomingMedia.url : "https://res.cloudinary.com/test/sample.jpg";
+        customizationImagePending = false;
+      } else {
+        proposedText = "Diseño según archivo adjunto en chat";
+        customizationImagePending = true;
+        const clientDisplay = state.userPhoneNumber
+          ? `+${state.userPhoneNumber}`
+          : `${state.pushname || "Cliente"} (${state.whatsappChatId})`;
+        await notifyAdminViaWhatsApp(
+          `⚠️ *Alerta:* El cliente ${clientDisplay} envió un archivo para personalizar (${state.incomingMedia?.mimetype || "imagen/documento"}) que requiere ser tomado directamente del chat de WhatsApp.`
+        );
+      }
     } else {
       proposedText = await extractEngravingTextWithLLM(rawText);
     }
@@ -624,6 +1082,8 @@ export const budgetAgentNode = async (state) => {
       quoteContext: {
         ...currentContext,
         customizationProposed: proposedText,
+        customizationImageUrl,
+        customizationImagePending,
         customizationSubStep: "confirm",
       },
     };
@@ -965,6 +1425,9 @@ export const budgetAgentNode = async (state) => {
             quantity: currentContext.quantity || 1,
             price: currentContext.unitPrice || 0,
             imageUrl: "",
+            customization: currentContext.customizationDetails || "",
+            customizationImageUrl: currentContext.customizationImageUrl || "",
+            customizationImagePending: Boolean(currentContext.customizationImagePending),
             selectedPackaging: currentContext.selectedPackaging
               ? {
                   name: currentContext.selectedPackaging.name,
@@ -1001,7 +1464,8 @@ export const budgetAgentNode = async (state) => {
           await sendOrderStatus(
             state.whatsappChatId || state.userPhoneNumber,
             "pending",
-            orderResult.total || orderPayload.total
+            orderResult.total || orderPayload.total,
+            orderResult.shippingMethod
           );
 
           const successMessage =
