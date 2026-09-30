@@ -219,4 +219,69 @@ export const AgentStateAnnotation = Annotation.Root({
     reducer: (_, next) => next,
     default: () => null,
   }),
+
+  /**
+   * Contador de intentos seguidos sin entender al cliente (para escalada de 4 fallos)
+   */
+  consecutiveMisunderstandings: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : 0),
+    default: () => 0,
+  }),
+
+  /**
+   * Bandera que indica si el bot ofreció el menú de opciones (1. Catálogo, 2. Cotizar, 3. Estado de pedido)
+   * y está esperando la selección del cliente. El router interpreta '1', '2', '3' solo cuando está activa.
+   */
+  awaitingMenuChoice: Annotation({
+    reducer: (_, next) => Boolean(next),
+    default: () => false,
+  }),
+
+  /**
+   * Marca de tiempo de inicio de la sesión actual (milisegundos)
+   */
+  sessionStartTime: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : null),
+    default: () => null,
+  }),
+
+  /**
+   * Timestamp de corte de sesión: los mensajes anteriores a este timestamp no se envían al LLM
+   */
+  sessionCutoffTime: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : 0),
+    default: () => 0,
+  }),
+
+  /**
+   * Índice de corte de mensajes de la sesión actual: mensajes anteriores a este índice no se envían al LLM
+   */
+  sessionCutoffMessageCount: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : 0),
+    default: () => 0,
+  }),
+
+  /**
+   * Bandera temporal que indica si ya se despachó la alerta al administrador en el turno actual
+   */
+  adminAlertSent: Annotation({
+    reducer: (_, next) => Boolean(next),
+    default: () => false,
+  }),
+
+  /**
+   * Marca temporal ISO de la última reactivación por un administrador
+   */
+  resumedAt: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : null),
+    default: () => null,
+  }),
+
+  /**
+   * Marca temporal del último mensaje procesado en el hilo
+   */
+  lastActivityTimestamp: Annotation({
+    reducer: (_, next) => (next !== undefined ? next : null),
+    default: () => null,
+  }),
 });

@@ -115,7 +115,10 @@ export const resumeBot = async (req, res) => {
         throw { statusCode: 400, message: "El hilo de conversación no se encuentra en atención humana." };
       }
 
-      // 6. Actualizar estado conversacional con asNode "human_handoff_node"
+      // 6. Actualizar estado conversacional con asNode "human_handoff_node" iniciando sesión limpia
+      const resumeTimestampIso = new Date().toISOString();
+      const resumeTimestampMs = Date.now();
+
       await compiledGraph.updateState(
         config,
         {
@@ -123,6 +126,12 @@ export const resumeBot = async (req, res) => {
           humanHandoffReason: null,
           activeAgent: null,
           intent: null,
+          quoteContext: { reset: true },
+          consecutiveMisunderstandings: 0,
+          resumedAt: resumeTimestampIso,
+          sessionStartTime: resumeTimestampMs,
+          sessionCutoffTime: resumeTimestampMs,
+          sessionCutoffMessageCount: (currentState.values?.messages || []).length,
         },
         "human_handoff_node"
       );

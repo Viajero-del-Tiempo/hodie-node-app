@@ -383,6 +383,16 @@ export const processAndSendOrder = async (orderData) => {
   } catch (err) {
     console.warn(`⚠️ Error generando o enviando PDF para el pedido ${orderNumber}:`, err.message);
     pdfDelivered = false;
+  } finally {
+    if (pdfPath) {
+      try {
+        if (fs.existsSync(pdfPath)) {
+          fs.unlinkSync(pdfPath);
+        }
+      } catch (unlinkErr) {
+        console.warn("⚠️ Error eliminando PDF temporal en finally:", unlinkErr.message);
+      }
+    }
   }
 
   // Actualizar pdfDelivered en el documento de Firestore
@@ -446,19 +456,6 @@ export const processAndSendOrder = async (orderData) => {
     } catch (adminAlertErr) {
       console.warn("⚠️ No se pudo alertar al admin sobre PDF pendiente:", adminAlertErr.message);
     }
-  }
-
-  // 9. Programar limpieza del archivo temporal (30 segundos)
-  if (pdfPath) {
-    setTimeout(() => {
-      try {
-        if (fs.existsSync(pdfPath)) {
-          fs.unlinkSync(pdfPath);
-        }
-      } catch (err) {
-        console.error("Error eliminando archivo temporal:", err);
-      }
-    }, 30000);
   }
 
   return {

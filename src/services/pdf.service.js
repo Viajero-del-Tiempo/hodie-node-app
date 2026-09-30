@@ -1,17 +1,41 @@
 import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { loadImageFromUrl } from "../services/image.service.js";
 import { toDate } from "../utils/date.util.js";
 import { BANK_CONFIG } from "../config/bank.config.js";
 
+/**
+ * Limpia PDFs huérfanos de pedidos que hayan quedado en el directorio temporal de runs anteriores.
+ */
+export const cleanupStaleOrderPDFs = () => {
+  try {
+    const tmpDir = os.tmpdir();
+    const files = fs.readdirSync(tmpDir);
+    const staleFiles = files.filter(
+      (file) => file.startsWith("pedido-") && file.endsWith(".pdf")
+    );
+    staleFiles.forEach((file) => {
+      try {
+        fs.unlinkSync(path.join(tmpDir, file));
+      } catch (err) {
+        // Ignorar fallos de eliminación individual
+      }
+    });
+    if (staleFiles.length > 0) {
+      console.log(`🧹 Limpieza inicial: se eliminaron ${staleFiles.length} PDFs residuales de pedidos en ${tmpDir}.`);
+    }
+  } catch (err) {
+    console.warn("⚠️ No se pudieron limpiar PDFs residuales en inicio:", err.message);
+  }
+};
+
 export const generateOrderPDF = async (order) => {
   return new Promise(async (resolve, reject) => {
     try {
-      const fileName = `pedido-${order.orderNumber}.pdf`;
-      const filePath = path.join(process.cwd(), "temp", fileName);
-
-      if (!fs.existsSync("temp")) fs.mkdirSync("temp", { recursive: true });
+      const fileName = `pedido-${order.orderNumber}-${Date.now()}.pdf`;
+      const filePath = path.join(os.tmpdir(), fileName);
 
       const fontRegular = path.join(
         process.cwd(),

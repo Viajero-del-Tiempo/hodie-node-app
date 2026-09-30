@@ -1,8 +1,8 @@
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { db } from "../../config/firebase.js";
 import { toDate } from "../../utils/date.util.js";
-import { notifyAdminHandoffAlert } from "./handoff.node.js";
+import { createGeminiModel } from "../../config/llm.js";
+import { handleMisunderstanding } from "../escalation.service.js";
 
 /**
  * Base de conocimiento estática de HoDie Tienda de Regalos
@@ -11,7 +11,14 @@ const HODIE_KNOWLEDGE_BASE = `
 INFORMACIÓN DE HODIE TIENDA DE REGALOS:
 - Ubicación física de la tienda: Barrio Centro, Minga Guazú, Alto Paraná, Paraguay.
 - Sitio web oficial: https://hodie.com.py
-- Tipos de productos: Regalos personalizados (tazas personalizadas, termos, indumentaria, cajas y empaques de regalo premium).
+- Catálogo oficial de productos personalizados:
+  * Termos de acero inoxidable de 650 ml personalizados (grabado láser / color).
+  * Vasos térmicos con abridor de botellas incorporado personalizados.
+  * Billeteras de cuero genuino y cuero sintético (modelos masculinos y femeninos) grabadas/personalizadas.
+  * Kits completos para mate (en colores verde, negro, blanco, rosa, azul, lila).
+  * Neceseres de cuero sintético y joyeros organizadores cuadrados personalizados.
+  * Tazas personalizadas y empaques especiales de regalo (cajas premium, bolsas decorativas, envoltorios).
+- Regla de productos: Si el cliente consulta si disponemos de estos productos o pregunta por modelos y precios, responde amablemente confirmando que sí los tenemos en nuestro catálogo y que con gusto le ayudamos a cotizar. NO derives a asesor humano por consultas sobre productos del catálogo.
 - Políticas y Costos de Envío:
   * Cliente en Minga Guazú (donde está la tienda): Envío local gratuito (costo 0 Gs.).
   * Resto del país: Se envían a cualquier localidad del país mediante empresas transportadoras. El cliente paga el flete con la modalidad "Pago contra entrega", abonando el importe del envío directamente a la transportadora al recibir o retirar su paquete.
@@ -322,7 +329,26 @@ export const supportAgentNode = async (state) => {
   }
 
   // -------------------------------------------------------------
-  // CASO 4: DETECCIÓN DE RECLAMOS DIRECTOS (ESCALACIÓN A HANDOFF)
+  // CASO 4: MANEJO DE ENLACES EXTERNOS Y MULTIMEDIA (Punto 6)
+  // -------------------------------------------------------------
+  const urlPattern = /(?:https?:\/\/|www\.)[^\s]+|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|youtu\.be/i;
+  const isVideo = state.incomingMedia?.mimetype?.startsWith("video/") || state.incomingMedia?.mimetype?.startsWith("audio/");
+
+  if (urlPattern.test(lastMessage) || isVideo) {
+    const linkMsg =
+      "¡Hola! Por motivos de seguridad y limitaciones técnicas no puedo abrir enlaces externos ni ver videos en línea. 🔒📱\n\n" +
+      "¿Qué producto o modelo viste en el enlace que te interesó? (Por ejemplo: vaso térmico, termo, billetera, kit de mate, taza, etc.). ¡Contame y con gusto te ayudo a cotizarlo! ✨";
+
+    return {
+      messages: [new AIMessage(linkMsg)],
+      humanHandoffRequired: false,
+      consecutiveMisunderstandings: 0,
+      activeAgent: null,
+    };
+  }
+
+  // -------------------------------------------------------------
+  // CASO 5: DETECCIÓN DE RECLAMOS DIRECTOS (ESCALACIÓN A HANDOFF)
   // -------------------------------------------------------------
   const complaintWords = [
     "reclamo",
@@ -335,6 +361,7 @@ export const supportAgentNode = async (state) => {
     "problema",
     "equivocado",
     "devolucion",
+    "devolución",
     "queja",
     "tardaron mucho",
   ];
@@ -342,12 +369,6 @@ export const supportAgentNode = async (state) => {
   const hasComplaint = complaintWords.some((w) => lastText.includes(w));
   if (hasComplaint) {
     const reason = `Reclamo del cliente: "${lastText.slice(0, 100)}"`;
-    await notifyAdminHandoffAlert({
-      userPhoneNumber: userPhone,
-      whatsappChatId: state.whatsappChatId,
-      pushname: state.pushname,
-      reason,
-    });
 
     const complaintResponse =
       `Lamentamos mucho los inconvenientes con tu pedido. 😔\n\n` +
@@ -359,6 +380,8 @@ export const supportAgentNode = async (state) => {
       humanHandoffReason: reason,
       intent: "human_handoff",
       activeAgent: null,
+      consecutiveMisunderstandings: 0,
+      awaitingMenuChoice: false,
       adminNotification: {
         type: "human_handoff",
         summary: reason,
@@ -367,63 +390,89 @@ export const supportAgentNode = async (state) => {
   }
 
   // -------------------------------------------------------------
-  // CASO 5: PREGUNTAS FRECUENTES (FAQ) MEDIANTE LLM O RESPUESTAS DETERMINÍSTICAS
+  // CASO 6: PREGUNTAS FRECUENTES (FAQ) MEDIANTE LLM CON DECISIÓN ESTRUCTURADA Y ESCALADA DE 4 FALLOS
   // -------------------------------------------------------------
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-
-  if (apiKey) {
+  if (process.env.GEMINI_API_KEY) {
     try {
-      const modelName = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-      const model = new ChatGoogleGenerativeAI({
-        model: modelName,
-        apiKey,
-        temperature: 0.2,
-      });
+      const model = createGeminiModel({ temperature: 0.2 });
 
       const systemPrompt = new SystemMessage(
-        `Eres el asistente oficial de Atención al Cliente de HoDie Tienda de Regalos.
+        `Eres el asistente oficial de Atención al Cliente de HoDie Tienda de Regalos (Paraguay).
 Tu objetivo es responder de manera muy amable, concisa y profesional en español de Paraguay a las consultas de los clientes.
 
 ${HODIE_KNOWLEDGE_BASE}
 
-DIRECTRICES ESTRICTAS:
-1. Responde de forma breve, precisa y directa basándote ÚNICAMENTE en la base de conocimiento oficial de HoDie provista arriba.
-2. Si el cliente pregunta por cotizaciones o precios de productos específicos, indícale amablemente que puede decirte qué producto busca y lo ayudamos a cotizar.
-3. Si el cliente manifiesta una queja, insatisfacción o reclamo de cualquier tipo, responde diciendo amablemente que lo transferirás con un asesor humano y agrega al final exacto de tu respuesta la etiqueta especial: [HANDOFF_REQUIRED].
-4. REGLA ANTI-ALUCINACIÓN (ESTRICTA): Si la información solicitada NO está explícitamente en la base de conocimiento de arriba (por ejemplo, si preguntan si tenemos sucursal en Asunción u otra ciudad, si aceptamos tarjetas de crédito o cuotas, o políticas no descritas), NUNCA inventes, asumas ni adivines una respuesta. En su lugar, responde honestamente explicando que no tienes esa información y que derivas la consulta a un asesor humano de nuestro equipo para que le asista con certeza, agregando al final exacto de tu respuesta la etiqueta: [HANDOFF_REQUIRED].
-5. Utiliza emojis con moderación para mantener un tono cálido y cercano.`
+POLÍTICA DE DERIVACIÓN ESTRICTA (DECISIÓN ESTRUCTURADA):
+1. "derivar" debe ser true ÚNICAMENTE si:
+   - El cliente solicita explícitamente hablar con una persona, operador o asesor humano.
+   - El cliente manifiesta un reclamo, queja o problema con un pedido.
+2. Si el cliente pregunta por cotizaciones, precios, catálogo o disponibilidad de productos (termos, vasos, billeteras, kits de mate, etc.), indícale amablemente que sí los tenemos en nuestro catálogo y que con gusto le ayudamos a cotizar. En este caso: "understood": true, "derivar": false.
+3. Si la consulta NO se puede responder con la base de conocimiento de HoDie o está fuera de nuestro rubro (por ejemplo: reparación de celulares, repuestos de autos, comida, etc.):
+   "understood": false, "derivar": false. ¡NUNCA pongas derivar: true por una pregunta fuera de base! La derivación se maneja por escalada progresiva de intentos.
+4. NUNCA prometas en el texto una derivación a asesor si "derivar" es false.
+
+Responde ÚNICAMENTE en formato JSON válido con la siguiente estructura:
+{
+  "response": "respuesta amigable al cliente",
+  "understood": true,
+  "derivar": false,
+  "motivo": null
+}`
       );
 
-      const conversationHistory = state.messages.slice(-4);
-      const response = await model.invoke([systemPrompt, ...conversationHistory]);
-      let content = typeof response.content === "string" ? response.content : JSON.stringify(response.content);
+      // Foco en el mensaje actual y sesión activa:
+      // Excluir mensajes anteriores al corte de reactivación/sesión
+      const cutoffIndex = state.sessionCutoffMessageCount || 0;
+      const sessionMessages = state.messages.slice(cutoffIndex);
+      const contextHistory = sessionMessages.slice(-8);
 
-      if (content.includes("[HANDOFF_REQUIRED]")) {
-        const cleanContent = content.replace("[HANDOFF_REQUIRED]", "").trim();
-        const reason = "Consulta fuera de base de conocimiento o reclamo detectado en FAQ";
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: userPhone,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
-        return {
-          messages: [new AIMessage(cleanContent)],
-          humanHandoffRequired: true,
-          humanHandoffReason: reason,
-          activeAgent: null,
-          adminNotification: {
-            type: "human_handoff",
-            summary: `Derivación por consulta fuera de base de conocimiento para ${userPhone || state.whatsappChatId}: "${lastText.slice(0, 100)}"`,
-            details: { phone: userPhone, question: lastText },
-          },
+      const response = await model.invoke([systemPrompt, ...contextHistory]);
+      let content = typeof response.content === "string" ? response.content : JSON.stringify(response.content);
+      content = content.replace(/```json/gi, "").replace(/```/g, "").trim();
+
+      let parsed = null;
+      try {
+        parsed = JSON.parse(content);
+      } catch (parseErr) {
+        console.warn("⚠️ Error parseando JSON de supportAgent, usando heurística:", parseErr.message);
+        parsed = {
+          response: content,
+          understood: true,
+          derivar: false,
+          motivo: null,
         };
       }
 
-      return {
-        messages: [new AIMessage(content)],
-        activeAgent: null,
-      };
+      // DECISIÓN ESTRUCTURADA:
+      if (parsed.derivar) {
+        const reason = parsed.motivo || "Solicitud de atención humana o reclamo detectado en FAQ";
+        return {
+          messages: [new AIMessage(parsed.response)],
+          humanHandoffRequired: true,
+          humanHandoffReason: reason,
+          activeAgent: null,
+          consecutiveMisunderstandings: 0,
+          awaitingMenuChoice: false,
+        };
+      }
+
+      // Si la consulta fue comprendida con éxito:
+      if (parsed.understood) {
+        return {
+          messages: [new AIMessage(parsed.response)],
+          humanHandoffRequired: false,
+          activeAgent: null,
+          consecutiveMisunderstandings: 0, // Reiniciar contador al entender
+          awaitingMenuChoice: false,
+        };
+      }
+
+      // ESCALADA UNIFICADA DE 4 FALLOS
+      return handleMisunderstanding(state, {
+        isBudget: false,
+        promptStep: parsed.response,
+        reason: "4 intentos consecutivos sin comprender la consulta del cliente",
+      });
     } catch (llmErr) {
       console.warn("⚠️ Fallo en LLM para FAQ, usando respuestas estándar:", llmErr.message);
     }
@@ -453,5 +502,7 @@ DIRECTRICES ESTRICTAS:
   return {
     messages: [new AIMessage(fallbackText)],
     activeAgent: null,
+    consecutiveMisunderstandings: 0,
+    awaitingMenuChoice: false,
   };
 };

@@ -1,0 +1,801 @@
+
+> hodie-node-app@1.0.0 test:unit
+> ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_budget_agent_v2.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_handoff_alert_transition.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_lid_resolution.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_order_pdf_decoupling.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_order_security.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_whatsapp_chat_id.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_multi_agent_graph.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_bot_resume_and_filters.js
+
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+=================================================
+🧪 BATERÍA DE PRUEBAS - BUDGET AGENT v2
+=================================================
+
+--- TEST (A): Manejo de catálogo vacío o falla de Firestore ---
+✅ [PASS] Test A.1: Activa humanHandoffRequired: true ante catálogo vacío
+✅ [PASS] Test A.2: activeAgent queda en null (no retiene el control)
+✅ [PASS] Test A.3: Motivo de handoff refleja indisponibilidad de catálogo en Firestore
+✅ [PASS] Test A.4: Mensaje al cliente explica amablemente la situación y deriva a un asesor
+✅ [PASS] Test A.5: NUNCA ofrece catálogo simulado ni datos hardcodeados ficticios
+
+--- TEST (B): Generación atómica de orderNumber sin colisiones ---
+✅ [PASS] Test B.1: 20 llamadas concurrentes generan 20 números de orden estrictamente únicos
+✅ [PASS] Test B.2: La numeración es correlativa y secuencial (10026, 10027, ..., 10045)
+
+--- TEST (C): Extracción de cantidad agnóstica de productos ---
+✅ [PASS] Test C: Quiero 3 mates -> Extrajo: 3 (Esperado: 3)
+✅ [PASS] Test C: Necesito 5 llaveros -> Extrajo: 5 (Esperado: 5)
+✅ [PASS] Test C: Serían 4 agendas -> Extrajo: 4 (Esperado: 4)
+✅ [PASS] Test C: x 6 multiplicador -> Extrajo: 6 (Esperado: 6)
+✅ [PASS] Test C: cantidad: 8 explícito -> Extrajo: 8 (Esperado: 8)
+✅ [PASS] Test C: 12 unidades al inicio -> Extrajo: 12 (Esperado: 12)
+✅ [PASS] Test C: 2 piezas -> Extrajo: 2 (Esperado: 2)
+✅ [PASS] Test C: Mención sin número -> null (default 1) -> Extrajo: null (Esperado: null)
+✅ [PASS] Test C: Número de opción aislado '2' -> no contamina cantidad -> Extrajo: null (Esperado: null)
+✅ [PASS] Test C: Sin cantidad -> null -> Extrajo: null (Esperado: null)
+
+--- TEST (D): Flujo secuencial de datos de envío (shipping_info) ---
+
+* Turno 1: packaging_selection -> transición a shipping_info (sub-paso name)
+✅ [PASS] Test D.1: Transiciona a step 'shipping_info' con sub-paso 'name'
+✅ [PASS] Test D.2: Pide explícitamente el nombre y apellido del destinatario
+
+* Turno 2: Validación de nombre corto en sub-paso name
+✅ [PASS] Test D.3: Rechaza input menor a 2 caracteres y vuelve a solicitar nombre
+
+* Turno 3: Envía nombre válido -> transición a sub-paso city
+✅ [PASS] Test D.4: Avanza al sub-paso 'city'
+✅ [PASS] Test D.5: Almacena recipientName correctamente sin mezclarlo con otros campos
+✅ [PASS] Test D.6: Pregunta explícitamente por ciudad y departamento
+
+* Turno 4: Envía ciudad -> transición a sub-paso street
+✅ [PASS] Test D.7: Avanza al sub-paso 'street'
+✅ [PASS] Test D.8: Almacena ciudad y departamento estructurados
+✅ [PASS] Test D.9: Pregunta explícitamente por calle, número y referencias
+
+* Turno 5: Envía dirección -> transición a confirmation con resumen
+✅ [PASS] Test D.10: Finaliza shipping_info y transiciona a step 'confirmation'
+✅ [PASS] Test D.11: Almacena la dirección exacta completa
+✅ [PASS] Test D.12: Mensaje de confirmación muestra todos los campos de envío organizados
+
+* Turno 6: Cliente confirma -> Verifica emisión con orderNumber secuencial y reset
+🛍️ Cliente 595981555444 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+⚠️ Error leyendo orden existente ord-1790809932559-hodie020051: db.collection(...).doc(...).get is not a function
+💾 Pedido hodie020051 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981555444' no incluye '@'. Reconstruyendo '595981555444@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981555444' no incluye '@'. Reconstruyendo '595981555444@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Test D.13: Pedido generado con número secuencial atómico (#20051)
+✅ [PASS] Test D.14: activeAgent se libera (null) al finalizar la orden
+✅ [PASS] Test D.15: quoteContext dispara { reset: true } para limpiar el estado
+
+=================================================
+📊 RESULTADO FINAL: 32 PASADAS, 0 FALLIDAS
+=================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+◇ injected env (0) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+==================================================================
+🧪 TEST DE TRANSICIÓN Y GARANTÍA DE ALERTA DE HANDOFF (REQUISITO 9)
+==================================================================
+
+--- PASO 1: Primer mensaje solicitando persona (no derivado -> derivado) ---
+📩 Mensaje entrante de +595981305979: "Hola, quiero hablar con una persona por favor"
+🧭 [595981305979@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+🚨 Activando HumanHandoff para +595981305979. Motivo: Reclamo o solicitud explícita de atención humana
+📢 [TEST MOCK] Alerta de WhatsApp enviada al admin (595983957102@c.us):
+🚨 *Derivación a Asesor Humano*
+
+• *Cliente:* +595981305979
+• *ChatId:* 59598130...
+
+📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
+📋 Hilo 595981305979@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981305979@c.us
+✅ [PASS] El hilo se encuentra en handoff activo tras el primer mensaje
+✅ [PASS] Se envió exactamente 1 alerta al admin en la primera derivación
+
+--- PASO 2: Mensaje adicional durante handoff activo (debe mantener silencio) ---
+📩 Mensaje entrante de +595981305979: "¿Hay alguien ahí?"
+🔒 Handoff humano activo para 595981305979. Manteniendo intervención.
+🧭 [595981305979@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+📋 Hilo 595981305979@c.us registrado en índice handoff_threads.
+🔇 Sin respuesta automática para 595981305979@c.us (handoff humano activo o nodo terminal mudo).
+✅ [PASS] El bot mantiene silencio durante handoff activo
+✅ [PASS] NO se duplicó la alerta en mensajes posteriores durante el mismo handoff
+
+--- PASO 3: Admin reactiva el bot mediante POST /admin/chats/:threadId/resume-bot ---
+🤖 [BOT RESUMED] Administrador 'Admin Test' (admin-1790809933614) reactivó el bot para el hilo '595981305979@c.us' el 2026-09-30T23:12:18.020Z
+✅ [PASS] El endpoint resume-bot respondió 200 OK
+✅ [PASS] El bot está reactivado (humanHandoffRequired = false)
+✅ [PASS] El contador de fallos se reinició a 0
+✅ [PASS] Se registró marca temporal resumedAt
+
+--- PASO 4: Cliente escribe tras reactivación y vuelve a solicitar derivación ---
+📩 Mensaje entrante de +595981305979: "Buenas noches, pasame con un asesor"
+🧭 [595981305979@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+🚨 Activando HumanHandoff para +595981305979. Motivo: Reclamo o solicitud explícita de atención humana
+📢 [TEST MOCK] Alerta de WhatsApp enviada al admin (595983957102@c.us):
+🚨 *Derivación a Asesor Humano*
+
+• *Cliente:* +595981305979
+• *ChatId:* 59598130...
+
+📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
+📋 Hilo 595981305979@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981305979@c.us
+✅ [PASS] El hilo volvió a quedar en handoff tras la segunda solicitud
+✅ [PASS] Se enviaron exactamente DOS alertas en total (una por cada derivación)
+
+==================================================================
+🎉 TEST DE ALERTA DE HANDOFF EXITOSO: derivar -> reactivar -> derivar generó exactamente 2 alertas!
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+==================================================================
+🧪 INICIANDO TEST SUITE: RESOLUCIÓN @lid Y MANEJO SIN NÚMERO
+==================================================================
+
+Test 1: @c.us resuelve directo a dígitos...
+  ✅ PASS: @c.us extrae dígitos correctamente (595981234567)
+  ✅ PASS: No invocó whatsappClient.getContactLidAndPhone para @c.us
+
+Test 2: @lid resuelve vía getContactLidAndPhone y almacena en caché en Firestore...
+  ✅ PASS: Primera llamada resolvió teléfono esperado (595985930912)
+  ✅ PASS: getContactLidAndPhone fue invocado 1 vez
+  ✅ PASS: Documento persistido en colección lid_phone_map en Firestore
+  ✅ PASS: phoneNumber guardado correctamente (595985930912)
+  ✅ PASS: Segunda llamada resolvió el mismo teléfono (595985930912)
+  ✅ PASS: La segunda llamada NO invocó getContactLidAndPhone (utilizó caché de Firestore)
+
+Test 3: @lid irresoluble devuelve "" y no persiste en caché...
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_unresolvable_445566@lid): no se obtuvo pn válido terminado en @c.us.
+  ✅ PASS: @lid irresoluble retornó cadena vacía ""
+  ✅ PASS: NUNCA devolvió el LID como si fuera teléfono
+  ✅ PASS: No se guardó nada en Firestore para LID irresoluble
+⚠️ Error llamando a getContactLidAndPhone para test_lid_unresolvable_445566@lid: Puppeteer connection lost
+  ✅ PASS: En caso de excepción en getContactLidAndPhone retorna ""
+
+Test 4: BudgetAgent validación y solicitud de teléfono paraguayo...
+  ✅ PASS: +595 981 234-567 normalizado a 595981234567
+  ✅ PASS: 0981-234567 normalizado a 595981234567
+  ✅ PASS: (0981) 234 567 normalizado a 595981234567
+  ✅ PASS: 981234567 normalizado a 595981234567
+  ✅ PASS: 0985 930 912 normalizado a 595985930912
+  ✅ PASS: LID de 15 dígitos rechazado como teléfono (null)
+  ✅ PASS: Número corto inválido rechazado (null)
+  ✅ PASS: Texto alfanumérico rechazado (null)
+  ✅ PASS: Tras ingresar calle sin userPhoneNumber, pasa a shippingStep: 'phone'
+  ✅ PASS: Mensaje solicita explícitamente teléfono paraguayo al cliente
+  ✅ PASS: Intento 1 fallido incrementa consecutiveMisunderstandings a 1
+  ✅ PASS: Intento 1 fallido aún no deriva a handoff
+  ✅ PASS: Intento 2 fallido incrementa consecutiveMisunderstandings a 2
+  ✅ PASS: Intento 2 fallido aún no deriva a handoff
+  ✅ PASS: Intento 3 fallido incrementa consecutiveMisunderstandings a 3
+  ✅ PASS: Intento 3 fallido aún no deriva a handoff (espera 4 intentos)
+  ✅ PASS: Intento 4 fallido establece consecutiveMisunderstandings a 4
+  ✅ PASS: Intento 4 fallido activa humanHandoffRequired: true
+  ✅ PASS: Intento 4 desactiva el activeAgent a null
+  ✅ PASS: Intento 4 preserva el quoteContext intacto para el asesor humano
+  ✅ PASS: budgetAgentNode NO envía alertas directamente (regla: solo whatsapp.js despacha alertas)
+  ✅ PASS: userPhoneNumber normalizado y guardado en estado (595985930912)
+  ✅ PASS: Ingreso válido de teléfono resetea consecutiveMisunderstandings a 0
+  ✅ PASS: Avanza al paso 'confirmation' tras validar el teléfono
+  ✅ PASS: Confirmación muestra teléfono con formato oficial (+595985930912)
+  ✅ PASS: Confirmación NO contiene el LID en ninguna parte
+
+Test 5: Alerta admin sin número formateada correctamente (sin LID con '+')...
+🚨 Activando HumanHandoff para Laura Gómez (150697601421342@lid) [número no disponible]. Motivo: Consulta compleja de personalización
+📢 Alerta de handoff enviada al WhatsApp del admin (595981000000)
+  ✅ PASS: Alerta de handoff fue enviada al admin
+  ✅ PASS: Alerta muestra nombre del contacto, whatsappChatId y 'número no disponible'
+  ✅ PASS: Alerta NUNCA muestra el LID con '+' adelante
+  ✅ PASS: Alerta no contiene fallback anticuado '+cliente'
+
+Test adicional: SupportAgent consulta de pedidos sin número...
+  ✅ PASS: SupportAgent solicita número de pedido o teléfono de compra en vez de buscar con ""
+
+Test 6: E2E con @lid irresoluble, captura de teléfono y persistencia de pedido...
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+  ✅ PASS: E2E: Tras calle, solicita número de teléfono porque @lid no tenía número resuelto
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+  ✅ PASS: E2E: BudgetAgent normalizó y guardó userPhoneNumber: '595981234567'
+  ✅ PASS: E2E: quoteContext avanzó a 'confirmation'
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1790809942263@lid): no se obtuvo pn válido terminado en @c.us.
+🛍️ Cliente 595981234567 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+💾 Pedido hodie000298 guardado en Firestore (status: pending, shippingMethod: local_gratis)
+  ✅ PASS: E2E: activeAgent queda en null tras confirmación de pedido
+  ✅ PASS: E2E: Pedido encontrado en Firestore para el cliente @lid
+  ✅ PASS: E2E: Pedido en Firestore guardó userPhoneNumber = "595981234567" (obtenido: "595981234567")
+  ✅ PASS: E2E: Pedido en Firestore guardó whatsappChatId = "test_lid_e2e_1790809942263@lid"
+  ✅ PASS: E2E: Pedido guardado en estado 'pending'
+
+==================================================================
+📊 RESULTADO DE TESTS: 51 aprobados, 0 fallidos.
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+==================================================================
+🧪 BATERÍA DE PRUEBAS: DESACOPLAMIENTO PEDIDO/PDF, PERSONALIZACIÓN Y FILTROS
+==================================================================
+
+🌐 Servidor de pruebas iniciado en http://localhost:39965
+
+--- PRUEBA 1: Checkout Web con fallo en sendOrderPDF ---
+💾 Pedido hodie000299 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
+    at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
+    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:381:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async sendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:74:20)
+⚠️ PDF no entregado para el pedido #hodie000299. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+📢 Alerta enviada al WhatsApp del admin (595983957102)
+✅ [PASS] Checkout web responde HTTP 200 a pesar del fallo en PDF
+✅ [PASS] Respuesta del checkout tiene status 'success'
+✅ [PASS] Respuesta del checkout indica pdfDelivered = false
+✅ [PASS] Respuesta incluye orderNumber generado
+✅ [PASS] El pedido existe persistido en Firestore
+✅ [PASS] En Firestore pdfDelivered es false
+✅ [PASS] En Firestore el departamento no tiene fallback de 'Alto Paraná'
+✅ [PASS] Método de envío asignado correctamente para Presidente Franco
+✅ [PASS] Se despachó el mensaje de texto de contingencia al cliente
+✅ [PASS] Se despachó la alerta al administrador informando el PDF pendiente
+
+--- PRUEBA 2: BudgetAgent con fallo en sendOrderPDF ---
+🛍️ Cliente 595981532207 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+💾 Pedido hodie000300 guardado en Firestore (status: pending, shippingMethod: local_gratis)
+Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
+    at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
+    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:381:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async budgetAgentNode (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/agents/nodes/budget.node.js:1522:29)
+    at async runOrderPdfDecouplingTests (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:209:22)
+⚠️ PDF no entregado para el pedido #hodie000300. Activando flujo de contingencia.
+📢 Alerta enviada al WhatsApp del admin (595983957102)
+✅ [PASS] BudgetAgent NUNCA deriva a handoff si el pedido se creó
+✅ [PASS] activeAgent se desactiva tras cerrar la venta
+✅ [PASS] quoteContext solicita reset
+✅ [PASS] Mensaje de respuesta incluye el número de pedido generado
+✅ [PASS] Mensaje informa éxito y confirmación del pedido
+✅ [PASS] Mensaje menciona que el PDF está siendo preparado
+✅ [PASS] Pedido #hodie000300 encontrado en Firestore
+✅ [PASS] Pedido generado por BudgetAgent tiene pdfDelivered: false
+✅ [PASS] Departamento guardado como string vacío (sin default)
+
+--- PRUEBA 3: Personalización LLM y Bypass de Imagen ---
+✅ [PASS] Extracción de 'analia' preserva minúsculas: 'analia'
+✅ [PASS] Extracción con comillas latinas: 'Feliz cumple Ma'
+✅ [PASS] Extracción de 'sin personalización': 'Sin grabado'
+✅ [PASS] Imagen adjunta asigna automáticamente 'Diseño según imagen adjunta'
+✅ [PASS] Pasa a sub-paso de confirmación explícita
+✅ [PASS] Al confirmar con 'Sí', avanza a selección de empaque
+✅ [PASS] Detalle de personalización guardado como 'analia'
+✅ [PASS] Permanece en paso de personalización tras corregir
+✅ [PASS] Vuelve a solicitar confirmación de la corrección
+✅ [PASS] Nueva propuesta extraída correctamente: 'María'
+
+--- PRUEBA 4: Búsqueda por Palabras Clave y Lematizador ---
+✅ [PASS] Lematizador unifica 'vasos' y 'vaso': 'vaso'
+✅ [PASS] Lematizador unifica 'térmicos' y 'termico': 'termico'
+✅ [PASS] Reconoce 'vasos térmicos' y asocia el producto 'Vaso Térmico Acero Inoxidable'
+
+--- PRUEBA 5: Personalización Web/Bot y Edición Admin ---
+💾 Pedido hodie000301 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
+    at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
+    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:381:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async sendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:74:20)
+⚠️ PDF no entregado para el pedido #hodie000301. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+📢 Alerta enviada al WhatsApp del admin (595983957102)
+✅ [PASS] Pedido web con personalización responde HTTP 200
+✅ [PASS] Respuesta web indica customizationPending = false
+✅ [PASS] Firestore: orden tiene customizationPending = false
+✅ [PASS] Firestore: ítem contiene texto de personalización
+✅ [PASS] Firestore: ítem tiene customizationPending = false
+💾 Pedido hodie000302 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
+    at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
+    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:381:24)
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async sendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:74:20)
+⚠️ PDF no entregado para el pedido #hodie000302. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981532207' no incluye '@'. Reconstruyendo '595981532207@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+📢 Alerta enviada al WhatsApp del admin (595983957102)
+✅ [PASS] Pedido web sin personalización responde HTTP 200
+✅ [PASS] Respuesta web indica customizationPending = true
+✅ [PASS] Firestore: orden sin personalización tiene customizationPending = true
+✅ [PASS] Firestore: ítem tiene customizationPending = true
+✍️ Personalización actualizada para pedido #hodie000302, ítem 0: "Texto cargado por el Administrador"
+✅ [PASS] PATCH /admin/orders/:id/customization responde HTTP 200
+✅ [PASS] PATCH response indica success: true
+✅ [PASS] Tras PATCH admin, customizationPending de la orden se limpia a false
+✅ [PASS] Tras PATCH admin, texto de personalización guardado
+✅ [PASS] Tras PATCH admin, customizationPending del ítem se limpia a false
+
+--- PRUEBA 6: Restricción de Subida de Imagen a Cloudinary ---
+✅ [PASS] En paso customization con media con url, propone 'Diseño según imagen adjunta'
+✅ [PASS] Preserva customizationImageUrl devuelta por Cloudinary
+✅ [PASS] customizationImagePending es false cuando la subida fue exitosa
+📢 Alerta enviada al WhatsApp del admin (595983957102)
+✅ [PASS] Archivo no admitido o pesado propone 'Diseño según archivo adjunto en chat'
+✅ [PASS] Marca customizationImagePending = true para aviso al admin
+
+--- PRUEBA 7: Flujo de Cantidad, Handoff Corporativo y Stock ---
+✅ [PASS] Detecta cantidad 3 directamente del texto inicial
+✅ [PASS] Salta el paso de selección de cantidad y avanza a personalización
+✅ [PASS] Pedido > 100 unidades deriva a HumanHandoff
+✅ [PASS] Motivo de handoff corporativo registrado: 'pedido corporativo de 150 unidades de Vaso Térmico Acero Inoxidable'
+✅ [PASS] Informa existencias disponibles cuando la cantidad supera el stock
+✅ [PASS] Consulta si desea cotizar las unidades disponibles o contactar un asesor
+✅ [PASS] Permanece en quantity_selection para confirmar decisión del cliente
+
+--- PRUEBA 8: sendOrderStatus (Flete Dinámico y Sin Mensaje de Bienvenida) ---
+✅ [PASS] sendOrderStatus incluye 'Envío gratis (Minga Guazú)' para local_gratis
+✅ [PASS] sendOrderStatus incluye aviso de personalización pendiente
+✅ [PASS] sendOrderStatus NO envía mensaje de bienvenida en pending
+✅ [PASS] sendOrderStatus incluye 'Pago contra entrega a la transportadora'
+✅ [PASS] sendOrderStatus NO solicita personalización si hasPendingCustomization es false
+
+🧹 Limpiando recursos de prueba en Firestore...
+  🗑️ Pedido eliminado: orders/MPFFtKKiXK8GpUvLl2Jc
+  🗑️ Pedido eliminado: orders/ord-1790809969567-hodie000300
+  🗑️ Pedido eliminado: orders/Lw0QsQ6aenPCaRJDCLMa
+  🗑️ Pedido eliminado: orders/852e8mBrIRcnljeztVVN
+  🗑️ Producto eliminado: products/test-prod-pdf-1790809967526
+  🗑️ Usuario eliminado: users/test-usr-1790809967526
+  🗑️ Usuario eliminado: users/test-adm-1790809967526
+✅ Servidor de prueba cerrado y Firestore 100% limpio.
+
+==================================================================
+📊 RESULTADO FINAL: 63 PASADAS, 0 FALLIDAS
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+◇ injected env (0) from .env // tip: ⌁ auth for agents [www.vestauth.com]
+==================================================================
+🔒 BATERÍA DE PRUEBAS - BLINDAJE DE SEGURIDAD EN CHECKOUT WEB
+==================================================================
+
+🌐 Servidor de pruebas iniciado en http://localhost:39533
+
+🛠️ Preparando usuarios y catálogo de prueba en Firestore...
+✅ Recursos de prueba configurados correctamente.
+
+--- TEST 1: Payload exacto del frontend (checkout-page.ts) ---
+💾 Pedido hodie000303 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Frontend payload devuelve HTTP 200
+✅ [PASS] Respuesta indica success: true
+✅ [PASS] Estado guardado en Firestore es 'pending'
+✅ [PASS] Subtotal coincide con cálculo del frontend (esperado 204000, obtenido: 204000)
+✅ [PASS] shippingCost es 0 (envío gratis)
+✅ [PASS] Total coincide con cálculo del frontend (esperado 204000, obtenido: 204000)
+✅ [PASS] userId coincide con el usuario del JWT
+✅ [PASS] userPhoneNumber coincide con el teléfono del JWT
+
+--- TEST 2: Manipulación de status en body (status: 'paid') ---
+💾 Pedido hodie000304 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido procesado con HTTP 200
+✅ [PASS] El status forzado en Firestore es 'pending' ignorando 'paid'
+
+--- TEST 3: Manipulación de precios en body (price: 1, total: 1) ---
+💾 Pedido hodie000305 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido con precios manipulados responde HTTP 200
+✅ [PASS] Precio del ítem recalculado al precio oficial de catálogo (67.000)
+✅ [PASS] Precio del empaque recalculado al precio oficial de catálogo (35.000)
+✅ [PASS] Subtotal recalculado correctamente (102.000) ignorando '2'
+✅ [PASS] Total recalculado correctamente (102.000) ignorando '2'
+
+--- TEST 4: Intento de sobreescribir pedido de otro usuario con id en body ---
+💾 Pedido hodie000306 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Petición procesada exitosamente
+✅ [PASS] El pedido de la víctima conserva su userId intacto
+✅ [PASS] El pedido de la víctima conserva su total original (999999)
+✅ [PASS] Se generó un nuevo ID independiente (svTbUYlgDwjBASkVk0Td !== test-ord-other-1790809978308)
+
+--- TEST 5: Suplantación de identidad (userPhoneNumber falso en body) ---
+💾 Pedido hodie000307 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido procesado con HTTP 200
+✅ [PASS] userId en Firestore proviene del JWT y no del body
+✅ [PASS] userPhoneNumber en Firestore proviene del JWT y no del body
+✅ [PASS] userDisplayName en Firestore proviene del usuario autenticado
+
+--- TEST 6: Validaciones de producto inactivo, empaque y cantidad ---
+✅ [PASS] Producto inactivo responde HTTP 400
+✅ [PASS] Mensaje de error indica producto inactivo
+✅ [PASS] Empaque inválido responde HTTP 400
+✅ [PASS] Mensaje de error indica empaque inválido
+✅ [PASS] Cantidad decimal responde HTTP 400
+✅ [PASS] Cantidad 0 responde HTTP 400
+✅ [PASS] Cantidad > 100 responde HTTP 400
+
+--- TEST 7: Usuario con active: false -> HTTP 403 ---
+✅ [PASS] Usuario inactivo responde HTTP 403
+✅ [PASS] Mensaje de error indica usuario inactivo
+
+--- TEST 8: Regresión de rutas existentes y autenticación ---
+✅ [PASS] Petición a /orders/order/send sin JWT responde HTTP 401
+✅ [PASS] GET /users/me con JWT válido responde HTTP 200
+✅ [PASS] GET /users/me retorna perfil correcto del usuario
+✅ [PASS] GET /admin/orders con JWT admin responde HTTP 200
+✅ [PASS] POST /order/status fue eliminado y responde HTTP 404
+
+--- TEST 9: Flujo de creación de pedidos en BudgetAgent ---
+🛍️ Cliente 595981561506 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+💾 Pedido hodie000308 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+✅ [PASS] BudgetAgent ejecutó y emitió mensaje final de confirmación
+✅ [PASS] El mensaje final incluye el número de pedido oficial
+✅ [PASS] La orden generada por BudgetAgent fue persistida en Firestore
+✅ [PASS] BudgetAgent persistió el total recalculado oficial (261.000 Gs.)
+✅ [PASS] BudgetAgent registró shippingCost = 0
+✅ [PASS] BudgetAgent registró status = 'pending'
+
+--- TEST 10: Sanitización de packaging e imágenes en body ---
+💾 Pedido hodie000309 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido con imágenes/nombres en body procesado con HTTP 200
+✅ [PASS] Nombre de packaging proviene de displayNames ('Caja de Regalo') ignorando body
+✅ [PASS] imageUrl de packaging en Firestore no toma la URL maliciosa del cliente
+✅ [PASS] imageUrl del ítem en Firestore no toma la URL maliciosa del cliente
+
+--- TEST 11: Límites de caracteres en textos ---
+✅ [PASS] Personalización de 600 caracteres responde HTTP 400
+✅ [PASS] Mensaje indica límite de 500 caracteres para personalización
+✅ [PASS] Instrucciones de 600 caracteres responde HTTP 400
+✅ [PASS] Calle de 250 caracteres responde HTTP 400
+✅ [PASS] Mensaje indica límite de 200 caracteres para campos de dirección
+
+--- TEST 12: Errores 500 devuelven mensaje genérico al cliente ---
+✅ [PASS] Error interno responde HTTP 500
+✅ [PASS] Error 500 es genérico: 'Error procesando el pedido.'
+
+--- TEST 13: Política de envío real y shippingMethod ---
+💾 Pedido hodie000310 guardado en Firestore (status: pending, shippingMethod: local_gratis)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido en Minga Guazú responde HTTP 200
+✅ [PASS] Ciudad 'minga guazu' asigna shippingMethod = 'local_gratis'
+✅ [PASS] Costo de envío en orden es 0
+✅ [PASS] Total en Minga Guazú es 67.000 Gs.
+💾 Pedido hodie000311 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido en Asunción responde HTTP 200
+✅ [PASS] Ciudad 'Asunción' asigna shippingMethod = 'transportadora_contra_entrega' ignorando body
+✅ [PASS] Costo de envío en orden es 0 (contra entrega)
+✅ [PASS] Total en Asunción es 67.000 Gs. (igual que en Minga Guazú)
+💾 Pedido hodie000312 guardado en Firestore (status: pending, shippingMethod: local_gratis)
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981561506' no incluye '@'. Reconstruyendo '595981561506@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] Pedido en 'Minga Guazú km 20' responde HTTP 200
+✅ [PASS] Ciudad 'Minga Guazú km 20' asigna shippingMethod = 'local_gratis'
+✅ [PASS] Costo de envío en orden es 0
+✅ [PASS] Total en Minga Guazú km 20 es 67.000 Gs.
+
+🧹 Limpiando recursos de prueba en Firestore...
+  🗑️ Pedido eliminado: orders/test-ord-other-1790809978308
+  🗑️ Pedido eliminado: orders/1Klnc6qMP0k4Z5ekmXL4
+  🗑️ Pedido eliminado: orders/uIDfeGZwPA7TNM2dUlZB
+  🗑️ Pedido eliminado: orders/ZGNg0ibFIFJt6odqOTPR
+  🗑️ Pedido eliminado: orders/svTbUYlgDwjBASkVk0Td
+  🗑️ Pedido eliminado: orders/NBsSxHZK1Q09yEDoKwYr
+  🗑️ Pedido eliminado: orders/ord-1790809984106-hodie000308
+  🗑️ Pedido eliminado: orders/zA2eCrP9PQkQvVFbMX14
+  🗑️ Pedido eliminado: orders/woUTx7wyN647eNRbXq9Z
+  🗑️ Pedido eliminado: orders/RF1BCTkdiYIg7qFxUbUu
+  🗑️ Pedido eliminado: orders/yLe4cPhuQschyj9q0FZE
+  🗑️ Producto eliminado: products/test-prod-act-1790809978308
+  🗑️ Producto eliminado: products/test-prod-inact-1790809978308
+  🗑️ Usuario eliminado: users/test-usr-a-1790809978308
+  🗑️ Usuario eliminado: users/test-usr-b-1790809978308
+  🗑️ Usuario eliminado: users/test-usr-admin-1790809978308
+✅ Servidor de prueba cerrado y Firestore 100% limpio.
+
+==================================================================
+📊 RESULTADO FINAL: 66 PASADAS, 0 FALLIDAS
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+==================================================================
+🧪 BATERÍA DE PRUEBAS - DECOUPLING userPhoneNumber vs whatsappChatId
+==================================================================
+
+🛠️ Creando producto de prueba propio: test-prod-chatid-1790809989712...
+
+--- TEST 1: resolveChatId Behavior ---
+✅ [PASS] Conserva @lid sin alterar
+✅ [PASS] Conserva @c.us sin alterar
+✅ [PASS] Fallback a @c.us correcto
+✅ [PASS] Fallback genera advertencia en consola
+
+--- TEST 2: AgentStateAnnotation Reducers ---
+✅ [PASS] userPhoneNumber tiene reducer (operator)
+✅ [PASS] whatsappChatId tiene reducer (operator)
+✅ [PASS] whatsappChatId se inicializa correctamente con @lid
+✅ [PASS] whatsappChatId persiste cuando no se incluye en el nodo
+✅ [PASS] whatsappChatId se limpia con { reset: true }
+✅ [PASS] userPhoneNumber persiste y responde a reset
+
+--- TEST 3: Envío directo a @lid sin concatenar @c.us ---
+✅ [PASS] sendOrderStatus envía exactamente a @lid
+✅ [PASS] sendOrderStatus envía exactamente a @c.us
+📤 Código enviado a 123456789@lid: 123456
+✅ [PASS] sendVerificationCode envía a @lid
+📤 Mensaje de bienvenida enviado a 123456789@lid
+✅ [PASS] sendWelcomeMessage envía a @lid
+📤 Mensaje de error enviado a 123456789@lid
+✅ [PASS] sendErrorMessage envía a @lid
+📤 Mensaje de límite excedido enviado a 123456789@lid
+✅ [PASS] sendLimitError envía a @lid
+✅ [PASS] sendOrderPDF envía a @lid
+
+--- TEST 4: processAndSendOrder guarda y usa whatsappChatId ---
+💾 Pedido hodie000313 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+✅ [PASS] processAndSendOrder completó exitosamente
+✅ [PASS] Firestore guarda whatsappChatId en Order
+✅ [PASS] Firestore guarda userPhoneNumber intacto
+✅ [PASS] PDF fue enviado a whatsappChatId (@lid) y NO a userPhoneNumber@c.us
+✅ [PASS] createdAt de la orden guardada es una instancia de Firestore Timestamp
+✅ [PASS] createdAt tiene método toDate()
+
+--- TEST 4.b: Inyección de createdAt falso (2020) es ignorada ---
+💾 Pedido hodie000314 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+✅ [PASS] createdAt de la orden guardada es Timestamp
+✅ [PASS] createdAt del documento NO es el año 2020
+✅ [PASS] createdAt del documento tiene la fecha actual
+
+--- TEST 4.c: Re-procesamiento de pedido existente conserva createdAt original ---
+💾 Pedido hodie000314 guardado en Firestore (status: pending, shippingMethod: transportadora_contra_entrega)
+✅ [PASS] Re-procesar pedido existente conserva el createdAt original leído de Firestore y no el del payload
+
+--- TEST 5: updateOrderStatusAndNotify con whatsappChatId ---
+✅ [PASS] updateOrderStatusAndNotify usa whatsappChatId directamente
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981777888' no incluye '@'. Reconstruyendo '595981777888@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] updateOrderStatusAndNotify hace fallback a phone@c.us
+
+--- TEST 6: updateAdminOrderStatus y control de stock real en producto de prueba ---
+📦 Stock descontado exitosamente para pedido #test-1790809989712-1 (transición pending -> preparing)
+✅ [PASS] updateAdminOrderStatus descontó correctamente 3 unidades de stock del producto de prueba (10 -> 7)
+✅ [PASS] updateAdminOrderStatus notificó el cambio de estado a whatsappChatId (@lid)
+🔄 Stock restituido exitosamente para pedido #test-1790809989712-1 (transición preparing -> cancelled)
+✅ [PASS] updateAdminOrderStatus restituyó correctamente el stock del producto de prueba al cancelar (7 -> 10)
+📦 Stock descontado exitosamente para pedido #test-1790809989712-2 (transición pending -> preparing)
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981555666' no incluye '@'. Reconstruyendo '595981555666@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+✅ [PASS] updateAdminOrderStatus usa fallback para órdenes antiguas sin whatsappChatId
+
+🧹 Limpiando datos de prueba generados en Firestore...
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t4-1790809989712
+  🗑️ Pedido de prueba eliminado: orders/test-ord-fake-date-1790809989712
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-lid-1790809989712
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-old-1790809989712
+  🗑️ Producto de prueba eliminado: products/test-prod-chatid-1790809989712
+✅ Limpieza de Firestore finalizada sin alterar datos reales de catálogo ni clientes.
+
+==================================================================
+📊 RESULTADO FINAL: 33 PASADAS, 0 FALLIDAS
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+==================================================================
+🧪 BATERÍA DE PRUEBAS - STATEGRAPH MULTI-AGENTE & FIRESTORE CHECKPOINT
+==================================================================
+
+📱 Usando número de prueba: +595981553024 (chatId: 595981553024@c.us)
+
+--- TURNO 1: Mensaje inicial de saludo y soporte ---
+⚠️ Error parseando JSON de supportAgent, usando heurística: Unexpected token '�', "📍 Nos enc"... is not valid JSON
+✅ [PASS] Turno 1: Generó al menos 2 mensajes en el historial (Human + AI)
+✅ [PASS] Turno 1: El último mensaje es un AIMessage
+✅ [PASS] Turno 1: Respondió con información de ubicación/soporte
+✅ [PASS] Turno 1: Checkpoint persistido exitosamente en Firestore para thread_id: 595981553024@c.us
+
+--- TURNO 2: Cotización de producto y persistencia multi-turno ---
+✅ [PASS] Turno 2: Recuperó el historial previo y acumuló los nuevos mensajes (mínimo 4)
+✅ [PASS] Turno 2: activeAgent transicionó a 'budget'
+✅ [PASS] Turno 2: quoteContext avanzó en la máquina de estados de cotización
+✅ [PASS] Turno 2: El último mensaje es un AIMessage emitido por BudgetAgent
+
+--- TURNO 3: Derivación a Handoff Humano ---
+✅ [PASS] Turno 3: humanHandoffRequired quedó marcado en true
+✅ [PASS] Turno 3: activeAgent quedó en null tras handoff
+✅ [PASS] Turno 3: Cliente recibió mensaje cordial de derivación
+
+--- TURNO 4: Regla de Silencio con Handoff Activo (1.a) ---
+🔒 Handoff humano activo para 595981553024. Manteniendo intervención.
+✅ [PASS] Turno 4: El grafo terminó sin generar ningún nuevo AIMessage automático (silencio activo)
+✅ [PASS] Turno 4: humanHandoffRequired se mantiene en true
+
+--- PRUEBA PUNTO 1: Fallback thread_id con remitentes @lid y aislamiento ---
+[SIMULATED WARNER] userPhoneNumber vacío para 150697601421342@lid. Fallback a chatId.
+[SIMULATED WARNER] userPhoneNumber vacío para 270819405632198@lid. Fallback a chatId.
+✅ [PASS] Punto 1: Fallback asigna correctamente el whatsappChatId como thread_id cuando userPhoneNumber es vacío
+⚠️ Error parseando JSON de supportAgent, usando heurística: Unexpected token '�', "📍 Nos enc"... is not valid JSON
+⚠️ Error parseando JSON de supportAgent, usando heurística: Unexpected token '�', "📍 Nos enc"... is not valid JSON
+✅ [PASS] Punto 1: Ambos remitentes @lid generaron colecciones de checkpoints independientes en Firestore
+✅ [PASS] Punto 1: El checkpoint de Sender A solo contiene el historial de A
+✅ [PASS] Punto 1: El checkpoint de Sender B solo contiene el historial de B (aislamiento garantizado)
+
+--- PRUEBA PUNTO 2: Persistencia con archivo adjunto y descarte de base64 ---
+✅ [PASS] Punto 2: El grafo con adjunto se ejecutó y persistió sin error de límite en Firestore
+✅ [PASS] Punto 2: Checkpoint guardado en Firestore para el turno con imagen
+✅ [PASS] Punto 2: El reducer descartó la propiedad 'data' (base64) del checkpoint persistido
+✅ [PASS] Punto 2: Los metadatos ligeros (filename, mimetype) se conservaron correctamente
+
+--- PRUEBA PUNTOS 1 y 5: Filtros de chats grupales y descripción por Mimetype ---
+✅ [PASS] Punto 5: image/jpeg produce 'Imagen adjunta'
+✅ [PASS] Punto 5: audio/ogg produce 'Audio adjunto'
+✅ [PASS] Punto 5: video/mp4 produce 'Video adjunto'
+✅ [PASS] Punto 5: application/pdf produce 'Documento adjunto'
+✅ [PASS] Punto 5: sticker produce 'Sticker adjunto'
+✅ [PASS] Punto 1: Detecta y filtra identificadores de grupos (@g.us)
+✅ [PASS] Punto 1: Detecta y filtra estados/historias (status@broadcast)
+✅ [PASS] Punto 1: Permite chats individuales estándar (@c.us)
+✅ [PASS] Punto 1: Permite chats individuales vinculados (@lid)
+
+--- PRUEBA PUNTO 3: Serialización concurrente por hilo (runInThreadQueue) ---
+✅ [PASS] Punto 3: La cola garantizó orden estricto (Mensaje 1 completó antes de que Mensaje 2 iniciara a pesar de la descarga lenta)
+✅ [PASS] Punto 3: El historial final contiene exactamente los 3 HumanMessage
+✅ [PASS] Punto 3: Los 3 mensajes se procesaron estrictamente en el orden FIFO enviado
+✅ [PASS] Punto 3: quoteContext progresó y no perdió pasos ni estado durante la concurrencia
+✅ [PASS] Punto 3: La entrada en threadQueues se limpió automáticamente al vaciarse la cola (sin fuga de memoria)
+
+--- PRUEBA PUNTO 4: Handoff desde SupportAgent y regla de silencio ---
+📩 Mensaje entrante de +595981577576: "Tuvimos un problema con el pedido, tardaron mucho y es una queja"
+🧭 [595981577576@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
+🚨 Activando HumanHandoff para +595981577576. Motivo: Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja"
+📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
+📋 Hilo 595981577576@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981577576@c.us
+✅ [PASS] Punto 4: SupportAgent activó humanHandoffRequired desde su propio nodo
+✅ [PASS] Punto 4: Se envió exactamente 1 alerta al administrador en la derivación inicial
+✅ [PASS] Punto 4: Cliente recibió respuesta cordial de derivación emitida por SupportAgent
+📩 Mensaje entrante de +595981577576: "Hola, sigo esperando una respuesta"
+🔒 Handoff humano activo para 595981577576. Manteniendo intervención.
+🧭 [595981577576@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
+📋 Hilo 595981577576@c.us registrado en índice handoff_threads.
+🔇 Sin respuesta automática para 595981577576@c.us (handoff humano activo o nodo terminal mudo).
+✅ [PASS] Punto 4: En el siguiente mensaje, el bot quedó en 100% de silencio (sin nuevo AIMessage)
+✅ [PASS] Punto 4: El administrador NO recibió una segunda alerta en los turnos subsiguientes
+
+--- PRUEBA PUNTO 6: Cancelación real con AbortController y omisión de respuesta tardía ---
+⏱️ [TIMEOUT COLA] Tarea expirada tras 400ms para chat 595981177546@c.us. Liberando cola.
+🛑 Tarea abortada para 595981177546@c.us. Omitiendo checkpoint y respuesta tardía.
+✅ [PASS] Punto 6: Tarea 1 falló por QueueTimeoutError al vencer el tiempo límite (400ms)
+✅ [PASS] Punto 6: Segundo mensaje del mismo chat se ejecutó y resolvió con éxito tras liberarse la cola
+✅ [PASS] Punto 6: El cliente recibió ÚNICAMENTE el mensaje de contingencia (sin respuesta tardía)
+✅ [PASS] Punto 6: La respuesta tardía fue prevenida mediante la verificación de signal.aborted
+✅ [PASS] Punto 6: No se escribió ningún checkpoint en Firestore después del abort
+✅ [PASS] Punto 6: Se envió alerta formal al administrador indicando el timeout en la cola
+✅ [PASS] Punto 6: La entrada en threadQueues se eliminó al completarse la secuencia
+
+--- PRUEBA: getLatestOrderForUser con múltiples pedidos y Firestore Timestamp ---
+⚠️ Falta índice compuesto en Firestore para 'orders' (userPhoneNumber + createdAt desc). Usando fallback con limit(10): 9 FAILED_PRECONDITION: The query requires an index. You can create it here: https://console.firebase.google.com/v1/r/project/hodie-tienda-de-regalos/firestore/indexes?create_composite=ClZwcm9qZWN0cy9ob2RpZS10aWVuZGEtZGUtcmVnYWxvcy9kYXRhYmFzZXMvKGRlZmF1bHQpL2NvbGxlY3Rpb25Hcm91cHMvb3JkZXJzL2luZGV4ZXMvXxABGhMKD3VzZXJQaG9uZU51bWJlchABGg0KCWNyZWF0ZWRBdBACGgwKCF9fbmFtZV9fEAI
+✅ [PASS] getLatestOrderForUser encuentra el pedido del usuario
+✅ [PASS] getLatestOrderForUser devuelve el pedido más reciente (esperado: test_ord_newer_1790810004675, obtenido: test_ord_newer_1790810004675)
+✅ [PASS] getLatestOrderForUser coincide con el orderNumber más reciente
+✅ [PASS] getLatestOrderForUser retorna createdAt con formato Timestamp válido
+
+🧹 Limpiando órdenes de prueba en Firestore...
+✅ Órdenes de prueba (test_ord_older_1790810004675, test_ord_newer_1790810004675) eliminadas de Firestore.
+
+🧹 Limpiando checkpoints de prueba en Firestore...
+✅ Datos de prueba (595981553024@c.us, 595981553024, 150697601421342@lid, 270819405632198@lid, 595981189275@c.us, 595981189275, 595981745393@c.us, 595981745393, 595981577576@c.us, 595981577576, 595981177546@c.us, 595981177546) eliminados de Firestore.
+
+==================================================================
+📊 RESULTADO FINAL: 51 PASADAS, 0 FALLIDAS
+==================================================================
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
+==================================================================
+🧪 BATERÍA DE PRUEBAS - RESUME BOT, HANDOFF INDEX & WHATSAPP FILTERS
+==================================================================
+
+🚀 Servidor de prueba iniciado en http://127.0.0.1:45347
+
+--- TEST 1: Autenticación y Autorización ---
+✅ [PASS] GET /admin/chats/handoff sin JWT responde HTTP 401
+✅ [PASS] GET /admin/chats/handoff con JWT de cliente responde HTTP 403
+✅ [PASS] POST /admin/chats/:threadId/resume-bot sin JWT responde HTTP 401
+✅ [PASS] POST /admin/chats/:threadId/resume-bot con JWT de cliente responde HTTP 403
+
+--- TEST 2: Hilo Inexistente -> HTTP 404 (sin checkpoint_id) ---
+✅ [PASS] Reactivar hilo inexistente responde HTTP 404
+✅ [PASS] Mensaje de error indica hilo no encontrado
+
+--- TEST 3: Flujo Handoff -> Índice -> Reactivación -> Siguiente mensaje ---
+✅ [PASS] Turno 1: Grafo activa humanHandoffRequired: true
+✅ [PASS] Turno 1: humanHandoffReason fue preservado y no es null
+✅ [PASS] GET /admin/chats/handoff con JWT admin responde HTTP 200
+✅ [PASS] Respuesta indica success: true
+✅ [PASS] Propiedad chats es un arreglo
+✅ [PASS] El hilo de soporte en handoff figura en la lista del índice
+✅ [PASS] Datos del cliente (userPhoneNumber) correctos
+✅ [PASS] Motivo coincide exactamente con el del estado
+✅ [PASS] lastCustomerMessage coincide con el mensaje del cliente
+✅ [PASS] Fecha de derivación presente en formato ISO
+🔒 Handoff humano activo para 595981974205. Manteniendo intervención.
+✅ [PASS] Turno 2: Bot en 100% de silencio durante handoff (sin nuevo AIMessage)
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1790810025681) reactivó el bot para el hilo '595981974205@c.us' el 2026-09-30T23:13:49.797Z
+✅ [PASS] Reactivar bot con JWT admin responde HTTP 200
+✅ [PASS] Reactivación exitosa en respuesta
+✅ [PASS] humanHandoffRequired se actualizó a false
+✅ [PASS] humanHandoffReason se limpió a null
+✅ [PASS] activeAgent se limpió a null
+✅ [PASS] intent se limpió a null
+✅ [PASS] asNode 'human_handoff_node' dejó snapshot.next vacío ([])
+✅ [PASS] El hilo reactivado fue eliminado del índice handoff_threads
+⚠️ Error parseando JSON de supportAgent, usando heurística: Unexpected token '�', "📍 Nos enc"... is not valid JSON
+✅ [PASS] Turno 3: Siguiente mensaje del cliente recibe respuesta automática generada por el bot
+✅ [PASS] Turno 3: El bot respondió con la información oficial de la tienda
+
+--- TEST 4: Hilo Existente NO en Handoff -> HTTP 400 ---
+✅ [PASS] Reactivar hilo que no está en handoff responde HTTP 400
+✅ [PASS] Mensaje de error indica que no está en handoff
+
+--- TEST 5: Handoff desde BudgetAgent y registro en índice ---
+✅ [PASS] BudgetAgent activó humanHandoffRequired: true
+✅ [PASS] BudgetAgent asignó motivo explícito de handoff
+✅ [PASS] El handoff originado en BudgetAgent figura en GET /admin/chats/handoff
+✅ [PASS] Motivo de BudgetAgent coincide
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1790810025681) reactivó el bot para el hilo 'test-resume-budget-1790810025681@c.us' el 2026-09-30T23:13:53.662Z
+✅ [PASS] Reactivar hilo de BudgetAgent responde HTTP 200
+
+--- TEST 5.b: Reactivación HTTP real de hilo con @lid ---
+✅ [PASS] Hilo @lid activó handoff en Turno 1
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1790810025681) reactivó el bot para el hilo '150697601421342@lid' el 2026-09-30T23:13:55.250Z
+✅ [PASS] POST /admin/chats/<id con @lid>/resume-bot responde HTTP 200
+✅ [PASS] Respuesta exitosa de reactivación para @lid
+✅ [PASS] thread_id devuelto coincide con el id @lid
+✅ [PASS] humanHandoffRequired es false en el hilo @lid
+✅ [PASS] humanHandoffReason se limpió a null en hilo @lid
+✅ [PASS] Documento @lid fue eliminado del índice handoff_threads
+
+--- TEST 6: Filtros en whatsapp.js ---
+✅ [PASS] 6.a '0@c.us' es identificado como cuenta de sistema
+✅ [PASS] 6.a Chat normal de cliente no es filtrado
+✅ [PASS] 6.b 'chat' es un tipo permitido
+✅ [PASS] 6.b 'image' es un tipo permitido
+✅ [PASS] 6.b 'document' es un tipo permitido
+✅ [PASS] 6.b 'audio' es un tipo permitido
+✅ [PASS] 6.b 'video' es un tipo permitido
+✅ [PASS] 6.b 'sticker' es un tipo permitido
+✅ [PASS] 6.b 'ptt' es un tipo permitido
+✅ [PASS] 6.b 'location' es un tipo permitido
+✅ [PASS] 6.c 'notification_template' es descartado
+✅ [PASS] 6.c 'e2e_notification' es descartado
+✅ [PASS] 6.c 'call_log' es descartado
+✅ [PASS] 6.c 'protocol' es descartado
+✅ [PASS] 6.d location se formatea como 'Ubicación compartida: <lat>, <lng> (<desc>)'
+✅ [PASS] 6.e Mensaje de 3500 caracteres se recorta a 1000 caracteres
+✅ [PASS] 6.e Contenido recortado coincide
+
+🧹 Limpiando recursos de prueba en Firestore...
+  🗑️ Usuario eliminado: users/usr-cli-1790810025681
+  🗑️ Usuario eliminado: users/usr-adm-1790810025681
+  🗑️ Checkpoints, writes e índice eliminados para thread: 595981974205@c.us
+  🗑️ Checkpoints, writes e índice eliminados para thread: test-resume-budget-1790810025681@c.us
+  🗑️ Checkpoints, writes e índice eliminados para thread: 150697601421342@lid
+✅ Servidor de prueba cerrado y Firestore 100% limpio.
+
+==================================================================
+📊 RESULTADO FINAL: TODAS LAS PRUEBAS PASARON SATISFACTORIAMENTE
+==================================================================
+

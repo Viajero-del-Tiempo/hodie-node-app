@@ -1,0 +1,27 @@
+
+> hodie-node-app@1.0.0 test:llm
+> ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_llm_smoke.js
+
+🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
+◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
+==================================================================
+🧪 SMOKE TEST - LLM REAL CON MODELO CONFIGURADO Y CREDENCIALES
+==================================================================
+🤖 Modelo en uso: gemini-3.8-flash
+🔑 API Key configurada: AIzaSy...P6gI
+
+--- TEST 1: Invocación de RouterNode con 'Me gustaría saber si trabajan con empresas' ---
+⏱️  Tiempo de respuesta Router: 1104 ms
+📦 Resultado Router: intent='budget_quote', reason='N/A'
+✅ [PASS] RouterNode clasificó exitosamente con LLM real (gemini-3.8-flash). Intent: 'budget_quote'
+
+--- TEST 2: Invocación de SupportAgent con 'Hacen envíos?' ---
+⏱️  Tiempo de respuesta SupportAgent: 3020 ms
+💬 Respuesta obtenida:
+"¡Hola! Sí, hacemos envíos a todo el país. Si estás en Minga Guazú, el delivery es totalmente gratuito. Para las demás ciudades, enviamos a través de empresas transportadoras bajo la modalidad de pago ..."
+
+✅ [PASS] SupportAgent generó respuesta dinámica con LLM real (gemini-3.8-flash).
+
+==================================================================
+🎉 SMOKE TEST EXITOSO: Todas las llamadas al LLM (gemini-3.8-flash) respondieron correctamente.
+==================================================================

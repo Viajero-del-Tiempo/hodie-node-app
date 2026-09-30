@@ -23,7 +23,7 @@ export const notifyAdminHandoffAlert = async ({
   state,
 }) => {
   const adminPhone = process.env.ADMIN_WHATSAPP_PHONE;
-  if (!adminPhone) return;
+  if (!adminPhone) return false;
 
   const phone = userPhoneNumber || state?.userPhoneNumber;
   const chatId = whatsappChatId || state?.whatsappChatId;
@@ -75,22 +75,40 @@ export const notifyAdminHandoffAlert = async ({
 
   const contextSection = contextLines.length > 0 ? `\n${contextLines.join("\n")}\n` : "";
 
-  try {
-    const { whatsappClient } = await import("../../config/whatsapp.js");
-    const adminChatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
-    const adminAlert =
-      `🚨 *Derivación a Asesor Humano*\n\n` +
-      `• *Cliente:* ${clientDisplay}\n` +
-      `• *ChatId:* ${chatId || "no provisto"}\n` +
-      `• *Motivo:* ${formalReason}\n` +
-      contextSection +
-      `\n👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
+  const adminChatId = adminPhone.includes("@") ? adminPhone : `${adminPhone}@c.us`;
+  const adminAlert =
+    `🚨 *Derivación a Asesor Humano*\n\n` +
+    `• *Cliente:* ${clientDisplay}\n` +
+    `• *ChatId:* ${chatId || "no provisto"}\n` +
+    `• *Motivo:* ${formalReason}\n` +
+    contextSection +
+    `\n👉 El bot ha suspendido respuestas automáticas para este cliente. Por favor continuar la conversación directamente.`;
 
-    await whatsappClient.sendMessage(adminChatId, adminAlert, { sendSeen: false });
-    console.log(`📢 Alerta de handoff enviada al WhatsApp del admin (${adminPhone})`);
-  } catch (err) {
-    console.warn("⚠️ No se pudo enviar notificación WhatsApp al admin:", err.message);
+  let sent = false;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const { whatsappClient } = await import("../../config/whatsapp.js");
+      if (whatsappClient && typeof whatsappClient.sendMessage === "function") {
+        await whatsappClient.sendMessage(adminChatId, adminAlert, { sendSeen: false });
+        console.log(`📢 Alerta de handoff enviada al WhatsApp del admin (${adminPhone})`);
+        sent = true;
+        break;
+      }
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+      }
+    }
   }
+
+  if (!sent && lastError) {
+    console.error(`🚨 Error enviando alerta de handoff al admin (${adminPhone}) tras 3 intentos:`, lastError.message);
+  }
+
+  return sent;
 };
 
 /**
@@ -106,17 +124,7 @@ export const notifyAdminHandoffAlert = async ({
 export const handoffNode = async (state) => {
   const reason = state.humanHandoffReason || "Solicitud de atención humana o derivación";
 
-  // 1. Notificar al administrador por WhatsApp mediante helper compartido con contexto
-  await notifyAdminHandoffAlert({
-    userPhoneNumber: state.userPhoneNumber,
-    whatsappChatId: state.whatsappChatId,
-    pushname: state.pushname,
-    reason,
-    quoteContext: state.quoteContext,
-    state,
-  });
-
-  // 2. Respuesta cordial al cliente
+  // Respuesta cordial al cliente
   const clientResponse =
     `Te he comunicado con un asesor de nuestro equipo para atenderte personalmente. 👤\n\n` +
     `En breve una persona te responderá directamente por este chat. ¡Muchas gracias por tu paciencia! ✨`;

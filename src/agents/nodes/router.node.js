@@ -1,4 +1,4 @@
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { createGeminiModel } from "../../config/llm.js";
 import { db } from "../../config/firebase.js";
 
 export const VALID_INTENTS = [
@@ -34,31 +34,21 @@ const getLatestUserText = (messages) => {
  * @returns {Promise<{ intent: string, reason?: string }>}
  */
 const classifyIntentWithTimeout = async (userText, timeoutMs = 10000) => {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-
-  // Si no hay API key configurada todavía en el entorno, simulamos el fallo o usamos heurística segura
-  if (!apiKey) {
-    throw new Error("GEMINI_API_KEY no configurada en variables de entorno");
-  }
-
-  const modelName = process.env.GEMINI_MODEL || "gemini-3.8-flash";
-  const model = new ChatGoogleGenerativeAI({
-    model: modelName,
-    apiKey,
+  const model = createGeminiModel({
     temperature: 0,
-    thinkingConfig: {
-      thinkingBudget: 0,
-    },
+    thinkingBudget: 0,
   });
 
   const prompt = `Eres el clasificador de intenciones para una tienda de regalos personalizados llamada HoDie.
 Clasifica el siguiente mensaje del cliente en exactamente UNA de estas categorías:
 
-1. 'budget_quote': El cliente pregunta por precios de productos, personalizaciones (tazas, termos, remeras), catálogos o expresa intención de cotizar/comprar.
+1. 'budget_quote': El cliente pregunta por productos (termos, vasos, billeteras, tazas, mates, joyeros, neceseres), precios, personalizaciones, catálogos, cantidades o expresa intención de cotizar/comprar.
 2. 'order_status': El cliente pregunta por el estado de un pedido que ya realizó o pide número de seguimiento/tracking.
 3. 'payment_proof': El cliente indica que ya transfirió o envía/menciona un comprobante de pago.
-4. 'customer_support': Preguntas frecuentes generales (tiempos de entrega, métodos de envío, ubicación física, dudas varias).
+4. 'customer_support': Saludos, preguntas frecuentes generales (tiempos de entrega, métodos de envío, ubicación física en Minga Guazú, formas de pago, dudas varias).
 5. 'human_handoff': Reclamos por pedidos defectuosos/tardíos, quejas, frustración o solicitud explícita de hablar con una persona/asesor humano.
+
+IMPORTANTE: Enfócate exclusivamente en el MENSAJE ACTUAL del cliente.
 
 Mensaje del cliente: "${userText}"
 
@@ -120,6 +110,38 @@ export const routerNode = async (state) => {
     const hasMedia = Boolean(state.incomingMedia);
 
     // -------------------------------------------------------------
+    // 1.b MANEJO DE MENÚ DE ESCALADA NUMERADO (awaitingMenuChoice)
+    // El router interpreta "1", "2", "3" hacia el menú general de opciones
+    // ÚNICAMENTE cuando awaitingMenuChoice está activo (pasos 2 y 3 de SupportAgent).
+    // -------------------------------------------------------------
+    if (state.awaitingMenuChoice) {
+      if (lastText === "1" || lastText.startsWith("1 ") || lastText === "1." || lastText.includes("catalogo") || lastText.includes("catálogo")) {
+        return {
+          intent: "budget_quote",
+          activeAgent: "budget",
+          awaitingMenuChoice: false,
+          consecutiveMisunderstandings: 0,
+        };
+      }
+      if (lastText === "2" || lastText.startsWith("2 ") || lastText === "2." || lastText.includes("cotizar")) {
+        return {
+          intent: "budget_quote",
+          activeAgent: "budget",
+          awaitingMenuChoice: false,
+          consecutiveMisunderstandings: 0,
+        };
+      }
+      if (lastText === "3" || lastText.startsWith("3 ") || lastText === "3." || lastText.includes("estado") || lastText.includes("pedido")) {
+        return {
+          intent: "order_status",
+          activeAgent: null,
+          awaitingMenuChoice: false,
+          consecutiveMisunderstandings: 0,
+        };
+      }
+    }
+
+    // -------------------------------------------------------------
     // 2. DESAMBIGUACIÓN DE ARCHIVOS ADJUNTOS (FOTO DE REFERENCIA VS COMPROBANTE)
     // Regla determinística: Si el usuario está cotizando y en el paso de
     // personalización o selección de producto, la imagen es para el producto.
@@ -158,10 +180,16 @@ export const routerNode = async (state) => {
         "asesor humano",
         "operador humano",
         "atencion personalizada",
+        "atención personalizada",
         "atencion humana",
         "pasame con alguien",
         "pasame con un humano",
+        "pasame con un asesor",
+        "pasame con el asesor",
+        "pasame con atención al cliente",
+        "pasame con atencion al cliente",
         "comunicarme con un asesor",
+        "asesor por favor",
       ];
       const wantsHuman = humanPhrases.some((phrase) => lastText.includes(phrase));
       if (wantsHuman) {
@@ -232,17 +260,27 @@ export const routerNode = async (state) => {
     // -------------------------------------------------------------
     const directHandoffKeywords = [
       "reclamo",
+      "vino roto",
       "estafa",
       "denuncia",
       "demanda",
       "quiero hablar con una persona",
+      "hablar con una persona",
+      "hablar con un asesor",
       "hablar con alguien",
       "pasame con un humano",
+      "pasame con un asesor",
+      "pasame con el asesor",
+      "pasame con atención al cliente",
+      "pasame con atencion al cliente",
       "asesor humano",
       "operador humano",
       "atencion personalizada",
+      "atención personalizada",
       "atencion humana",
       "comunicarme con una persona",
+      "comunicarme con un asesor",
+      "asesor por favor",
     ];
     if (directHandoffKeywords.some((kw) => lastText.includes(kw))) {
       return {
@@ -254,7 +292,48 @@ export const routerNode = async (state) => {
     }
 
     // -------------------------------------------------------------
-    // 6. CLASIFICACIÓN DE INTENCIÓN VÍA LLM CON TIMEOUT
+    // 6. ENLACES EXTERNOS Y MULTIMEDIA (Punto 6)
+    // No se derivan a humano. Se canalizan a support para indicar amablemente
+    // que no es posible abrir enlaces y consultar qué producto le interesó.
+    // -------------------------------------------------------------
+    const urlPattern = /(?:https?:\/\/|www\.)[^\s]+|facebook\.com|instagram\.com|tiktok\.com|youtube\.com|youtu\.be/i;
+    const isVideo = state.incomingMedia?.mimetype?.startsWith("video/") || state.incomingMedia?.mimetype?.startsWith("audio/");
+
+    if (urlPattern.test(lastText) || isVideo) {
+      return {
+        intent: "customer_support",
+        activeAgent: null,
+      };
+    }
+
+    // -------------------------------------------------------------
+    // 7. PRIORIDAD DE CATÁLOGO / COTIZACIÓN / PRODUCTOS (Punto 6)
+    // Cualquier mención de producto, precio, catálogo o intención de compra
+    // va al BudgetAgent, incluso con saludos en el mismo mensaje.
+    // -------------------------------------------------------------
+    const productKeywords = /\b(billeteras?|vasos?|termos?|mates?|kit(?:s)?\s*(?:para|de)?\s*mates?|neceser(?:es)?|joyeros?|tazas?|remeras?|chopps?|champañeras?|cuadros?)\b/i;
+    const purchaseKeywords = /\b(catalogos?|catálogos?|precios?|cotizar|cotizacion|cotización|presupuesto|comprar|cuanto\s+cuesta|cuánto\s+cuesta|cuanto\s+sale|cuánto\s+sale|costo)\b/i;
+    const quantityIntent = /\b(?:quiero|necesito|pedir|dame|mandame)\s+\d+\b/i;
+
+    if (productKeywords.test(lastText) || purchaseKeywords.test(lastText) || quantityIntent.test(lastText)) {
+      return {
+        intent: "budget_quote",
+        activeAgent: "budget",
+        consecutiveMisunderstandings: 0,
+      };
+    }
+
+    // Saludo puro sin producto ni intención de compra
+    const greetingPattern = /^(?:hola|buenas|buenos dias|buenos días|buenas tardes|buenas noches|hola que tal|hola qué tal|que tal|qué tal)[\s!.]*$/i;
+    if (greetingPattern.test(lastText)) {
+      return {
+        intent: "customer_support",
+        activeAgent: null,
+      };
+    }
+
+    // -------------------------------------------------------------
+    // 8. CLASIFICACIÓN DE INTENCIÓN VÍA LLM CON TIMEOUT
     // -------------------------------------------------------------
     const classification = await classifyIntentWithTimeout(lastText, 10000);
 
@@ -265,6 +344,7 @@ export const routerNode = async (state) => {
     return {
       intent: classification.intent,
       activeAgent: classification.intent === "budget_quote" ? "budget" : null,
+      ...(classification.intent === "budget_quote" ? { consecutiveMisunderstandings: 0 } : {}),
     };
   } catch (error) {
     // -------------------------------------------------------------

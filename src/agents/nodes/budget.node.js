@@ -1,5 +1,5 @@
 import { AIMessage } from "@langchain/core/messages";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { createGeminiModel } from "../../config/llm.js";
 import { db } from "../../config/firebase.js";
 import {
   processAndSendOrder,
@@ -8,7 +8,9 @@ import {
   determineShippingMethod,
 } from "../../services/order.service.js";
 import { sendOrderStatus, notifyAdminViaWhatsApp } from "../../services/whatsapp.service.js";
-import { notifyAdminHandoffAlert } from "./handoff.node.js";
+import { handleMisunderstanding } from "../escalation.service.js";
+
+export { calculateQuoteTotals };
 
 /**
  * Lematizador básico de español para normalizar tildes y plurales.
@@ -29,6 +31,62 @@ export const stemSpanish = (word) => {
     return w.slice(0, -1);
   }
   return w;
+};
+
+/**
+ * Encuentra productos disponibles parecidos (mismas palabras clave o categoría con stock > 0).
+ * Si no hay ninguno parecido, devuelve hasta 3 productos del catálogo disponible.
+ *
+ * @param {Object} targetProduct - Producto seleccionado sin stock
+ * @param {Array<any>} allProducts - Lista completa de productos
+ * @returns {Array<any>}
+ */
+export const findSimilarAvailableProducts = (targetProduct, allProducts) => {
+  const available = (allProducts || []).filter(
+    (p) => p.id !== targetProduct?.id && p.active !== false && Number(p.stock) > 0
+  );
+
+  if (available.length === 0) return [];
+
+  // 1. Misma categoría
+  if (targetProduct?.category) {
+    const targetCat = targetProduct.category.toLowerCase().trim();
+    const sameCat = available.filter(
+      (p) => p.category && p.category.toLowerCase().trim() === targetCat
+    );
+    if (sameCat.length > 0) {
+      return sameCat.slice(0, 3);
+    }
+  }
+
+  // 2. Mismas palabras clave en el nombre (lematizadas)
+  const targetTokens = (targetProduct?.name || "")
+    .split(/\s+/)
+    .map((w) => stemSpanish(w))
+    .filter((w) => w.length > 3);
+
+  if (targetTokens.length > 0) {
+    const scored = available.map((p) => {
+      const pTokens = (p.name || "")
+        .split(/\s+/)
+        .map((w) => stemSpanish(w))
+        .filter((w) => w.length > 3);
+      const common = targetTokens.filter((t) => pTokens.includes(t));
+      return { product: p, score: common.length };
+    });
+
+    const matches = scored
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((s) => s.product);
+
+    if (matches.length > 0) {
+      return matches.slice(0, 3);
+    }
+  }
+
+  // 3. Fallback: ofrecer hasta 3 productos disponibles del catálogo
+  return available.slice(0, 3);
 };
 
 /**
@@ -88,10 +146,9 @@ export const extractEngravingTextWithLLM = async (rawText) => {
   }
 
   try {
-    const model = new ChatGoogleGenerativeAI({
-      model: process.env.GEMINI_MODEL || "gemini-3.8-flash",
+    const model = createGeminiModel({
       temperature: 0,
-      apiKey: process.env.GOOGLE_API_KEY,
+      thinkingBudget: 0,
     });
 
     const prompt = [
@@ -426,12 +483,18 @@ export async function budgetAgentNode(state) {
   }
 
   const humanPhrases = [
+    "asesor",
+    "humano",
+    "operador",
     "hablar con un asesor",
     "hablar con una persona",
     "asesor humano",
     "operador humano",
     "atencion personalizada",
     "atencion humana",
+    "quiero un asesor",
+    "comunicame con un asesor",
+    "pasame con un asesor",
     "pasame con alguien",
     "pasame con un humano",
   ];
@@ -441,6 +504,7 @@ export async function budgetAgentNode(state) {
       humanHandoffReason: "Cliente solicitó asesor humano durante la cotización",
       intent: "human_handoff",
       activeAgent: null,
+      quoteContext: currentContext,
     };
   }
 
@@ -452,12 +516,6 @@ export async function budgetAgentNode(state) {
   const products = await getAvailableProducts();
   if (!products || products.length === 0) {
     const reason = "Catálogo de productos no disponible o vacío en Firestore";
-    await notifyAdminHandoffAlert({
-      userPhoneNumber: state.userPhoneNumber,
-      whatsappChatId: state.whatsappChatId,
-      pushname: state.pushname,
-      reason,
-    });
     return {
       messages: [
         new AIMessage(
@@ -467,6 +525,7 @@ export async function budgetAgentNode(state) {
       humanHandoffRequired: true,
       humanHandoffReason: reason,
       activeAgent: null,
+      quoteContext: currentContext,
     };
   }
 
@@ -484,12 +543,6 @@ export async function budgetAgentNode(state) {
       if (detectedQty && detectedQty > 100 && topMatches.length >= 1) {
         const matched = topMatches[0];
         const reason = `pedido corporativo de ${detectedQty} unidades de ${matched.name}`;
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: state.userPhoneNumber,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
         return {
           messages: [
             new AIMessage(
@@ -499,7 +552,12 @@ export async function budgetAgentNode(state) {
           humanHandoffRequired: true,
           humanHandoffReason: reason,
           activeAgent: null,
-          quoteContext: { reset: true },
+          quoteContext: {
+            ...currentContext,
+            selectedProductId: matched.id,
+            selectedProductName: matched.name,
+            quantity: detectedQty,
+          },
         };
       }
 
@@ -616,12 +674,6 @@ export async function budgetAgentNode(state) {
         const detectedQty = extractQuantity(rawText) || currentContext.detectedQuantity || null;
         if (detectedQty && detectedQty > 100) {
           const reason = `pedido corporativo de ${detectedQty} unidades de ${topMatches[0].name}`;
-          await notifyAdminHandoffAlert({
-            userPhoneNumber: state.userPhoneNumber,
-            whatsappChatId: state.whatsappChatId,
-            pushname: state.pushname,
-            reason,
-          });
           return {
             messages: [
               new AIMessage(
@@ -631,7 +683,12 @@ export async function budgetAgentNode(state) {
             humanHandoffRequired: true,
             humanHandoffReason: reason,
             activeAgent: null,
-            quoteContext: { reset: true },
+            quoteContext: {
+              ...currentContext,
+              selectedProductId: topMatches[0].id,
+              selectedProductName: topMatches[0].name,
+              quantity: detectedQty,
+            },
           };
         }
 
@@ -644,6 +701,7 @@ export async function budgetAgentNode(state) {
         return {
           messages: [new AIMessage(filterMessage)],
           activeAgent: "budget",
+          consecutiveMisunderstandings: 0,
           quoteContext: {
             ...currentContext,
             candidateProductIds: topMatches.map((p) => p.id),
@@ -659,10 +717,14 @@ export async function budgetAgentNode(state) {
       products.forEach((p, idx) => {
         retryMessage += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n`;
       });
-      return {
-        messages: [new AIMessage(retryMessage)],
-        activeAgent: "budget",
-      };
+      return handleMisunderstanding(state, {
+        isBudget: true,
+        promptStep: retryMessage,
+        promptStep2: `${retryMessage}\n💡 Podés escribir el número o nombre del producto, o enviar *"Asesor"* si preferís atención personalizada.`,
+        promptStep3: `${retryMessage}\n👉 Respondé con el número de la opción o escribí *"Asesor"* para comunicarte con nuestro equipo.`,
+        quoteContext: currentContext,
+        reason: "No se identificó el producto deseado tras 4 intentos en cotización",
+      });
     }
 
     // Producto seleccionado con éxito: evaluar si ya se indicó la cantidad
@@ -672,12 +734,6 @@ export async function budgetAgentNode(state) {
       // 1. Más de 100 unidades -> derivar a handoff con motivo corporativo
       if (detectedQty > 100) {
         const reason = `pedido corporativo de ${detectedQty} unidades de ${selectedProduct.name}`;
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: state.userPhoneNumber,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
         return {
           messages: [
             new AIMessage(
@@ -687,7 +743,12 @@ export async function budgetAgentNode(state) {
           humanHandoffRequired: true,
           humanHandoffReason: reason,
           activeAgent: null,
-          quoteContext: { reset: true },
+          quoteContext: {
+            ...currentContext,
+            selectedProductId: selectedProduct.id,
+            selectedProductName: selectedProduct.name,
+            quantity: detectedQty,
+          },
         };
       }
 
@@ -702,6 +763,7 @@ export async function budgetAgentNode(state) {
           return {
             messages: [new AIMessage(promptStock)],
             activeAgent: "budget",
+            consecutiveMisunderstandings: 0,
             quoteContext: {
               ...currentContext,
               selectedProductId: selectedProduct.id,
@@ -720,24 +782,41 @@ export async function budgetAgentNode(state) {
             },
           };
         } else {
-          const reason = `sin stock para ${selectedProduct.name}`;
-          await notifyAdminHandoffAlert({
-            userPhoneNumber: state.userPhoneNumber,
-            whatsappChatId: state.whatsappChatId,
-            pushname: state.pushname,
-            reason,
-          });
-          return {
-            messages: [
-              new AIMessage(
-                `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. Te comunicamos con un asesor para consultar tiempos de reposición o alternativas similares. 🧑‍💼`
-              ),
-            ],
-            humanHandoffRequired: true,
-            humanHandoffReason: reason,
-            activeAgent: null,
-            quoteContext: { reset: true },
-          };
+          const similar = findSimilarAvailableProducts(selectedProduct, products);
+          let msg = `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. 😔\n\n`;
+          if (similar.length > 0) {
+            msg += `Te podemos ofrecer estas alternativas disponibles:\n`;
+            similar.forEach((p, idx) => {
+              msg += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n`;
+            });
+            msg += `\n¿Te gustaría cotizar alguna de estas opciones? (Respondé con el número o nombre, o escribí *"Asesor"* para consultar con nuestro equipo).`;
+            return {
+              messages: [new AIMessage(msg)],
+              activeAgent: "budget",
+              consecutiveMisunderstandings: 0,
+              quoteContext: {
+                ...currentContext,
+                step: "product_selection",
+                candidateProductIds: similar.map((p) => p.id),
+                pendingProductConfirmation: null,
+                detectedQuantity: null,
+              },
+            };
+          } else {
+            msg += `En este momento no contamos con alternativas similares en stock. Podés consultar nuestro catálogo o escribir *"Asesor"* para hablar con nuestro equipo.`;
+            return {
+              messages: [new AIMessage(msg)],
+              activeAgent: "budget",
+              consecutiveMisunderstandings: 0,
+              quoteContext: {
+                ...currentContext,
+                step: "product_selection",
+                candidateProductIds: null,
+                pendingProductConfirmation: null,
+                detectedQuantity: null,
+              },
+            };
+          }
         }
       }
 
@@ -749,6 +828,7 @@ export async function budgetAgentNode(state) {
       return {
         messages: [new AIMessage(responseText)],
         activeAgent: "budget",
+        consecutiveMisunderstandings: 0,
         quoteContext: {
           ...currentContext,
           selectedProductId: selectedProduct.id,
@@ -775,6 +855,7 @@ export async function budgetAgentNode(state) {
     return {
       messages: [new AIMessage(askQuantityText)],
       activeAgent: "budget",
+      consecutiveMisunderstandings: 0,
       quoteContext: {
         ...currentContext,
         selectedProductId: selectedProduct.id,
@@ -810,6 +891,7 @@ export async function budgetAgentNode(state) {
         return {
           messages: [new AIMessage(responseText)],
           activeAgent: "budget",
+          consecutiveMisunderstandings: 0,
           quoteContext: {
             ...currentContext,
             quantity: availableStock,
@@ -821,12 +903,6 @@ export async function budgetAgentNode(state) {
         };
       } else if (normalizedText.includes("asesor") || normalizedText.includes("humano")) {
         const reason = `consulta por stock de ${requestedQty} unidades de ${selectedProduct.name} (disponible: ${availableStock})`;
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: state.userPhoneNumber,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
         return {
           messages: [
             new AIMessage(
@@ -836,7 +912,7 @@ export async function budgetAgentNode(state) {
           humanHandoffRequired: true,
           humanHandoffReason: reason,
           activeAgent: null,
-          quoteContext: { reset: true },
+          quoteContext: currentContext,
         };
       }
     }
@@ -844,12 +920,6 @@ export async function budgetAgentNode(state) {
     // B. Si el cliente pide asesor directamente
     if (normalizedText.includes("asesor") || normalizedText.includes("humano")) {
       const reason = `cliente solicitó asesor al definir cantidad para ${selectedProduct.name}`;
-      await notifyAdminHandoffAlert({
-        userPhoneNumber: state.userPhoneNumber,
-        whatsappChatId: state.whatsappChatId,
-        pushname: state.pushname,
-        reason,
-      });
       return {
         messages: [
           new AIMessage("Te comunico con un asesor de nuestro equipo para ayudarte. 🧑‍💼"),
@@ -857,30 +927,26 @@ export async function budgetAgentNode(state) {
         humanHandoffRequired: true,
         humanHandoffReason: reason,
         activeAgent: null,
-        quoteContext: { reset: true },
+        quoteContext: currentContext,
       };
     }
 
     // C. Parsear cantidad
     const qty = parseQuantity(rawText);
     if (!qty || qty <= 0) {
-      return {
-        messages: [
-          new AIMessage("Por favor indicá una cantidad válida entre 1 y 100 unidades (ejemplo: *1*, *2*, *5*)."),
-        ],
-        activeAgent: "budget",
-      };
+      return handleMisunderstanding(state, {
+        isBudget: true,
+        promptStep: "Por favor indicá una cantidad válida entre 1 y 100 unidades (ejemplo: *1*, *2*, *5*). 🔢",
+        promptStep2: "Por favor indicá una cantidad entre 1 y 100 unidades (ejemplo: *1*, *2*, *5*).\n\n💡 Podés escribir el número o enviar *\"Asesor\"* si preferís atención personalizada.",
+        promptStep3: "Seguimos necesitando la cantidad para tu pedido (ejemplo: *1*, *2*, *5*).\n\n👉 Indicá el número o escribí *\"Asesor\"* para comunicarte con nuestro equipo.",
+        quoteContext: currentContext,
+        reason: "No se pudo validar la cantidad solicitada tras varios intentos",
+      });
     }
 
     // D. Más de 100 unidades -> derivar a handoff con motivo corporativo
     if (qty > 100) {
       const reason = `pedido corporativo de ${qty} unidades de ${selectedProduct.name}`;
-      await notifyAdminHandoffAlert({
-        userPhoneNumber: state.userPhoneNumber,
-        whatsappChatId: state.whatsappChatId,
-        pushname: state.pushname,
-        reason,
-      });
       return {
         messages: [
           new AIMessage(
@@ -890,7 +956,10 @@ export async function budgetAgentNode(state) {
         humanHandoffRequired: true,
         humanHandoffReason: reason,
         activeAgent: null,
-        quoteContext: { reset: true },
+        quoteContext: {
+          ...currentContext,
+          quantity: qty,
+        },
       };
     }
 
@@ -905,6 +974,7 @@ export async function budgetAgentNode(state) {
         return {
           messages: [new AIMessage(promptStock)],
           activeAgent: "budget",
+          consecutiveMisunderstandings: 0,
           quoteContext: {
             ...currentContext,
             pendingStockAdjustment: {
@@ -914,24 +984,41 @@ export async function budgetAgentNode(state) {
           },
         };
       } else {
-        const reason = `sin stock para ${selectedProduct.name}`;
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: state.userPhoneNumber,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
-        return {
-          messages: [
-            new AIMessage(
-              `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. Te comunicamos con un asesor para consultar tiempos de reposición o alternativas similares. 🧑‍💼`
-            ),
-          ],
-          humanHandoffRequired: true,
-          humanHandoffReason: reason,
-          activeAgent: null,
-          quoteContext: { reset: true },
-        };
+        const similar = findSimilarAvailableProducts(selectedProduct, products);
+        let msg = `Por el momento el producto *${selectedProduct.name}* se encuentra sin stock disponible. 😔\n\n`;
+        if (similar.length > 0) {
+          msg += `Te podemos ofrecer estas alternativas disponibles:\n`;
+          similar.forEach((p, idx) => {
+            msg += `${idx + 1}. *${p.name}* (${p.price.toLocaleString()} Gs.)\n`;
+          });
+          msg += `\n¿Te gustaría cotizar alguna de estas opciones? (Respondé con el número o nombre, o escribí *"Asesor"* para consultar con nuestro equipo).`;
+          return {
+            messages: [new AIMessage(msg)],
+            activeAgent: "budget",
+            consecutiveMisunderstandings: 0,
+            quoteContext: {
+              ...currentContext,
+              step: "product_selection",
+              candidateProductIds: similar.map((p) => p.id),
+              pendingProductConfirmation: null,
+              detectedQuantity: null,
+            },
+          };
+        } else {
+          msg += `En este momento no contamos con alternativas similares en stock. Podés consultar nuestro catálogo o escribir *"Asesor"* para hablar con nuestro equipo.`;
+          return {
+            messages: [new AIMessage(msg)],
+            activeAgent: "budget",
+            consecutiveMisunderstandings: 0,
+            quoteContext: {
+              ...currentContext,
+              step: "product_selection",
+              candidateProductIds: null,
+              pendingProductConfirmation: null,
+              detectedQuantity: null,
+            },
+          };
+        }
       }
     }
 
@@ -943,6 +1030,7 @@ export async function budgetAgentNode(state) {
     return {
       messages: [new AIMessage(responseText)],
       activeAgent: "budget",
+      consecutiveMisunderstandings: 0,
       quoteContext: {
         ...currentContext,
         quantity: qty,
@@ -993,6 +1081,7 @@ export async function budgetAgentNode(state) {
         return {
           messages: [new AIMessage(packagingMessage)],
           activeAgent: "budget",
+          consecutiveMisunderstandings: 0,
           quoteContext: {
             ...currentContext,
             customizationDetails: finalCustomization,
@@ -1134,10 +1223,14 @@ export async function budgetAgentNode(state) {
         const priceText = price > 0 ? `+${price.toLocaleString()} Gs.` : "Incluido";
         retryMessage += `${idx + 1}. *${label}* (${priceText})\n`;
       });
-      return {
-        messages: [new AIMessage(retryMessage)],
-        activeAgent: "budget",
-      };
+      return handleMisunderstanding(state, {
+        isBudget: true,
+        promptStep: retryMessage,
+        promptStep2: `${retryMessage}\n💡 Podés responder con el número o nombre del empaque, o enviar *"Asesor"* si preferís atención personalizada.`,
+        promptStep3: `${retryMessage}\n👉 Indicá el número de la opción o escribí *"Asesor"* para comunicarte con nuestro equipo.`,
+        quoteContext: currentContext,
+        reason: "No se seleccionó una opción de empaque válida tras varios intentos",
+      });
     }
 
     // Si el usuario especificó una cantidad diferente en este turno
@@ -1166,6 +1259,7 @@ export async function budgetAgentNode(state) {
     return {
       messages: [new AIMessage(quoteSummary)],
       activeAgent: "budget",
+      consecutiveMisunderstandings: 0,
       quoteContext: {
         selectedPackaging: selectedPkg,
         quantity: finalQuantity,
@@ -1195,14 +1289,14 @@ export async function budgetAgentNode(state) {
     // 4.1 Nombre completo
     if (subStep === "name") {
       if (rawText.length < 2) {
-        return {
-          messages: [
-            new AIMessage(
-              "Por favor indicá el nombre y apellido completo de quien recibirá el pedido. 😊"
-            ),
-          ],
-          activeAgent: "budget",
-        };
+        return handleMisunderstanding(state, {
+          isBudget: true,
+          promptStep: "Por favor indicá el nombre y apellido completo de quien recibirá el pedido (ej. *Juan Pérez*). 😊",
+          promptStep2: "Necesitamos el nombre de quien recibirá el paquete (ej. *Juan Pérez*).\n\n💡 Podés escribir el nombre o enviar *\"Asesor\"* si preferís hablar con nuestro equipo.",
+          promptStep3: "Por favor indicá el nombre del destinatario (ej. *Juan Pérez*) o escribí *\"Asesor\"* para comunicarte con nuestro equipo.",
+          quoteContext: currentContext,
+          reason: "No se proporcionó un nombre válido tras varios intentos",
+        });
       }
 
       const recipientName = rawText;
@@ -1213,6 +1307,7 @@ export async function budgetAgentNode(state) {
           ),
         ],
         activeAgent: "budget",
+        consecutiveMisunderstandings: 0,
         quoteContext: {
           shippingStep: "city",
           shippingAddress: {
@@ -1226,14 +1321,14 @@ export async function budgetAgentNode(state) {
     // 4.2 Ciudad y departamento
     if (subStep === "city") {
       if (rawText.length < 3) {
-        return {
-          messages: [
-            new AIMessage(
-              "Por favor indicá la ciudad y el departamento de entrega para coordinar el delivery correctamente. 🏙️"
-            ),
-          ],
-          activeAgent: "budget",
-        };
+        return handleMisunderstanding(state, {
+          isBudget: true,
+          promptStep: "Por favor indicá la ciudad y el departamento de entrega para coordinar el delivery correctamente (ej. *Minga Guazú, Alto Paraná* o *Asunción, Central*). 🏙️",
+          promptStep2: "Necesitamos la ciudad de entrega (ej. *Minga Guazú, Alto Paraná*).\n\n💡 Escribí la ciudad o enviá *\"Asesor\"* para asistencia directa.",
+          promptStep3: "Seguimos necesitando la ciudad de entrega. Respondé con la ciudad o escribí *\"Asesor\"* para comunicarte con un miembro de nuestro equipo.",
+          quoteContext: currentContext,
+          reason: "No se proporcionó una ciudad válida tras varios intentos",
+        });
       }
 
       const parts = rawText.split(/[,/-]/).map((s) => s.trim()).filter(Boolean);
@@ -1247,6 +1342,7 @@ export async function budgetAgentNode(state) {
           ),
         ],
         activeAgent: "budget",
+        consecutiveMisunderstandings: 0,
         quoteContext: {
           shippingStep: "street",
           shippingAddress: {
@@ -1261,14 +1357,14 @@ export async function budgetAgentNode(state) {
     // 4.3 Dirección exacta / calle y referencias
     if (subStep === "street") {
       if (rawText.length < 3) {
-        return {
-          messages: [
-            new AIMessage(
-              "Por favor indicanos la calle o referencias de tu casa o lugar de entrega. 📍"
-            ),
-          ],
-          activeAgent: "budget",
-        };
+        return handleMisunderstanding(state, {
+          isBudget: true,
+          promptStep: "Por favor indicanos la calle, número de casa o referencias de entrega (ej. *Calle 14 casi Av. San Martín*). 📍",
+          promptStep2: "Necesitamos la dirección o referencia para el repartidor (ej. *Calle 14 casi Av. San Martín*).\n\n💡 Escribí la dirección o enviá *\"Asesor\"* si preferís ayuda de un asesor.",
+          promptStep3: "Por favor indicá la dirección exacta o escribí *\"Asesor\"* para que nuestro equipo tome tus datos directamente.",
+          quoteContext: currentContext,
+          reason: "No se proporcionó una dirección válida tras varios intentos",
+        });
       }
 
       const street = rawText;
@@ -1293,6 +1389,7 @@ export async function budgetAgentNode(state) {
             ),
           ],
           activeAgent: "budget",
+          consecutiveMisunderstandings: 0,
           quoteContext: {
             shippingAddress: updatedShippingAddress,
             shippingStep: "phone",
@@ -1309,6 +1406,7 @@ export async function budgetAgentNode(state) {
       return {
         messages: [new AIMessage(confirmPrompt)],
         activeAgent: "budget",
+        consecutiveMisunderstandings: 0,
         quoteContext: {
           shippingAddress: updatedShippingAddress,
           shippingStep: null,
@@ -1321,45 +1419,14 @@ export async function budgetAgentNode(state) {
     if (subStep === "phone") {
       const normalizedPhone = normalizeParaguayanPhone(rawText);
       if (!normalizedPhone) {
-        const attempts = (currentContext.invalidPhoneAttempts || 0) + 1;
-        if (attempts >= 3) {
-          const reason = "Dificultad al registrar número de teléfono (3 intentos fallidos)";
-          console.log(`⚠️ Cliente superó límite de 3 intentos fallidos ingresando teléfono. Derivando a HumanHandoff.`);
-          await notifyAdminHandoffAlert({
-            userPhoneNumber: state.userPhoneNumber,
-            whatsappChatId: state.whatsappChatId,
-            pushname: state.pushname,
-            reason,
-          });
-
-          const handoffMsg =
-            "Veo que tenemos dificultades para registrar tu número de teléfono. 👤\n\n" +
-            "Te transfiero con un asesor humano de nuestro equipo para asistirte con la orden y coordinar los datos personalmente. ¡En breve te escriben por este chat! ✨";
-          return {
-            messages: [new AIMessage(handoffMsg)],
-            humanHandoffRequired: true,
-            humanHandoffReason: reason,
-            intent: "human_handoff",
-            activeAgent: null,
-            quoteContext: {
-              ...currentContext,
-              invalidPhoneAttempts: attempts,
-            },
-          };
-        }
-
-        return {
-          messages: [
-            new AIMessage(
-              "El número ingresado no parece ser un número de teléfono válido de Paraguay. Por favor ingresá un número paraguayo de contacto (ej. _0981 123456_ o _595981123456_): 📱"
-            ),
-          ],
-          activeAgent: "budget",
-          quoteContext: {
-            ...currentContext,
-            invalidPhoneAttempts: attempts,
-          },
-        };
+        return handleMisunderstanding(state, {
+          isBudget: true,
+          promptStep: "El número ingresado no parece ser un número de teléfono válido de Paraguay. Por favor ingresá un número paraguayo de contacto (ej. _0981 123456_ o _595981123456_): 📱",
+          promptStep2: "Por favor ingresá un número de contacto válido de Paraguay (ej. *0981 123456*).\n\n💡 Escribí tu número o enviá *\"Asesor\"* si preferís hablar con nuestro equipo.",
+          promptStep3: "Seguimos necesitando un número de contacto paraguayo válido (ej. *0981 123456*).\n\n👉 Respondé con tu número o escribí *\"Asesor\"* para que un asesor te asista directamente.",
+          quoteContext: currentContext,
+          reason: "Dificultad al registrar número de teléfono de Paraguay tras varios intentos",
+        });
       }
 
       const finalShippingAddress = {
@@ -1383,11 +1450,11 @@ export async function budgetAgentNode(state) {
         messages: [new AIMessage(confirmPrompt)],
         activeAgent: "budget",
         userPhoneNumber: normalizedPhone,
+        consecutiveMisunderstandings: 0,
         quoteContext: {
           shippingAddress: finalShippingAddress,
           shippingStep: null,
           step: "confirmation",
-          invalidPhoneAttempts: 0,
         },
       };
     }
@@ -1478,6 +1545,7 @@ export async function budgetAgentNode(state) {
           return {
             messages: [new AIMessage(successMessage)],
             activeAgent: null,
+            consecutiveMisunderstandings: 0,
             quoteContext: { reset: true },
           };
         } else {
@@ -1492,18 +1560,13 @@ export async function budgetAgentNode(state) {
           return {
             messages: [new AIMessage(pendingPdfMessage)],
             activeAgent: null,
+            consecutiveMisunderstandings: 0,
             quoteContext: { reset: true },
           };
         }
       } catch (orderErr) {
         console.error("❌ Error emitiendo pedido en BudgetAgent:", orderErr);
         const reason = `Fallo al emitir pedido: ${orderErr.message}`;
-        await notifyAdminHandoffAlert({
-          userPhoneNumber: state.userPhoneNumber,
-          whatsappChatId: state.whatsappChatId,
-          pushname: state.pushname,
-          reason,
-        });
         const errorMessage =
           "Hubo un inconveniente al generar tu orden. Un asesor de nuestro equipo se comunicará contigo enseguida para finalizar tu pedido.";
         return {
@@ -1511,19 +1574,20 @@ export async function budgetAgentNode(state) {
           humanHandoffRequired: true,
           humanHandoffReason: reason,
           activeAgent: null,
+          quoteContext: currentContext,
         };
       }
     }
 
     // Si no es confirmación afirmativa ni cancelación, repreguntar
-    const reconfirmMessage =
-      `Para emitir tu pedido necesitamos tu confirmación final.\n\n` +
-      `¿Deseas confirmar la compra por *${(currentContext.total || 0).toLocaleString()} Gs.*? Respondé *"Sí, confirmo"* para emitir el comprobante, o *"Cancelar"* para anular.`;
-
-    return {
-      messages: [new AIMessage(reconfirmMessage)],
-      activeAgent: "budget",
-    };
+    return handleMisunderstanding(state, {
+      isBudget: true,
+      promptStep: `Para emitir tu pedido necesitamos tu confirmación final.\n\n¿Deseas confirmar la compra por *${(currentContext.total || 0).toLocaleString()} Gs.*? Respondé *"Sí, confirmo"* para emitir el comprobante, o *"Cancelar"* para anular.`,
+      promptStep2: `Para emitir tu pedido necesitamos tu confirmación final por *${(currentContext.total || 0).toLocaleString()} Gs.*.\n\n💡 Respondé *"Sí, confirmo"*, *"Cancelar"*, o escribí *"Asesor"* para hablar con nuestro equipo.`,
+      promptStep3: `Seguimos esperando tu confirmación para el pedido de *${(currentContext.total || 0).toLocaleString()} Gs.*.\n\n👉 Respondé *"Sí, confirmo"*, o escribí *"Asesor"* si necesitás ayuda.`,
+      quoteContext: currentContext,
+      reason: "No se confirmó la orden tras varios intentos",
+    });
   }
 
   // Fallback de seguridad

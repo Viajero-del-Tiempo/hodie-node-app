@@ -284,7 +284,7 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
   return "";
 };
 
-whatsappClient.on("message", async (mensaje) => {
+export const handleIncomingWhatsAppMessage = async (mensaje) => {
   // Ignorar mensajes enviados por el propio bot (fromMe)
   if (mensaje.fromMe) return;
 
@@ -430,19 +430,55 @@ whatsappClient.on("message", async (mensaje) => {
       const threadId = whatsappChatId;
 
       try {
+        const config = {
+          configurable: {
+            thread_id: threadId,
+          },
+          signal,
+        };
+
+        // Verificación de corte de sesión por inactividad (> 6 horas)
+        let sessionReset = {};
+        const now = Date.now();
+        const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+        let previousState = null;
+
+        try {
+          previousState = await compiledGraph.getState(config);
+          const hasHistory = Boolean(previousState?.config?.configurable?.checkpoint_id);
+          const isHandoffActive = Boolean(previousState?.values?.humanHandoffRequired);
+
+          // Si el hilo tiene historial previo y NO está en handoff activo
+          // (los handoffs solo los reactiva el admin manualmente desde el panel)
+          if (hasHistory && !isHandoffActive) {
+            const lastActivity = previousState.values?.lastActivityTimestamp;
+            if (lastActivity && now - lastActivity > SIX_HOURS_MS) {
+              console.log(
+                `⏱️ [SESIÓN NUEVA] Inactividad > 6h (${Math.round((now - lastActivity) / 3600000)}h) para ${threadId}. Iniciando sesión nueva limpia.`
+              );
+              sessionReset = {
+                activeAgent: null,
+                intent: null,
+                quoteContext: { reset: true },
+                consecutiveMisunderstandings: 0,
+                sessionStartTime: now,
+                sessionCutoffTime: now,
+                sessionCutoffMessageCount: (previousState.values?.messages || []).length,
+              };
+            }
+          }
+        } catch (stateErr) {
+          console.warn(`⚠️ Error consultando estado previo para hilo ${threadId}:`, stateErr.message);
+        }
+
         const inputState = {
           messages: [new HumanMessage(userText)],
           ...(userPhoneNumber ? { userPhoneNumber } : {}),
           whatsappChatId,
           pushname,
           incomingMedia,
-        };
-
-        const config = {
-          configurable: {
-            thread_id: threadId,
-          },
-          signal,
+          lastActivityTimestamp: now,
+          ...sessionReset,
         };
 
         const finalState = await compiledGraph.invoke(inputState, config);
@@ -451,6 +487,43 @@ whatsappClient.on("message", async (mensaje) => {
         if (signal.aborted) {
           console.log(`🛑 Tarea abortada para ${whatsappChatId}. Omitiendo envío de respuesta tardía.`);
           return;
+        }
+
+        // Observabilidad requerida (Punto 10):
+        // 🧭 [thread] intent=<intent> agente=<agente> derivar=<si|no> motivo="<motivo>"
+        const intentLogged = finalState.intent || "none";
+        let agentLogged = "none";
+        if (finalState.activeAgent === "budget" || finalState.intent === "budget_quote") {
+          agentLogged = "budget";
+        } else if (finalState.humanHandoffRequired && (finalState.intent === "human_handoff" || !finalState.activeAgent)) {
+          agentLogged = "handoff";
+        } else if (["customer_support", "payment_proof", "order_status", "ambiguous_media"].includes(finalState.intent)) {
+          agentLogged = "support";
+        } else if (finalState.humanHandoffRequired) {
+          agentLogged = "handoff";
+        }
+        const derivarLogged = finalState.humanHandoffRequired ? "si" : "no";
+        const motivoLogged = finalState.humanHandoffReason || "";
+        console.log(`🧭 [${threadId}] intent=${intentLogged} agente=${agentLogged} derivar=${derivarLogged} motivo="${motivoLogged}"`);
+
+        // Garantía de alerta al admin en toda transición de NO DERIVADO a DERIVADO (Punto 9)
+        const wasHandoff = Boolean(previousState?.values?.humanHandoffRequired);
+        const isHandoffNow = Boolean(finalState.humanHandoffRequired);
+
+        if (!wasHandoff && isHandoffNow) {
+          try {
+            const { notifyAdminHandoffAlert } = await import("../agents/nodes/handoff.node.js");
+            await notifyAdminHandoffAlert({
+              userPhoneNumber: finalState.userPhoneNumber || userPhoneNumber,
+              whatsappChatId: finalState.whatsappChatId || whatsappChatId,
+              pushname: finalState.pushname || pushname,
+              reason: finalState.humanHandoffReason,
+              quoteContext: finalState.quoteContext,
+              state: finalState,
+            });
+          } catch (alertErr) {
+            console.error("🚨 Error ejecutando alerta de handoff garantizada:", alertErr.message);
+          }
         }
 
         // 8. Índice handoff_threads: si finalState.humanHandoffRequired es true, upsert en Firestore
@@ -501,7 +574,7 @@ whatsappClient.on("message", async (mensaje) => {
 
           if (responseText && responseText.trim()) {
             await whatsappClient.sendMessage(whatsappChatId, responseText, {
-              quotedMessageId: mensaje.id._serialized,
+              quotedMessageId: mensaje.id?._serialized,
               sendSeen: false,
             });
             console.log(`📤 Respuesta enviada a ${whatsappChatId}`);
@@ -523,7 +596,7 @@ whatsappClient.on("message", async (mensaje) => {
             "Disculpá las molestias, tuvimos un inconveniente técnico momentáneo. 🛠️\n" +
             "Ya notificamos a nuestro equipo para atenderte a la brevedad.";
           await whatsappClient.sendMessage(whatsappChatId, clientFallback, {
-            quotedMessageId: mensaje.id._serialized,
+            quotedMessageId: mensaje.id?._serialized,
             sendSeen: false,
           });
         } catch (clientErr) {
@@ -557,7 +630,9 @@ whatsappClient.on("message", async (mensaje) => {
       console.error(`❌ Error en cola para ${whatsappChatId}:`, queueErr);
     }
   }
-});
+};
+
+whatsappClient.on("message", handleIncomingWhatsAppMessage);
 
 export const initializeWhatsapp = async () => {
   try {
