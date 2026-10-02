@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "postinstall": "patch-package",
-    "test:unit": "ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_budget_agent_v2.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_handoff_alert_transition.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_lid_resolution.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_order_pdf_decoupling.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_order_security.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_whatsapp_chat_id.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_multi_agent_graph.js && ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_bot_resume_and_filters.js",
+    "test:unit": "node test/run-unit.js",
+    "test:integration": "ALLOW_PROD_FIRESTORE_TESTS=1 node --test test/test_catalog_crud.js test/test_catalog_admin_api.js test/test_order_variant_orders.js test/test_order_variant_transactions.js",
     "test:llm": "ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_llm_smoke.js",
     "test:all": "npm run test:unit && npm run test:llm"
   },

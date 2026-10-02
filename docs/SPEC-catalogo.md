@@ -6,7 +6,7 @@ Oct 1, 2026 · @Arnaldo
 
 Esta fase reemplaza el catálogo actual (un documento por color) por un modelo de productos con variantes, categorías y datos estructurados. Los productos actuales no se migran: el dueño los vuelve a cargar desde el panel admin con el modelo nuevo. Es la base del agente conversacional nuevo, que se construye en fases posteriores.
 
-**Regla de oro:** agregar un producto desde el panel admin tiene que alcanzar para que la tienda web y el bot lo conozcan, sin tocar código ni prompts. Ningún nombre de producto, categoría, color o tipo de empaque puede estar escrito en el código.
+**Regla de oro:** agregar un producto desde el panel admin tiene que alcanzar para que la tienda web y el bot lo conozcan, sin tocar código ni prompts. Ningún nombre de producto, categoría, color o tipo de empaque puede estar escrito en el código productivo (`src/`). Los tests pueden usar nombres y datos ficticios, independientes de los documentos del proyecto y del catálogo real.
 
 Alcance: modelo de datos en Firestore, puesta en marcha sin migración, backend (precios, stock, panel admin, servicio de catálogo con búsqueda) y frontend (tienda, carrito, checkout y panel admin).
 
@@ -199,14 +199,21 @@ El CRUD viejo de productos mantiene su comportamiento en la entrega 1 y solo inc
 - Cada ítem recibido trae `productId`, `variantId`, `quantity`, `packagingType` y personalización. Cualquier precio que venga del cliente se ignora, como hoy.
 - El precio sale de la variante; el del empaque, de `packagingOptions` del producto. Si el `type` no existe en ese producto, error 400.
 - Rechaza variantes o productos inactivos, y cantidades fuera de 1 a 100.
+- Comprueba el stock actual de la variante con una lectura directa, sin caché: suma las líneas repetidas de la misma pareja `productId`/`variantId` y devuelve 400 si el total solicitado supera el stock. El mensaje identifica la variante y cuántas unidades hay disponibles. No reserva ni descuenta unidades al crear el pedido; vuelve a comprobarlas al confirmar el pago.
 - Arma la foto del ítem (`productName`, `variantLabel`, `sku`, `price`) descrita en el modelo de datos.
+- Reprocesar un ID ya persistido conserva esa foto, sus totales, estado, número y fecha originales, sin volver a cotizar. La creación usa `create`, sin sobrescribir un documento existente. Los errores de persistencia impiden emitir un comprobante de un pedido que no se guardó; los errores de PDF posteriores no revierten el pedido.
 - La misma función la usan el checkout web y el bot.
+
+**Compatibilidad temporal hasta la entrega 6:** el CRUD de productos continúa guardando el modelo viejo hasta su reemplazo en la entrega 5. Para esos documentos (sin `schemaVersion` o con versión 1), el pricing acepta ítems sin `variantId`, lee precio/SKU raíz y empaques de `packagingPrices`/`packagingImages`. Los tipos salen de las claves reales del documento; no hay lista ni nombres de empaques fijos. Si el cliente envía solo un nombre descriptivo, se acepta únicamente si identifica sin ambigüedad una clave mediante sus palabras; nombres que no contienen esa clave se rechazan. El nombre guardado es la clave, porque el modelo viejo no guarda un nombre comercial. Esta compatibilidad y la consulta de SKU raíz se eliminan en la entrega 6, antes del deploy conjunto. Un producto de versión 2 siempre exige `variantId`: no se adapta ni se elige una variante automáticamente. La advertencia para pedidos históricos sin `variantId` permanece después de ese retiro.
 
 ### Stock
 
 - `deductStockInTransaction` y `restoreStockInTransaction` operan sobre la variante: leen el producto en la transacción, modifican el stock de esa variante dentro del arreglo `variants` y lo guardan.
 - Los ítems sin `variantId` (pedidos anteriores al cambio) no tocan stock: el cambio de estado se guarda y el panel muestra un aviso.
 - La máquina de estados de pedidos del panel no cambia: descuenta al pasar a pagado y restituye al cancelar.
+- El estado del pedido y los stocks se escriben en la misma transacción. Se lee el pedido dentro de ella, se agrupan cantidades por producto/variante y se leen todos los productos antes de escribir. Cada producto se actualiza una vez, preservando las demás variantes y el stock raíz. Un faltante o referencia inválida revierte toda la transición. Firestore reintenta ante conflictos: dos pedidos no pueden gastar la misma última unidad y repetir pago/cancelación no mueve stock dos veces.
+- Se mantienen los estados comprometidos actuales (`paid`, `preparing`, `shipped`, `delivered`), la restitución al volver a `pending` y el bloqueo de reactivar un cancelado. Restaurar permite variantes o productos desactivados; una referencia de variante inexistente falla sin usar el stock raíz.
+- La API agrega `stockWarnings` al listado, detalle y respuesta de estado. El mensaje de respuesta incluye el aviso que ya muestra el panel. Un ítem histórico se omite sin leer su producto; en pedidos mixtos se procesan solo las variantes identificadas. La caché se invalida y WhatsApp se notifica después del commit; repetir el mismo estado no vuelve a notificar.
 
 ### Panel admin (API)
 
@@ -281,6 +288,8 @@ La fase está terminada cuando todos estos puntos se verifican con salidas que c
 - [ ] Pasar un pedido nuevo a pagado descuenta el stock de su variante, y cancelarlo lo restituye.
 - [ ] Cambiar el estado de un pedido viejo no toca stock y muestra el aviso.
 - [ ] El checkout ignora precios manipulados en el body y rechaza variantes inactivas y empaques que el producto no tiene.
+- [ ] Crear un pedido con líneas repetidas que superan el stock devuelve 400 indicando variante y unidades disponibles, sin guardar pedido ni reservar stock.
+- [ ] Dos pagos simultáneos por la última unidad dejan un pedido pagado y el otro pendiente; repetir el pago o la cancelación de un mismo pedido mueve stock una sola vez.
 
 ### Tienda, panel y bot
 
@@ -292,7 +301,9 @@ La fase está terminada cuando todos estos puntos se verifican con salidas que c
 ### Cómo se prueban
 
 - Los tests nuevos van en `test/`, con sus propios datos (prefijo `test-`), limpieza en `finally` y la protección `ALLOW_PROD_FIRESTORE_TESTS`.
-- En la entrega 1, búsqueda, validación y caché se prueban en memoria sin cargar Firebase. Los tests de CRUD y API usan el emulador si está configurado; sin emulador requieren `ALLOW_PROD_FIRESTORE_TESTS=1` antes de importar el SDK o la configuración. Registran únicamente IDs de su propia ejecución y limpian en `finally`, sin barridos generales. El caso de consulta parcial solicitado obtiene los nombres del ejemplo de este documento en tiempo de ejecución, sin escribirlos en el código del test.
+- En la entrega 1, búsqueda, validación y caché se prueban en memoria sin cargar Firebase. Los tests de CRUD y API usan el emulador si está configurado; sin emulador requieren `ALLOW_PROD_FIRESTORE_TESTS=1` antes de importar el SDK o la configuración. Registran únicamente IDs de su propia ejecución y limpian en `finally`, sin barridos generales. El caso de consulta parcial usa datos ficticios en `test/`, sin leer esta especificación en tiempo de ejecución.
+- Los tres tests de catálogo en memoria están incluidos en `npm run test:unit`, junto con los tests preexistentes de ese script. Los de CRUD y API se ejecutan con `npm run test:integration`, que establece `ALLOW_PROD_FIRESTORE_TESTS=1`. Los tests preexistentes de `test:unit` conservan sus protecciones y pueden acceder a Firestore.
+- Entrega 2: `test_order_variant_pricing.js` y `test_order_variant_stock.js` se agregan a `test:unit` y usan memoria, sin Firebase. `test_order_variant_orders.js` y `test_order_variant_transactions.js` se agregan a `test:integration`: guardia antes de cargar Firebase, datos ficticios `test-` por ejecución y limpieza en `finally`. Prueban persistencia/API, snapshots y concurrencia real de Firestore; no envían WhatsApp, no invocan LLM ni modifican `counters/orderNumber`. La API usa los middlewares y el controlador reales, con IDs/números de test asignados por un doble del servidor y entrega PDF simulada.
 - Los scripts de migración se prueban primero contra un proyecto de Firebase de prueba o el emulador, nunca directo en producción.
 
 ## Fuera de alcance
@@ -314,6 +325,7 @@ La fase se implementa en entregas chicas, una por vez, y cada una se aprueba ant
 4. Tienda: listado, detalle, carrito y checkout.
 5. Panel admin: productos, categorías y políticas.
 6. Puesta en marcha: backup, borrado de productos viejos, deploy, carga manual y verificación.
+   - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
 
 En cada entrega:
 

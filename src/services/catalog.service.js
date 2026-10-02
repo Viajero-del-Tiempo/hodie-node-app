@@ -71,6 +71,15 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
 
   return {
     invalidateCache,
+    // Lectura interna fresca: incluye documentos viejos/inactivos para validarlos
+    // explícitamente y permite usar la misma transacción que el pedido.
+    async getProductForPricing(id, options = {}) {
+      return clone(await repository.getProduct(id, options));
+    },
+    async getCategoryForPricing(id) {
+      return clone(await repository.getCategory(id));
+    },
+    setProductVariants: (transaction, id, variants) => repository.setProductVariants(transaction, id, variants),
     async getCategories() {
       return clone((await snapshot()).categories.filter(category => category.active === true).sort(categoryOrder));
     },
@@ -169,6 +178,7 @@ export const getCategories = async () => (await getDefaultService()).getCategori
 export const getProduct = async productId => (await getDefaultService()).getProduct(productId);
 export const searchProducts = async input => (await getDefaultService()).searchProducts(input);
 export const catalogService = Object.fromEntries([
+  "getProductForPricing", "getCategoryForPricing", "setProductVariants",
   "getCategories", "getProduct", "searchProducts", "listCategories", "getCategory", "listPolicies", "getPolicy",
   "validateProduct", "createCategory", "updateCategory", "deactivateCategory", "createPolicy", "updatePolicy", "deletePolicy",
 ].map(method => [method, async (...args) => (await getDefaultService())[method](...args)]));

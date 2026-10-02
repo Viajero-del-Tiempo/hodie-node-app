@@ -26,13 +26,26 @@ export function createCatalogRepository(db, { timestampNow }) {
       return { categories: fromSnapshot(categories), products: fromSnapshot(products), policies: fromSnapshot(policies) };
     },
 
-    async getCategory(id) {
-      return fromDocument(await db.collection("categories").doc(validateDocumentId(id)).get());
+    async getCategory(id, { transaction } = {}) {
+      const ref = db.collection("categories").doc(validateDocumentId(id));
+      return fromDocument(await (transaction ? transaction.get(ref) : ref.get()));
+    },
+
+    async getProduct(id, { transaction } = {}) {
+      const ref = db.collection("products").doc(validateDocumentId(id, "productId"));
+      return fromDocument(await (transaction ? transaction.get(ref) : ref.get()));
+    },
+
+    setProductVariants(transaction, id, variants) {
+      transaction.update(db.collection("products").doc(validateDocumentId(id, "productId")), {
+        variants, updatedAt: timestampNow(),
+      });
     },
 
     async findSkuConflict(sku, excludedProductId) {
       // Dos resultados alcanzan para descartar el propio producto sin ocultar otro.
-      // La segunda consulta cubre el SKU raíz del esquema viejo, sin backfill.
+      // TEMPORAL hasta entrega 6: la segunda consulta cubre el SKU raíz viejo,
+      // sin backfill. Se retira al eliminar esos productos en la puesta en marcha.
       const [current, legacy] = await Promise.all([
         db.collection("products").where("skus", "array-contains", sku).limit(2).get(),
         db.collection("products").where("sku", "==", sku).limit(2).get(),

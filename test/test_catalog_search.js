@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getQueryTerms, normalizeSearchText, matchSearchTerm, tokenizeSearchText } from "../src/utils/catalog-search.util.js";
-import { categoryFixture, productFixture, memoryCatalog, documentedSearchExample, testId } from "./helpers/catalog-fixtures.js";
+import { categoryFixture, productFixture, memoryCatalog, syntheticSearchExample, testId } from "./helpers/catalog-fixtures.js";
 
 test("normaliza acentos, diéresis, Unicode, puntuación y mayúsculas preservando ñ", () => {
   assert.equal(normalizeSearchText(" ÁÉÍÓÚ, Ü; Ñ "), "aeiou u ñ");
@@ -20,8 +20,8 @@ test("plurales regulares funcionan en ambas direcciones sin diccionario del cat�
   assert.equal(matchSearchTerm("mes", ["m"]), 0);
 });
 
-test("consulta documental devuelve coincidencia parcial sin etiqueta del destinatario", async () => {
-  const example = documentedSearchExample();
+test("consulta con datos ficticios devuelve coincidencia parcial sin etiqueta del destinatario", async () => {
+  const example = syntheticSearchExample();
   const category = categoryFixture();
   const partial = productFixture(category.id, {
     name: example.productName, tags: [], optionNames: [example.optionName],
@@ -31,8 +31,8 @@ test("consulta documental devuelve coincidencia parcial sin etiqueta del destina
   const { service } = memoryCatalog({ categories: [category], products: [partial, complete] });
   const results = await service.searchProducts({ query: example.query });
   assert.deepEqual(results.map(product => product.id), [complete.id, partial.id]);
-  assert.equal(results[0].matchedTerms.length, 3);
-  assert.deepEqual(results[1].matchedTerms, getQueryTerms(example.query).slice(0, 2));
+  assert.equal(results[0].matchedTerms.length, 4);
+  assert.deepEqual(results[1].matchedTerms, ["producto", "alfa", "negro"]);
   assert.equal(results[1].variants[0].available, false);
   assert.equal(results[1].variants[0].price, 1);
 });

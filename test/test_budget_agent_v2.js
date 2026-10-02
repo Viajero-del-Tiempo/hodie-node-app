@@ -186,6 +186,8 @@ async function runTests() {
     ];
 
     const originalCollection = db.collection.bind(db);
+    const originalRunTransaction = db.runTransaction.bind(db);
+    const mockOrders = new Map();
     db.collection = (colName) => {
       if (colName === "products") {
         return {
@@ -210,10 +212,32 @@ async function runTests() {
       if (colName === "orders") {
         return {
           doc: (id) => ({
-            set: async (data) => {
+            id,
+            get: async () => ({
+              id,
+              exists: mockOrders.has(id),
+              data: () => mockOrders.get(id),
+            }),
+            create: async (data) => {
+              if (mockOrders.has(id)) {
+                const error = new Error("El pedido simulado ya existe");
+                error.code = 6;
+                throw error;
+              }
+              mockOrders.set(id, { ...data });
+              return { id, ...data };
+            },
+            set: async (data, options = {}) => {
+              mockOrders.set(id, options.merge ? { ...mockOrders.get(id), ...data } : { ...data });
               return { id, ...data };
             },
             update: async (data) => {
+              if (!mockOrders.has(id)) {
+                const error = new Error("El pedido simulado no existe");
+                error.code = 5;
+                throw error;
+              }
+              mockOrders.set(id, { ...mockOrders.get(id), ...data });
               return { id, ...data };
             },
           }),
@@ -372,6 +396,7 @@ async function runTests() {
       );
     } finally {
       db.collection = originalCollection;
+      db.runTransaction = originalRunTransaction;
     }
   }
 

@@ -192,9 +192,103 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   de `test/helpers/`. Los tres primeros son en memoria. Los dos últimos
   admiten emulador; sin emulador exigen `ALLOW_PROD_FIRESTORE_TESTS=1`
   antes de cargar Firebase. IDs por ejecución con prefijo `test-`, limpieza
-  en `finally`, sin barridos ni escrituras sobre datos reales. Los nombres
-  del caso documental de búsqueda se leen de SPEC en runtime. No se
+  en `finally`, sin barridos ni escrituras sobre datos reales. El caso de
+  búsqueda usa datos ficticios en `test/`, sin leer SPEC en runtime. No se
   invoca el LLM ni se inicializa WhatsApp en los tests nuevos.
-- No se cambian dependencias ni `package.json`. El dueño ejecuta los
+- Ajustes aprobados el 2 de octubre de 2026: la regla de oro sobre nombres
+  aplica a `src/`; los tests pueden usar datos ficticios independientes
+  de los documentos. Los tres tests de catálogo en memoria se agregan
+  a `test:unit`, conservando los tests preexistentes. Los de CRUD y API
+  se agregan a `test:integration` con `ALLOW_PROD_FIRESTORE_TESTS=1`.
+  Los tests preexistentes de `test:unit` pueden acceder a Firestore.
+- No se cambian dependencias. El dueño ejecuta los
   tests, `git diff --stat` y `git diff`; el asistente no afirma resultados
   sin salida real de consola. No se hace commit, push ni deploy.
+
+# DECISIONES DE CATÁLOGO — ENTREGA 2 (2 de octubre de 2026)
+
+- Alcance: precios y stock por variante, whitelist del checkout y snapshots
+  de pedidos. Sin cambios de tienda, UI admin, CRUD de productos ni bot.
+- `order-pricing.service.js` valida con el catálogo inyectado. El servicio
+  de catálogo agrega lecturas internas directas (sin caché), incluyendo
+  documentos inactivos/viejos para validarlos explícitamente. La interfaz
+  pública de catálogo sigue mostrando únicamente el modelo nuevo.
+- Producto, categoría y variante deben estar activos para crear un ítem
+  nuevo de versión 2. Cantidad entera estricta de 1 a 100; precio de variante
+  y empaque del documento, nunca del body ni de `priceFrom`. Empaque estándar
+  gratuito se guarda como `null`. Los tipos son libres y se validan contra
+  `packagingOptions` de ese producto. Personalización respeta `allowed`,
+  `allowsText`, `maxChars` y `allowsImage`, con banderas pendientes derivadas.
+- Antes de guardar el pedido se suma la cantidad de líneas repetidas por
+  producto/variante y se compara con stock fresco. Un faltante devuelve 400
+  con variante/SKU y unidades disponibles. Esta lectura NO reserva stock:
+  se vuelve a comprobar al pasar a un estado comprometido.
+- La foto guarda `productId`, `variantId`, `productName`, `variantLabel`
+  (valores según `optionNames`), `sku`, precio, cantidad, imagen y empaque.
+  `productSku` se conserva como alias para el PDF y consumidores actuales.
+  `persistOrderSnapshot` crea una sola vez; reprocesar un ID existente usa
+  datos persistidos y conserva foto, totales, número, estado y `createdAt`.
+  Una colisión concurrente de ID no sobrescribe la primera foto. Fallar la
+  persistencia impide emitir el comprobante; fallar el PDF luego de guardar
+  mantiene el pedido y la contingencia existente (`pdfDelivered`).
+- `order-stock.service.js` concentra descuento/restitución y transición de
+  estado. Pedido y productos se leen y escriben en una misma transacción;
+  las cantidades se agrupan por producto y variante. Todas las lecturas
+  preceden las escrituras y cada producto recibe una sola actualización de
+  `variants`, preservando el resto del documento. El stock raíz no cambia.
+  Firestore reintenta conflictos, evitando stock negativo entre pedidos y
+  descuentos/restituciones duplicados sobre un mismo pedido. Cualquier
+  referencia ausente o stock insuficiente revierte todo el cambio.
+- Se conserva la máquina de estados actual: comprometidos `paid`,
+  `preparing`, `shipped`, `delivered`; retornar a `pending` o cancelar
+  restituye; cancelado no se reactiva. Restaurar acepta producto/variante
+  desactivados. WhatsApp y la invalidación de caché ocurren tras commit,
+  nunca dentro del callback reintentable. Estado repetido no notifica.
+- Los ítems sin `variantId` se omiten sin consultar su producto. La API
+  devuelve `stockWarnings` en listado, detalle y actualización; el mensaje
+  del cambio de estado incluye el aviso que ya muestra el panel. En un
+  pedido mixto, solo las líneas con variante modifican stock. Este manejo
+  de pedidos históricos permanece tras la puesta en marcha.
+- Se eliminó `updateOrderStatusAndNotify` y sus casos de test: la búsqueda
+  en `src/` encontró solo su definición, sin consumidores productivos.
+- COMPATIBILIDAD TEMPORAL, SE ELIMINA EN LA ENTREGA 6: hasta reemplazar el
+  CRUD viejo (entrega 5), pricing admite documentos sin `schemaVersion` o
+  con versión 1, con precio/SKU raíz y claves de `packagingPrices` e imágenes
+  de `packagingImages`. No se usan nombres fijos de empaques: el nombre del
+  snapshot viejo es la clave de catálogo. Un nombre descriptivo recibido
+  solo se resuelve si sus palabras identifican una clave sin ambigüedad;
+  otras descripciones se rechazan. Se mantiene la tolerancia previa a
+  cantidades numéricas como texto solo para esos documentos. El body no
+  decide el esquema: versión 2 exige variante; versión vieja rechaza un
+  `variantId` recibido. También se retira en entrega 6 la consulta de SKU
+  raíz que cubre esos productos. No hay backfill ni adaptación automática.
+- Esta entrega prepara el backend para el deploy conjunto de entrega 6:
+  el checkout/bot antiguos todavía crean ítems sin variante y esas líneas
+  no mueven stock. No se despliega aisladamente sobre la tienda actual.
+- Tests nuevos en memoria: `test_order_variant_pricing.js` (fotos, precios,
+  empaques, personalización, stock acumulado, compatibilidad) y
+  `test_order_variant_stock.js` (agrupación, avisos, rollback, estados).
+  Se agregan a `test:unit`. Integración: `test_order_variant_orders.js`
+  (API real con middlewares, persistencia y reprocesamiento) y
+  `test_order_variant_transactions.js` (pagos/cancelaciones simultáneos,
+  variantes distintas, rollback y notificación posterior), en
+  `test:integration` con `ALLOW_PROD_FIRESTORE_TESTS=1`. IDs `test-` únicos
+  registrados antes de escribir y limpiados en `finally`, guardia antes
+  del SDK, sin mensajes reales, invocaciones LLM ni escrituras al contador
+  real. La concurrencia se comprueba contra Firestore, no con el doble en
+  memoria. Se actualizan los tests existentes de inventario para variantes
+  y la expectativa del nombre de empaque del modelo viejo.
+- No se agregan dependencias. El dueño corre tests y `git diff`; el
+  asistente no los ejecuta ni reconstruye sus salidas. Sin commit/push/deploy.
+- Ajuste de regresión: la simulación de pedidos de `test_budget_agent_v2.js`
+  implementa `get` (inexistente antes de crear), `create`, `set` y `update`
+  en memoria y restaura también `runTransaction` en `finally`. No se cambia
+  `order.service.js` para tolerar métodos ausentes de un doble de test.
+  La revisión de las otras simulaciones no encontró otra referencia de
+  pedido con el mismo hueco; el helper de stock ya implementa `get`.
+- `test:unit` usa `test/run-unit.js`: ejecuta las mismas suites una por una
+  en procesos separados, continúa aunque una falle y termina con código 1
+  si hubo algún fallo (también si un proceso no arranca o termina por señal).
+  Las salidas de los procesos se muestran directamente. Las cinco suites
+  en memoria usan `node --test`; las ocho preexistentes mantienen
+  `ALLOW_PROD_FIRESTORE_TESTS=1`. No cambia `test:integration` ni `test:llm`.

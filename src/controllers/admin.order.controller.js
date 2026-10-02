@@ -2,104 +2,18 @@ import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
 import { sendOrderStatus } from "../services/whatsapp.service.js";
 
-export const VALID_ORDER_STATUSES = [
-  "pending",
-  "paid",
-  "preparing",
-  "shipped",
-  "delivered",
-  "cancelled",
-];
+import { catalogService, invalidateCatalogCache } from "../services/catalog.service.js";
+import { createOrderStockService, getStockWarnings } from "../services/order-stock.service.js";
+export { VALID_ORDER_STATUSES, COMMITTED_STOCK_STATUSES } from "../services/order-stock.service.js";
 
-// Estados donde el stock del pedido se considera comprometido/descontado
-export const COMMITTED_STOCK_STATUSES = ["paid", "preparing", "shipped", "delivered"];
+const stockService = createOrderStockService({
+  db, catalog: { ...catalogService, invalidateCache: invalidateCatalogCache },
+  timestampNow: () => Timestamp.now(),
+});
+export const deductStockInTransaction = stockService.deductStockInTransaction;
+export const restoreStockInTransaction = stockService.restoreStockInTransaction;
 
-/**
- * Descuenta el stock de los productos de un pedido de forma atómica en Firestore.
- * Agrupa items por productId y valida existencias dentro de una transacción.
- *
- * @param {Array<any>} orderItems
- */
-export const deductStockInTransaction = async (orderItems) => {
-  if (!Array.isArray(orderItems) || orderItems.length === 0) return;
-
-  await db.runTransaction(async (transaction) => {
-    const quantityByProduct = new Map();
-    for (const item of orderItems) {
-      if (!item.productId) continue;
-      const current = quantityByProduct.get(item.productId) || 0;
-      quantityByProduct.set(item.productId, current + Number(item.quantity || 1));
-    }
-
-    const productReads = [];
-    for (const [productId, qtyToDeduct] of quantityByProduct.entries()) {
-      const ref = db.collection("products").doc(productId);
-      const doc = await transaction.get(ref);
-      productReads.push({ ref, doc, productId, qtyToDeduct });
-    }
-
-    for (const { ref, doc, productId, qtyToDeduct } of productReads) {
-      if (!doc.exists) {
-        throw new Error(`Producto con ID ${productId} no encontrado en Firestore`);
-      }
-      const data = doc.data() || {};
-      const currentStock = Number(data.stock || 0);
-      const newStock = currentStock - qtyToDeduct;
-
-      if (newStock < 0) {
-        throw new Error(
-          `Stock insuficiente para "${data.name || productId}". Stock actual: ${currentStock}, Solicitado: ${qtyToDeduct}`
-        );
-      }
-
-      transaction.update(ref, {
-        stock: newStock,
-        updatedAt: Timestamp.now(),
-      });
-    }
-  });
-};
-
-/**
- * Restituye el stock de los productos de un pedido de forma atómica en Firestore.
- * Agrupa items por productId y suma las cantidades dentro de una transacción.
- *
- * @param {Array<any>} orderItems
- */
-export const restoreStockInTransaction = async (orderItems) => {
-  if (!Array.isArray(orderItems) || orderItems.length === 0) return;
-
-  await db.runTransaction(async (transaction) => {
-    const quantityByProduct = new Map();
-    for (const item of orderItems) {
-      if (!item.productId) continue;
-      const current = quantityByProduct.get(item.productId) || 0;
-      quantityByProduct.set(item.productId, current + Number(item.quantity || 1));
-    }
-
-    const productReads = [];
-    for (const [productId, qtyToRestore] of quantityByProduct.entries()) {
-      const ref = db.collection("products").doc(productId);
-      const doc = await transaction.get(ref);
-      productReads.push({ ref, doc, productId, qtyToRestore });
-    }
-
-    for (const { ref, doc, productId, qtyToRestore } of productReads) {
-      if (!doc.exists) {
-        console.warn(`⚠️ Producto con ID ${productId} no encontrado al restituir stock. Se omite.`);
-        continue;
-      }
-      const data = doc.data() || {};
-      const currentStock = Number(data.stock || 0);
-      const newStock = currentStock + qtyToRestore;
-
-      transaction.update(ref, {
-        stock: newStock,
-        updatedAt: Timestamp.now(),
-      });
-    }
-  });
-};
+const withStockWarnings = order => ({ ...order, stockWarnings: getStockWarnings(order.items) });
 
 /**
  * GET /admin/orders
@@ -108,7 +22,7 @@ export const restoreStockInTransaction = async (orderItems) => {
 export const getAdminOrders = async (req, res) => {
   try {
     const snapshot = await db.collection("orders").orderBy("createdAt", "desc").get();
-    const orders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const orders = snapshot.docs.map((doc) => withStockWarnings({ id: doc.id, ...doc.data() }));
     return res.json({ success: true, orders });
   } catch (err) {
     console.error("Error en getAdminOrders:", err);
@@ -127,7 +41,7 @@ export const getAdminOrderById = async (req, res) => {
     if (!doc.exists) {
       return res.status(404).json({ error: "Pedido no encontrado" });
     }
-    return res.json({ success: true, order: { id: doc.id, ...doc.data() } });
+    return res.json({ success: true, order: withStockWarnings({ id: doc.id, ...doc.data() }) });
   } catch (err) {
     console.error("Error en getAdminOrderById:", err);
     return res.status(500).json({ error: "Error obteniendo el pedido" });
@@ -144,92 +58,35 @@ export const getAdminOrderById = async (req, res) => {
  * - Transición entre estados comprometidos: NO modifica stock.
  * - Notifica al cliente por WhatsApp con el nuevo estado.
  */
-export const updateAdminOrderStatus = async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { status } = req.body;
-
-    if (!status || !VALID_ORDER_STATUSES.includes(status)) {
-      return res.status(400).json({
-        error: `Estado inválido. Valores permitidos: ${VALID_ORDER_STATUSES.join(", ")}`,
-      });
-    }
-
-    const orderRef = db.collection("orders").doc(id);
-    const orderDoc = await orderRef.get();
-
-    if (!orderDoc.exists) {
-      return res.status(404).json({ error: "Pedido no encontrado" });
-    }
-
-    const order = orderDoc.data();
-    const currentStatus = order.status || "pending";
-    const newStatus = status;
-
-    // Si el estado es idéntico, responder de inmediato sin cambios
-    if (currentStatus === newStatus) {
+export function createUpdateAdminOrderStatus({ stock = stockService, notify = sendOrderStatus } = {}) {
+  return async (req, res) => {
+    try {
+      const { id } = req.params;
+      const result = await stock.transitionOrderStatus(id, req.body?.status);
+      const { order, previousStatus, status, changed, stockWarnings } = result;
+      // Notificación después del commit; una solicitud repetida no vuelve a enviar.
+      const recipient = order.whatsappChatId || order.userPhoneNumber;
+      if (changed && recipient) {
+        try {
+          await notify(recipient, status, order.total, order.shippingMethod);
+        } catch (error) {
+          console.warn("⚠️ No se pudo enviar notificación WhatsApp:", error.message);
+        }
+      }
+      const notice = stockWarnings.length ? " Aviso: hay ítems sin variantId; su stock no se modifica." : "";
       return res.json({
         success: true,
-        message: `El pedido ya se encuentra en estado ${newStatus}`,
-        orderId: id,
-        status: newStatus,
+        message: (changed ? `Estado actualizado a ${status}` : `El pedido ya se encuentra en estado ${status}`) + notice,
+        orderId: id, previousStatus, status, stockWarnings,
       });
+    } catch (error) {
+      console.error("Error en updateAdminOrderStatus:", error);
+      return res.status(error.statusCode || 500).json({ error: error.message || "Error al actualizar estado del pedido", ...(error.field ? { field: error.field } : {}) });
     }
+  };
+}
 
-    // 1. REGLA: Bloquear reactivación desde 'cancelled'
-    if (currentStatus === "cancelled" && newStatus !== "cancelled") {
-      return res.status(400).json({
-        error: "No se puede reactivar un pedido cancelado desde el panel. Requiere intervención manual en base de datos.",
-      });
-    }
-
-    // 2. MÁQUINA DE ESTADOS Y CONTROL DE INVENTARIO ATÓMICO
-    const wasStockCommitted = COMMITTED_STOCK_STATUSES.includes(currentStatus);
-    const isStockCommitted = COMMITTED_STOCK_STATUSES.includes(newStatus);
-
-    if (!wasStockCommitted && isStockCommitted) {
-      // Pasa de pending a paid/preparing/etc. -> Descontar stock atómicamente
-      await deductStockInTransaction(order.items);
-      console.log(`📦 Stock descontado exitosamente para pedido #${order.orderNumber} (transición ${currentStatus} -> ${newStatus})`);
-    } else if (wasStockCommitted && !isStockCommitted) {
-      // Pasa de paid/preparing/etc. a cancelled o pending -> Restituir stock atómicamente
-      await restoreStockInTransaction(order.items);
-      console.log(`🔄 Stock restituido exitosamente para pedido #${order.orderNumber} (transición ${currentStatus} -> ${newStatus})`);
-    }
-
-    // 3. Persistir nuevo estado en Firestore
-    await orderRef.update({
-      status: newStatus,
-      updatedAt: Timestamp.now(),
-    });
-
-    // 4. Notificar al cliente por WhatsApp (preferir whatsappChatId sobre userPhoneNumber)
-    const recipient = order.whatsappChatId || order.userPhoneNumber;
-    if (recipient) {
-      try {
-        await sendOrderStatus(recipient, newStatus, order.total, order.shippingMethod);
-      } catch (wsErr) {
-        console.warn("⚠️ No se pudo enviar notificación WhatsApp:", wsErr.message);
-      }
-    }
-
-    return res.json({
-      success: true,
-      message: `Estado actualizado a ${newStatus}`,
-      orderId: id,
-      previousStatus: currentStatus,
-      status: newStatus,
-    });
-  } catch (err) {
-    console.error("Error en updateAdminOrderStatus:", err);
-    const isClientError =
-      err.message.includes("Stock insuficiente") ||
-      err.message.includes("no encontrado");
-    return res.status(isClientError ? 400 : 500).json({
-      error: err.message || "Error al actualizar estado del pedido",
-    });
-  }
-};
+export const updateAdminOrderStatus = createUpdateAdminOrderStatus();
 
 /**
  * PATCH /admin/orders/:id/customization
@@ -282,7 +139,7 @@ export const updateAdminOrderCustomization = async (req, res) => {
     return res.json({
       success: true,
       message: "Personalización actualizada exitosamente.",
-      order: { id: updatedDoc.id, ...updatedDoc.data() },
+      order: withStockWarnings({ id: updatedDoc.id, ...updatedDoc.data() }),
     });
   } catch (err) {
     console.error("Error en updateAdminOrderCustomization:", err);
