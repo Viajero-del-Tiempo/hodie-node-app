@@ -8,6 +8,8 @@ import { router as adminProductRouter } from "./routes/admin.product.routes.js";
 import { router as userRouter } from "./routes/user.routes.js";
 import { router as adminUserRouter } from "./routes/admin.user.routes.js";
 import { router as adminChatRouter } from "./routes/admin.chat.routes.js";
+import { router as adminCategoryRouter } from "./routes/admin.category.routes.js";
+import { router as adminPolicyRouter } from "./routes/admin.policy.routes.js";
 
 const app = express();
 
@@ -42,5 +44,7 @@ app.use("/admin", adminOrderRouter);
 app.use("/admin", adminProductRouter);
 app.use("/admin", adminUserRouter);
 app.use("/admin", adminChatRouter);
+app.use("/admin", adminCategoryRouter);
+app.use("/admin", adminPolicyRouter);
 
 export default app;

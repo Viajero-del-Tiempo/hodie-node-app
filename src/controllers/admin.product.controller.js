@@ -1,5 +1,6 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
+import { invalidateCatalogCache } from "../services/catalog.service.js";
 
 export const ALLOWED_PACKAGING_KEYS = ["caja", "bolsa", "envoltorio"];
 
@@ -123,6 +124,7 @@ export const createAdminProduct = async (req, res) => {
     };
 
     await newDocRef.set(newProduct);
+    invalidateCatalogCache();
     return res.status(201).json({ success: true, product: newProduct });
   } catch (err) {
     console.error("Error en createAdminProduct:", err);
@@ -168,6 +170,7 @@ export const updateAdminProduct = async (req, res) => {
 
     updateData.updatedAt = Timestamp.now();
     await docRef.update(updateData);
+    invalidateCatalogCache();
 
     return res.json({ success: true, message: "Producto actualizado correctamente" });
   } catch (err) {
@@ -194,6 +197,7 @@ export const deleteAdminProduct = async (req, res) => {
 
     if (forceHardDelete) {
       await docRef.delete();
+      invalidateCatalogCache();
       return res.json({
         success: true,
         message: "Producto eliminado definitivamente de la base de datos (hard-delete)",
@@ -206,6 +210,8 @@ export const deleteAdminProduct = async (req, res) => {
       deletedAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
     });
+
+    invalidateCatalogCache();
 
     return res.json({
       success: true,
@@ -236,6 +242,8 @@ export const reactivateAdminProduct = async (req, res) => {
       deletedAt: null,
       updatedAt: Timestamp.now(),
     });
+
+    invalidateCatalogCache();
 
     return res.json({
       success: true,

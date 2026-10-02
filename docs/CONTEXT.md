@@ -124,3 +124,77 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
    tests de test/ tienen que quedar versionados en git, y agregá scripts
    en package.json para correrlos ("npm run test:..."), separando los que
    usan el LLM real de los que no.
+
+# DECISIONES DE CATÁLOGO — ENTREGA 1 (1 de octubre de 2026)
+
+- Alcance aprobado: servicio de catálogo, validaciones del modelo nuevo y
+  CRUD backend de `categories` y `policies`. No incluye tienda, interfaz
+  del panel, precios de pedidos, stock por variante ni adaptador del bot.
+- Servicio central en `src/services/catalog.service.js`, repositorio
+  Firestore separado e inyección de almacenamiento y reloj para tests.
+  La inicialización de Firebase es diferida; los tests en memoria no
+  cargan credenciales. El servicio nuevo solo expone productos de
+  `schemaVersion: 2` y no convierte productos viejos.
+- Una variante, una vez creada, nunca se elimina: solo se desactiva con
+  `active: false`, aunque ningún pedido la referencie. Al editar se
+  preservan todos los IDs existentes. El servidor genera IDs para
+  variantes nuevas; no se consultan pedidos para permitir eliminaciones.
+- `priceFrom` y `skus` se derivan en el servidor, ignorando lo recibido.
+  `skus` incluye los SKU de todas las variantes, incluso las inactivas.
+  `priceFrom` es el menor precio activo o `null` si no hay variantes activas.
+- Unicidad de SKU: consultas indexadas y limitadas con `array-contains`
+  sobre `products.skus`, excluyendo el propio producto al editar. Durante
+  la transición, otra consulta indexada comprueba `products.sku` del
+  esquema viejo. La comparación es exacta tras quitar espacios extremos.
+  No se lee todo el catálogo ni se hace backfill. La validación aislada
+  no reserva SKU: antes de habilitar el CRUD nuevo de productos, los
+  guardados deben serializar comprobación y escritura mediante una
+  transacción con un documento compartido de control, por ejemplo en
+  `counters`. Una consulta previa sola no garantiza unicidad concurrente.
+- Búsqueda: nombre, etiquetas, nombre de categoría, valores de opciones
+  y de atributos. Normaliza acentos, diéresis, mayúsculas y plurales
+  regulares, preservando `ñ`. Usa palabras vacías del castellano y verbos
+  de consulta, nunca un diccionario del negocio. Las reglas generales
+  de plurales pueden tener falsos positivos en terminaciones ambiguas;
+  no cubren todos los irregulares. Las palabras de la lista gramatical
+  se omiten aunque aparezcan en etiquetas. Una consulta compuesta solo
+  por ellas se trata como consulta vacía.
+- Admite coincidencias parciales. Orden: cantidad de términos encontrados;
+  después nombre, etiquetas, categoría, opciones y atributos, priorizando
+  coincidencias exactas dentro de cada campo. Desempate: nombre completo,
+  orden de categoría, nombre normalizado e ID. Cada resultado incluye
+  `matchedTerms` normalizados, sin palabras vacías ni duplicados.
+  Las coincidencias y filtros de opciones no mezclan variantes distintas.
+- `onlyAvailable` es `false` por defecto. Variantes activas con stock cero
+  siguen visibles y cada variante trae `available`, calculado de su stock.
+  Productos o categorías inactivos y productos sin variantes activas no
+  aparecen en búsqueda ni detalle público. El límite de búsqueda es 5
+  por defecto. Consulta vacía: orden de categoría, nombre e ID.
+- Caché por proceso de 5 minutos para categorías, productos y políticas.
+  Escrituras exitosas invalidan; las fallidas no. Una invalidación durante
+  una carga impide reutilizar datos anteriores. Las validaciones contra
+  Firestore y la comprobación de productos para desactivar categorías no
+  dependen de esa caché.
+- APIs nuevas con `requireAuth` y `requireAdmin`, acotados a sus rutas:
+  `/admin/categories` y `/admin/policies`; GET, POST, PUT, PATCH y DELETE.
+  Los IDs son slugs estables. DELETE de categoría la desactiva y se
+  rechaza con 409 si tiene productos activos. DELETE de política elimina
+  ese documento. Listados admin incluyen categorías inactivas; timestamps
+  de políticas son del servidor. Campos inválidos: 400 con `field`;
+  documento inexistente: 404; conflicto: 409.
+- Validaciones nuevas preparadas para el futuro CRUD de productos. El
+  controlador viejo solo agrega invalidación tras sus escrituras; no se
+  cambia su modelo ni se declara cumplido el criterio global que todavía
+  detecta nombres y empaques fijos del código anterior.
+- Tests nuevos: `test_catalog_search.js`, `test_catalog_validation.js`,
+  `test_catalog_service.js`, `test_catalog_crud.js` y
+  `test_catalog_admin_api.js`, con helpers de fixtures y Firestore dentro
+  de `test/helpers/`. Los tres primeros son en memoria. Los dos últimos
+  admiten emulador; sin emulador exigen `ALLOW_PROD_FIRESTORE_TESTS=1`
+  antes de cargar Firebase. IDs por ejecución con prefijo `test-`, limpieza
+  en `finally`, sin barridos ni escrituras sobre datos reales. Los nombres
+  del caso documental de búsqueda se leen de SPEC en runtime. No se
+  invoca el LLM ni se inicializa WhatsApp en los tests nuevos.
+- No se cambian dependencias ni `package.json`. El dueño ejecuta los
+  tests, `git diff --stat` y `git diff`; el asistente no afirma resultados
+  sin salida real de consola. No se hace commit, push ni deploy.
