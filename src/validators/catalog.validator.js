@@ -185,11 +185,13 @@ export function validateProductModel(input, { existingProduct = null, generateVa
   };
 }
 
-// La consulta indexada comprueba conflictos, pero no reserva el SKU para un guardado.
+// Las consultas indexadas comprueban conflictos, pero no reservan SKU ni slug.
+// Entrega 5: comprobar y escribir dentro de la transacción de control compartida.
 export async function validateProductForSave(input, { repository, existingProduct = null, generateVariantId } = {}) {
   const product = validateProductModel(input, { existingProduct, generateVariantId });
   const category = await repository.getCategory(product.categoryId);
   if (!category || category.active !== true) fail("categoryId", "debe existir y estar activa");
+  if (await repository.findSlugConflict(product.slug, existingProduct?.id)) fail("slug", "ya existe en otro producto del catálogo");
   const conflicts = await Promise.all(product.variants.map(variant => repository.findSkuConflict(variant.sku, existingProduct?.id)));
   const conflictIndex = conflicts.findIndex(Boolean);
   if (conflictIndex !== -1) fail(`variants[${conflictIndex}].sku`, "ya existe en otro producto del catálogo");

@@ -158,14 +158,39 @@ test("categoría existente/activa y SKU global se consultan fuera de la caché",
   const calls = [];
   const repository = {
     async getCategory(id) { calls.push(["category", id]); return { id, active: true }; },
+    async findSlugConflict(slug, excludedId) { calls.push(["slug", slug, excludedId]); return null; },
     async findSkuConflict(sku, excludedId) { calls.push(["sku", sku, excludedId]); return null; },
   };
   const product = await validateProductForSave(input, { repository });
   assert.equal(product.skus[0], input.variants[0].sku);
-  assert.deepEqual(calls, [["category", input.categoryId], ["sku", input.variants[0].sku, undefined]]);
+  assert.deepEqual(calls, [["category", input.categoryId], ["slug", product.slug, undefined], ["sku", input.variants[0].sku, undefined]]);
   await assert.rejects(validateProductForSave(input, { repository: { ...repository, getCategory: async () => null } }), error => error.field === "categoryId");
   await assert.rejects(validateProductForSave(input, { repository: { ...repository, getCategory: async () => ({ active: false }) } }), error => error.field === "categoryId");
   await assert.rejects(validateProductForSave(input, { repository: { ...repository, findSkuConflict: async () => testId() } }), error => error.field === "variants[0].sku");
+  await assert.rejects(validateProductForSave(input, { repository: { ...repository, findSlugConflict: async () => testId() } }), error => error.field === "slug");
+});
+
+test("slug único usa consulta indexada limitada y excluye el propio producto", async () => {
+  const own = testId();
+  const other = testId();
+  const requested = testId();
+  let records = [{ id: own }, { id: other }];
+  const calls = [];
+  const db = { collection(name) {
+    assert.equal(name, "products");
+    return { where(field, operator, value) {
+      calls.push([field, operator, value]);
+      return { limit(limit) {
+        assert.equal(limit, 2);
+        return { async get() { return { docs: records }; } };
+      } };
+    } };
+  } };
+  const repository = createCatalogRepository(db, { timestampNow: () => null });
+  assert.equal(await repository.findSlugConflict(requested, own), other);
+  records = [{ id: own }];
+  assert.equal(await repository.findSlugConflict(requested, own), null);
+  assert.deepEqual(calls, [["slug", "==", requested], ["slug", "==", requested]]);
 });
 
 test("SKU global usa consultas indexadas y limitadas, sin leer todos los productos", async () => {

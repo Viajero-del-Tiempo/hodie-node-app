@@ -4,7 +4,7 @@ Oct 1, 2026 · @Arnaldo
 
 ## Objetivo y regla de oro
 
-Esta fase reemplaza el catálogo actual (un documento por color) por un modelo de productos con variantes, categorías y datos estructurados. Los productos actuales no se migran: el dueño los vuelve a cargar desde el panel admin con el modelo nuevo. Es la base del agente conversacional nuevo, que se construye en fases posteriores.
+Esta fase reemplaza el catálogo actual (un documento por color) por un modelo de productos con variantes, categorías y datos estructurados. Los productos actuales no se migran: el dueño los vuelve a cargar desde el panel admin con el modelo nuevo. Es la base del agente conversacional nuevo, que tendrá su propia especificación y saldrá a producción junto con este catálogo.
 
 **Regla de oro:** agregar un producto desde el panel admin tiene que alcanzar para que la tienda web y el bot lo conozcan, sin tocar código ni prompts. Ningún nombre de producto, categoría, color o tipo de empaque puede estar escrito en el código productivo (`src/`). Los tests pueden usar nombres y datos ficticios, independientes de los documentos del proyecto y del catálogo real.
 
@@ -115,6 +115,7 @@ El backend valida todo al guardar un producto desde el panel; un producto invál
 | `variants[].price`       | Entero mayor a 0 (guaraníes)                                                           |
 | `variants[].stock`       | Entero mayor o igual a 0                                                               |
 | `variants[].sku`         | Obligatorio y único en todo el catálogo                                                |
+| `slug`                  | Slug en minúsculas, único en todo el catálogo; la edición excluye el propio producto   |
 | `variants[].id`          | Asignado por el servidor, estable y obligatorio al editar una variante existente; una variante creada nunca se elimina |
 | `packagingOptions[]`     | `type` único dentro del producto, `name` obligatorio, `price` entero mayor o igual a 0 |
 | `customization.maxChars` | Entero entre 1 y 500, solo si `allowsText` es true                                     |
@@ -154,13 +155,13 @@ Los productos de una sola variante igual se modelan con variante: así, el día 
 
 ## Puesta en marcha
 
-No hay migración de productos: se respalda todo, se borran los productos viejos y se cargan los nuevos a mano. Se hace con la tienda en mantenimiento, y el backend y el frontend nuevos se deployan juntos.
+No hay migración de productos: se respalda todo, se borran los productos viejos y se cargan los nuevos a mano. La tienda completa está en mantenimiento. La entrega 6 se realiza cuando estén listos el catálogo y el agente conversacional nuevo, con su propia especificación: backend, frontend y agente salen a producción juntos. Hasta entonces, nada de esta rama se deploya.
 
 1. **Condición previa:** ningún pedido abierto. Todos los pedidos existentes tienen que estar entregados o cancelados (ver Pedidos existentes).
 2. **Backup completo:** exportar Firestore con `gcloud firestore export` a un bucket de Cloud Storage.
 3. **Mantenimiento:** la tienda sigue en mantenimiento y se detiene el bot con `pm2 stop hodie-backend`.
 4. **Borrado:** un script con dry-run por defecto lista y borra los documentos de `products`. Nada más.
-5. **Deploy conjunto:** backend y frontend nuevos, y `pm2 start`.
+5. **Deploy conjunto:** backend, frontend y agente conversacional nuevos, y `pm2 start`. Antes del deploy se elimina la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz. El manejo de pedidos históricos sin `variantId` permanece, con aviso y sin movimientos de stock.
 6. **Carga manual:** el dueño crea las categorías y los productos desde el panel admin.
 7. **Verificación** con los criterios de aceptación, antes de sacar la tienda de mantenimiento.
 
@@ -190,7 +191,9 @@ Todo acceso al catálogo pasa por un único servicio, y precios y stock se calcu
 
 `validateProductForSave`/`catalogService.validateProduct` comprueba la categoría directamente y consulta `products` con `where('skus', 'array-contains', sku).limit(2)` por SKU, excluyendo el propio producto al editar. Una consulta adicional `where('sku', '==', sku).limit(2)` cubre los documentos del esquema viejo sin migrarlos. Los SKU de variantes inactivas siguen ocupados. No hay lectura completa del catálogo para esta validación.
 
-**Concurrencia:** esta validación detecta conflictos, pero no reserva SKU ni constituye por sí sola una garantía frente a dos guardados simultáneos. Antes de habilitar el CRUD nuevo de productos, su comprobación y escritura deben serializarse en una transacción que también escriba un documento de control compartido (por ejemplo, en la colección existente `counters`). La unicidad no debe basarse solo en una consulta previa o en la caché. Todos los productos del modelo nuevo deben guardar `skus` derivado; no se hace ningún backfill en esta entrega.
+El slug también se comprueba directamente con `where('slug', '==', slug).limit(2)`, excluyendo el propio producto al editar. Productos desactivados siguen ocupando sus SKU y su slug. No se lee todo el catálogo para comprobar unicidad.
+
+**Concurrencia:** esta validación detecta conflictos, pero no reserva SKU ni slug ni constituye por sí sola una garantía frente a dos guardados simultáneos. Antes de habilitar el CRUD nuevo de productos en la entrega 5, su comprobación y escritura deben serializarse en una transacción que también escriba un documento de control compartido (por ejemplo, en la colección existente `counters`). La unicidad no debe basarse solo en una consulta previa o en la caché. Todos los productos del modelo nuevo deben guardar `skus` derivado; no se hace ningún backfill en esta entrega.
 
 El CRUD viejo de productos mantiene su comportamiento en la entrega 1 y solo incorpora invalidación de caché tras una escritura exitosa. La validación del modelo nuevo todavía no se conecta a ese CRUD; se integrará al reemplazarlo. No se implementan precios de pedidos, stock por variante ni adaptador del bot en esta entrega.
 
@@ -229,9 +232,9 @@ El CRUD viejo de productos mantiene su comportamiento en la entrega 1 y solo inc
 - `products`: igual que hoy (lectura pública, escritura solo desde el backend).
 - `policies`: lectura pública, escritura solo desde el backend.
 
-### El bot actual durante la transición
+### El bot actual y su reemplazo
 
-El BudgetAgent actual lee productos con el formato viejo y se reemplaza recién en una fase posterior. Para que siga funcionando, `catalog.service.js` expone un adaptador temporal que presenta cada variante como un producto del formato anterior. El adaptador se elimina cuando se retire el BudgetAgent; nadie más lo usa.
+El BudgetAgent actual no se modifica: `budget.node.js` queda fuera del alcance de esta fase y se elimina cuando se reemplace por el agente nuevo. No se implementa un adaptador para el modelo nuevo. El agente nuevo tendrá su propia especificación y su puesta en producción se coordina con la entrega 6 del catálogo; no hay deploys intermedios de esta rama.
 
 ## Cambios en el frontend
 
@@ -240,15 +243,25 @@ La tienda muestra un producto por modelo con un selector de variantes, y el carr
 ### Tienda
 
 - **Listado:** una tarjeta por producto, con "desde" + `priceFrom` y las muestras de color disponibles. Filtro por categoría, generado desde `categories`.
-- **Detalle:** un selector por cada eje de `optionNames` (color, capacidad). Al elegir, se actualizan precio, stock e imágenes de esa variante. Las combinaciones sin stock se muestran deshabilitadas.
+- **Detalle:** ruta `/store/<slug>`, con slug único. Si no existe, está inactivo, su categoría está inactiva o no tiene variantes activas, muestra "Este producto ya no está disponible" y un acceso al catálogo. Los enlaces viejos no se convierten de ID a slug. Un selector por cada eje de `optionNames`, en ese orden: las opciones dependen de los ejes anteriores y cambiar un eje limpia los posteriores. Al elegir, se actualizan precio, stock e imágenes de esa variante. Las combinaciones sin stock se muestran deshabilitadas.
 - **Empaques:** se listan los de `packagingOptions` del producto más el estándar sin costo. Ningún empaque escrito en el código.
-- **Personalización:** el campo "¿Qué querés que diga?" respeta `customization.maxChars` y solo aparece si el producto admite texto.
+- **Personalización:** se carga en el detalle antes de agregar al carrito. El campo "¿Qué querés que diga?" respeta `customization.maxChars` contando caracteres Unicode como el servidor y solo aparece si el producto admite texto. El texto vacío queda con `customizationPending` si admite texto. Las indicaciones para enviar imágenes por WhatsApp solo aparecen si admite imágenes.
 
 ### Carrito y checkout
 
-- Cada ítem del carrito guarda `productId` + `variantId`. El mismo producto con dos variantes distintas son dos ítems.
+- Cada ítem del carrito guarda `productId` + `variantId`. Su identidad es producto + variante + empaque + texto (sin espacios extremos): dos textos diferentes son dos líneas; el mismo texto y las mismas opciones suman cantidad. El mismo producto con dos variantes distintas son dos ítems.
+- Cada línea muestra su texto y permite editarlo o quitarlo. Editar puede fusionar líneas coincidentes, respetando el límite de cantidad por línea y el stock acumulado de la variante entre todos los textos y empaques. Quitar el texto vuelve a dejarlo pendiente si el producto admite texto.
+- El checkout muestra la personalización ya guardada y no vuelve a pedirla. Revisa el catálogo antes de confirmar: si actualiza precios pide revisar el resumen y confirmar nuevamente. Esta lectura pública usa la caché del catálogo y es informativa; el servidor vuelve a validar stock fresco sin reservar al crear el pedido. Los errores 400 conservan el carrito y los textos para corregirlos.
 - El payload del checkout envía `productId`, `variantId`, `quantity`, `packagingType` y personalización. El total que muestra el frontend es solo informativo; el que vale es el que calcula el servidor.
-- Los carritos guardados con el formato viejo (sin `variantId`) se descartan con un aviso al cliente.
+- El carrito guardado usa `schemaVersion: 2`. Los carritos del formato viejo (sin versión o sin `variantId`) y los JSON inválidos se descartan completos con un aviso al cliente, sin intentar deducir variantes. Los totales y las identidades se recalculan al cargar.
+
+### API pública de tienda (entrega 4)
+
+- `GET /catalog/categories`: categorías activas en orden.
+- `GET /catalog/products`: `query`, `categoryId`, `onlyAvailable` (false por defecto), `sort`, `page` y `pageSize`; devuelve productos, total y paginación. `pageSize` es 12 por defecto, máximo 100. El controlador usa todos los resultados de `searchProducts` antes de ordenar y paginar: no limita la tienda a los 5 resultados por defecto. `relevance` conserva el orden del servicio; también admite precio ascendente/descendente y nombre ascendente.
+- `GET /catalog/products/by-slug/:slug`: detalle público por slug; 404 para enlaces inexistentes, inválidos, ambiguos o productos no disponibles.
+- `GET /catalog/products/:id`: detalle por referencia interna para revisar las líneas del carrito. Las URLs de la tienda usan exclusivamente slug.
+- Las lecturas pasan por el servicio central y su caché. Estas rutas son públicas y solo de lectura; las escrituras y el checkout mantienen sus protecciones actuales.
 
 ### Panel admin
 
@@ -296,7 +309,9 @@ La fase está terminada cuando todos estos puntos se verifican con salidas que c
 - [ ] La tienda muestra un producto por modelo con selector de color, y deshabilita las variantes sin stock.
 - [ ] Cada producto ofrece solo sus propios empaques, con sus precios.
 - [ ] Un carrito guardado con el formato viejo se descarta con aviso.
-- [ ] El bot actual completa una cotización por WhatsApp usando el adaptador temporal.
+- [ ] Dos textos diferentes del mismo producto/variante/empaque crean dos líneas; textos iguales suman cantidad. Editar o quitar texto en carrito conserva el stock acumulado y las banderas pendientes.
+- [ ] El checkout muestra los textos de cada línea y crea el pedido con ambos IDs. Un 400 conserva el carrito y su personalización.
+- [ ] Los enlaces usan slug único; uno inexistente o inactivo muestra el aviso y el acceso al catálogo.
 
 ### Cómo se prueban
 
@@ -313,19 +328,21 @@ Esta fase no toca el comportamiento conversacional del bot. Quedan para fases si
 - El agente conversacional nuevo, sus herramientas y su prompt.
 - La búsqueda semántica con embeddings (se agrega cuando el catálogo pase de unos cientos de productos, sin cambiar la firma de `searchProducts`).
 - Descuentos, cupones y precios por cantidad.
-- Retirar el BudgetAgent y el adaptador temporal.
+- Reemplazar y eliminar el BudgetAgent actual, dentro de la especificación del agente nuevo y antes de la puesta en producción conjunta.
 
 ## Reglas de trabajo para la implementación
 
 La fase se implementa en entregas chicas, una por vez, y cada una se aprueba antes de empezar la siguiente.
 
-1. Servicio de catálogo, validaciones del modelo y CRUD de `categories` y `policies`.
-2. Precios y stock por variante.
-3. Adaptador temporal para el BudgetAgent.
-4. Tienda: listado, detalle, carrito y checkout.
-5. Panel admin: productos, categorías y políticas.
-6. Puesta en marcha: backup, borrado de productos viejos, deploy, carga manual y verificación.
-   - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
+Se conservan los números de las entregas restantes para mantener las referencias existentes.
+
+- **Entrega 1:** servicio de catálogo, validaciones del modelo y CRUD de `categories` y `policies`.
+- **Entrega 2:** precios y stock por variante.
+- **Entrega 4:** tienda: listado, detalle, carrito y checkout.
+- **Entrega 5:** panel admin: productos, categorías y políticas.
+- **Entrega 6:** puesta en marcha junto con el agente conversacional nuevo, que tiene su propia especificación: backup, borrado de productos viejos, deploy conjunto de backend/frontend/agente, carga manual y verificación.
+  - Hasta entonces, nada de esta rama se deploya. El BudgetAgent actual no se modifica y se elimina cuando se reemplace.
+  - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
 
 En cada entrega:
 

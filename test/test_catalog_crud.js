@@ -41,7 +41,10 @@ test("integración Firestore: CRUD, referencias, SKU indexado e invalidación", 
       assert.equal(await repository.findSkuConflict(product.skus[0]), productId);
       assert.equal(await repository.findSkuConflict(product.skus[1]), productId);
       assert.equal(await repository.findSkuConflict(product.skus[0], productId), null);
-      await assert.rejects(service.validateProduct(input), error => error.field === "variants[0].sku");
+      assert.equal(await repository.findSlugConflict(product.slug), productId);
+      assert.equal(await repository.findSlugConflict(product.slug, productId), null);
+      await assert.rejects(service.validateProduct(input), error => error.field === "slug");
+      await assert.rejects(service.validateProduct({ ...input, slug: scope.id("other-slug") }), error => error.field === "variants[0].sku");
       const edited = await service.validateProduct(product, { existingProduct: product });
       assert.deepEqual(edited.variants.map(variant => variant.id), product.variants.map(variant => variant.id));
       await assert.rejects(service.validateProduct({ ...product, variants: product.variants.slice(0, 1) }, { existingProduct: product }), error => error.field === "variants");
@@ -55,6 +58,7 @@ test("integración Firestore: CRUD, referencias, SKU indexado e invalidación", 
       await assert.rejects(service.deactivateCategory(` ${categoryId} `), error => error.status === 400 && error.field === "id");
       assert.equal((await categoryRef.get()).data().active, true);
       await productRef.update({ active: false });
+      assert.equal(await repository.findSlugConflict(product.slug), productId);
       const disabled = await service.deactivateCategory(categoryId);
       assert.equal(disabled.active, false);
       assert.equal((await service.getCategories()).some(category => category.id === categoryId), false);

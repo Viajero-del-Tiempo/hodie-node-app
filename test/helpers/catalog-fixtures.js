@@ -31,6 +31,9 @@ export function memoryCatalog({ categories = [], products = [], policies = [] } 
     async readCatalog() { reads++; return structuredClone(data); },
     async getCategory(id) { return data.categories.find(category => category.id === id) ?? null; },
     async getProduct(id) { return data.products.find(product => product.id === id) ?? null; },
+    async findSlugConflict(slug, excludedId) {
+      return data.products.find(product => product.id !== excludedId && product.slug === slug)?.id ?? null;
+    },
     async findSkuConflict(sku, excludedId) {
       return data.products.find(product => product.id !== excludedId && (product.sku === sku || product.skus?.includes(sku)))?.id ?? null;
     },

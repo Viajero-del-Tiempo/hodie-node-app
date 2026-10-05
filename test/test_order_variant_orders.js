@@ -81,6 +81,22 @@ test("pedidos persistidos y API con precios por variante y fotos inmutables", as
       assert.equal((await productRef.get()).data().variants[0].stock, 5);
     });
 
+    await t.test("personalización por línea persiste textos distintos y texto pendiente con ambos IDs", async () => {
+      const result = await request({ ...payload, items: [
+        { ...payload.items[0], quantity: 2, customization: "Nombre Uno" },
+        { ...payload.items[0], quantity: 1, customization: "Nombre Dos" },
+        { ...payload.items[0], quantity: 1, customization: "", customizationPending: true },
+      ] });
+      assert.equal(result.status, 200);
+      const saved = (await db.collection("orders").doc(result.body.orderId).get()).data();
+      assert.equal(saved.items.length, 3);
+      assert.deepEqual(saved.items.map(item => [item.productId, item.variantId]), Array(3).fill([productId, variantId]));
+      assert.deepEqual(saved.items.map(item => item.customization ?? ""), ["Nombre Uno", "Nombre Dos", ""]);
+      assert.deepEqual(saved.items.map(item => item.customizationPending), [false, false, true]);
+      assert.equal(saved.total, 88);
+      assert.equal((await productRef.get()).data().variants[0].stock, 5);
+    });
+
     await t.test("stock acumulado insuficiente devuelve 400 y no guarda pedido", async () => {
       const result = await request({ ...payload, items: [{ ...payload.items[0], quantity: 3 }, { ...payload.items[0], quantity: 3 }] });
       assert.equal(result.status, 400);

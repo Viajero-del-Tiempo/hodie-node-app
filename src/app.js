@@ -10,6 +10,7 @@ import { router as adminUserRouter } from "./routes/admin.user.routes.js";
 import { router as adminChatRouter } from "./routes/admin.chat.routes.js";
 import { router as adminCategoryRouter } from "./routes/admin.category.routes.js";
 import { router as adminPolicyRouter } from "./routes/admin.policy.routes.js";
+import { router as catalogRouter } from "./routes/catalog.routes.js";
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.get("/ping", (req, res) => {
   res.status(200).send("pong 🏓");
 });
 
+app.use("/catalog", catalogRouter);
 app.use("/auth", authRouter);
 app.use("/orders", orderRouter);
 app.use("/users", userRouter);

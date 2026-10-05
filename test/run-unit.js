@@ -6,6 +6,7 @@ const memorySuites = [
   "test/test_catalog_search.js",
   "test/test_catalog_validation.js",
   "test/test_catalog_service.js",
+  "test/test_catalog_public_api.js",
   "test/test_order_variant_pricing.js",
   "test/test_order_variant_stock.js",
 ];

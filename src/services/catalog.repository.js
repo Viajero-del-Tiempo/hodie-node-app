@@ -42,6 +42,11 @@ export function createCatalogRepository(db, { timestampNow }) {
       });
     },
 
+    async findSlugConflict(slug, excludedProductId) {
+      const snapshot = await db.collection("products").where("slug", "==", slug).limit(2).get();
+      return snapshot.docs.find(document => document.id !== excludedProductId)?.id ?? null;
+    },
+
     async findSkuConflict(sku, excludedProductId) {
       // Dos resultados alcanzan para descartar el propio producto sin ocultar otro.
       // TEMPORAL hasta entrega 6: la segunda consulta cubre el SKU raíz viejo,

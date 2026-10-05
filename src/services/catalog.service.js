@@ -69,6 +69,14 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
     return clone(result);
   }
 
+  function publicProduct(data, product) {
+    if (!product || product.schemaVersion !== 2 || product.active !== true
+        || !data.categories.some(category => category.id === product.categoryId && category.active === true)) return null;
+    const variants = (product.variants ?? []).filter(variant => variant.active === true)
+      .map(variant => ({ ...variant, available: variant.stock > 0 }));
+    return variants.length ? clone({ ...product, variants, priceFrom: calculatePriceFrom(variants) }) : null;
+  }
+
   return {
     invalidateCache,
     // Lectura interna fresca: incluye documentos viejos/inactivos para validarlos
@@ -100,10 +108,14 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
     async getProduct(productId) {
       validateDocumentId(productId, "productId");
       const data = await snapshot();
-      const product = data.products.find(item => item.id === productId && item.schemaVersion === 2 && item.active === true);
-      if (!product || !data.categories.some(category => category.id === product.categoryId && category.active === true)) return null;
-      const variants = (product.variants ?? []).filter(variant => variant.active === true);
-      return variants.length ? clone({ ...product, variants, priceFrom: calculatePriceFrom(variants) }) : null;
+      return publicProduct(data, data.products.find(item => item.id === productId));
+    },
+    async getProductBySlug(slug) {
+      // Enlaces viejos o slugs ambiguos no eligen arbitrariamente un producto.
+      if (typeof slug !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(slug)) return null;
+      const data = await snapshot();
+      const matches = data.products.filter(product => product.slug === slug);
+      return matches.length === 1 ? publicProduct(data, matches[0]) : null;
     },
     async searchProducts(input = {}) {
       const { query, categoryId, options, onlyAvailable, limit } = validateSearch(input);
@@ -125,7 +137,7 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
         results.push({
           score: best.score, categoryOrder: category.order ?? 0,
           value: {
-            id: product.id, name: product.name, slug: product.slug,
+            id: product.id, name: product.name, slug: product.slug, optionNames: product.optionNames ?? [],
             category: { id: category.id, name: category.name },
             priceFrom: calculatePriceFrom(activeVariants), matchedTerms: best.matchedTerms,
             variants: variants.map(variant => ({
@@ -179,6 +191,6 @@ export const getProduct = async productId => (await getDefaultService()).getProd
 export const searchProducts = async input => (await getDefaultService()).searchProducts(input);
 export const catalogService = Object.fromEntries([
   "getProductForPricing", "getCategoryForPricing", "setProductVariants",
-  "getCategories", "getProduct", "searchProducts", "listCategories", "getCategory", "listPolicies", "getPolicy",
+  "getCategories", "getProduct", "getProductBySlug", "searchProducts", "listCategories", "getCategory", "listPolicies", "getPolicy",
   "validateProduct", "createCategory", "updateCategory", "deactivateCategory", "createPolicy", "updatePolicy", "deletePolicy",
 ].map(method => [method, async (...args) => (await getDefaultService())[method](...args)]));

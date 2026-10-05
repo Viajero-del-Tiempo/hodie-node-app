@@ -262,7 +262,8 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   decide el esquema: versión 2 exige variante; versión vieja rechaza un
   `variantId` recibido. También se retira en entrega 6 la consulta de SKU
   raíz que cubre esos productos. No hay backfill ni adaptación automática.
-- Esta entrega prepara el backend para el deploy conjunto de entrega 6:
+- Esta entrega prepara el backend para el deploy conjunto de entrega 6
+  con el frontend y el agente conversacional nuevo:
   el checkout/bot antiguos todavía crean ítems sin variante y esas líneas
   no mueven stock. No se despliega aisladamente sobre la tienda actual.
 - Tests nuevos en memoria: `test_order_variant_pricing.js` (fotos, precios,
@@ -292,3 +293,80 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   Las salidas de los procesos se muestran directamente. Las cinco suites
   en memoria usan `node --test`; las ocho preexistentes mantienen
   `ALLOW_PROD_FIRESTORE_TESTS=1`. No cambia `test:integration` ni `test:llm`.
+
+# CAMBIO DE PLAN DEL CATÁLOGO (2 de octubre de 2026)
+
+- La tienda completa está en mantenimiento. El catálogo nuevo y el agente
+  conversacional nuevo salen a producción juntos en la puesta en marcha
+  (entrega 6). El agente nuevo tendrá su propia especificación. Hasta
+  entonces, nada de esta rama se deploya, incluidas las entregas ya hechas.
+- Se retira del plan el adaptador temporal para el BudgetAgent y su
+  criterio de aceptación de cotización por WhatsApp. Se conservan los
+  números de las entregas restantes: la tienda es entrega 4, el panel es
+  entrega 5 y la puesta en marcha es entrega 6.
+- El BudgetAgent actual no se toca: `src/agents/nodes/budget.node.js`
+  queda fuera del alcance del catálogo y se elimina cuando se reemplace
+  por el agente nuevo. No se agrega un adaptador al servicio de catálogo.
+- La compatibilidad con productos del modelo viejo en pricing y en la
+  consulta de SKU raíz se sigue eliminando en la puesta en marcha,
+  antes del deploy conjunto. El manejo de pedidos históricos sin
+  `variantId` permanece, con aviso y sin movimientos de stock.
+- La entrega 4 se desarrollará en `hodie-tienda`, en la rama
+  `feature/catalogo-variantes`, con un plan aprobado antes de escribir
+  código de la tienda. No incluye cambios del panel admin (entrega 5).
+
+# DECISIONES DE CATÁLOGO — ENTREGA 4 (3 de octubre de 2026)
+
+- Tienda en `hodie-tienda`, rama `feature/catalogo-variantes`. Modelos y
+  `CatalogService` nuevos para listado, tarjetas de inicio, detalle, carrito
+  y checkout. `ProductService`, el modelo viejo y las listas de empaques del
+  panel quedan hasta su reemplazo en entrega 5; no se adaptan productos
+  viejos para mostrarlos en la tienda nueva. El criterio global de nombres
+  fijos todavía no se declara cumplido mientras quede el panel antiguo.
+- API pública mínima en el backend: `/catalog/categories`,
+  `/catalog/products` (búsqueda, orden y paginación),
+  `/catalog/products/by-slug/:slug` y `/catalog/products/:id` (referencias
+  del carrito). Usa el servicio central, sin lecturas Firestore desde las
+  pantallas nuevas. Página por defecto de 12, máximo 100; la búsqueda se
+  pagina después de obtener todos los resultados, sin el límite implícito 5.
+- Detalle web en `/store/<slug>`. El slug es único incluso entre productos
+  desactivados: consulta directa indexada `slug == valor`, limitada a 2 y
+  excluyendo el propio producto al editar. La validación no reserva el
+  slug; la entrega 5 debe garantizar simultáneamente unicidad de SKU y slug
+  en el guardado transaccional con el control compartido ya definido.
+  Enlaces inexistentes/inactivos muestran "Este producto ya no está
+  disponible" con acceso al catálogo, sin convertir IDs viejos a slugs.
+- Selectores de ejes dinámicos en el orden de `optionNames`, con dependencia
+  de los ejes anteriores y limpieza de selecciones posteriores. Variantes
+  agotadas visibles y deshabilitadas. Precio, imágenes y stock pertenecen
+  a la variante; la cantidad restante suma todas sus líneas del carrito.
+  Empaques de `packagingOptions` con tipos/nombres/precios/imágenes reales;
+  estándar gratuito es `null`, distinto de un empaque configurado gratuito.
+- Personalización por línea cargada en detalle. Identidad estable mediante
+  la tupla producto/variante/empaque/texto, quitando espacios extremos del
+  texto como el servidor. Dos textos distintos quedan separados; iguales
+  se suman. El carrito permite editar/quitar texto y fusiona coincidencias
+  solo si respeta cantidad 1–100 por línea y stock agregado por variante.
+  Vacío deja `customizationPending` solo cuando admite texto. El checkout
+  únicamente muestra los textos, no los vuelve a pedir. Se respeta
+  `allowed`, `allowsText`, `maxChars` por caracteres Unicode y `allowsImage`;
+  las imágenes web siguen pendientes de envío por WhatsApp.
+- Carrito local `schemaVersion: 2`; formato anterior, líneas sin variante
+  o JSON dañado se descartan completos, con aviso visible una vez. No se
+  deducen variantes. Totales e identidades se recalculan al cargar.
+- Antes de confirmar, la tienda revisa datos del catálogo público (con
+  caché). Si cambian pide revisión/reconfirmación; esta lectura no reserva
+  ni garantiza stock fresco. El POST valida de nuevo en el servidor, envía
+  ambos IDs y `packagingType` y conserva carrito/textos ante 400. El total
+  del servidor se muestra tras éxito y el carrito se vacía solo al guardar.
+- Tests frontend en `hodie-tienda/test/` con Jasmine/Karma ya instalados,
+  fixtures ficticios, almacenamiento y HTTP simulados, sin importar
+  `app.config` ni inicializar Firebase. Configuración de Angular/TypeScript
+  incluye ese directorio. Test de API pública con Express y catálogo en
+  memoria incluido en `test:unit`; CRUD real agrega la comprobación de slug
+  a sus propios documentos `test-`. No se agregan dependencias ni se cambia
+  `package.json`. `src/environments/` está excluido de Git; se conserva su
+  configuración actual. La guía manual indica configurar localmente la URL
+  de desarrollo como `http://localhost:3000` para verificar la API local.
+- El BudgetAgent no se modifica. No se hace commit, push ni deploy. El dueño
+  corre tests y build; el asistente no ejecuta tests ni reconstruye salidas.
