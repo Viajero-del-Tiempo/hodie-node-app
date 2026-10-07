@@ -1,10 +1,57 @@
-import { CatalogError, validateCategory, validateDocumentId, validatePolicy } from "../validators/catalog.validator.js";
+import { randomUUID } from "node:crypto";
+import { productVersion, assertProductVersion } from "../utils/catalog-version.util.js";
+import { CatalogError, assertObject, validateProductForSave, validateCategory, validateDocumentId, validatePolicy } from "../validators/catalog.validator.js";
 
 const fromDocument = document => document.exists ? { ...document.data(), id: document.id } : null;
 const fromSnapshot = snapshot => snapshot.docs.map(fromDocument);
 
 // No inicializa Firebase al importarse; el runtime y los tests inyectan la conexión.
-export function createCatalogRepository(db, { timestampNow }) {
+export function createCatalogRepository(db, {
+  timestampNow, controlDocumentId = "catalogWrites",
+  generateProductId = () => db.collection("products").doc().id,
+  generateVariantId = randomUUID,
+}) {
+  const controlId = validateDocumentId(controlDocumentId);
+  const adminDocument = document => document.exists
+    ? { ...fromDocument(document), version: productVersion(document) } : null;
+
+  async function saveProduct(id, input, { create = false, patch = false } = {}) {
+    assertObject(input, "body");
+    const ref = db.collection("products").doc(validateDocumentId(id, "productId"));
+    const controlRef = db.collection("counters").doc(controlId);
+    // IDs nuevos preasignados: los reintentos de Firestore no regeneran variantes.
+    const newIds = Array.isArray(input.variants)
+      ? input.variants.filter(variant => variant && variant.id === undefined).map(() => generateVariantId()) : [];
+    return db.runTransaction(async transaction => {
+      const control = await transaction.get(controlRef);
+      const document = await transaction.get(ref);
+      if (create && document.exists) throw new CatalogError("id", "El producto ya existe", 409);
+      if (!create && !document.exists) throw missing(id);
+      const existingProduct = fromDocument(document);
+      if (!create) {
+        if (existingProduct.schemaVersion !== 2) throw new CatalogError("schemaVersion", "Este producto usa el modelo viejo y no se convierte desde el editor nuevo", 409);
+        assertProductVersion(document, input.version);
+      }
+      let nextId = 0;
+      const normalized = await validateProductForSave(patch ? { ...existingProduct, ...input } : input, {
+        existingProduct, generateVariantId: () => newIds[nextId++],
+        repository: {
+          getCategory: categoryId => repository.getCategory(categoryId, { transaction }),
+          findSlugConflict: (slug, excludedId) => repository.findSlugConflict(slug, excludedId, { transaction }),
+          findSkuConflict: (sku, excludedId) => repository.findSkuConflict(sku, excludedId, { transaction }),
+        },
+      });
+      const timestamp = timestampNow();
+      const product = { ...normalized, id: ref.id,
+        createdAt: existingProduct?.createdAt ?? timestamp, updatedAt: timestamp };
+      if (create) transaction.create(ref, product);
+      else transaction.set(ref, product);
+      // Todos los escritores de SKU/slug actualizan el mismo documento.
+      // No utiliza la caché y todas las lecturas preceden a las escrituras.
+      transaction.set(controlRef, { revision: (control.data()?.revision ?? 0) + 1, updatedAt: timestamp });
+      return product;
+    });
+  }
   function missing(id) {
     return new CatalogError("id", `Documento no encontrado: ${id}`, 404);
   }
@@ -16,7 +63,7 @@ export function createCatalogRepository(db, { timestampNow }) {
     }
   }
 
-  return {
+  const repository = {
     async readCatalog() {
       const [categories, products, policies] = await Promise.all([
         db.collection("categories").get(),
@@ -42,21 +89,41 @@ export function createCatalogRepository(db, { timestampNow }) {
       });
     },
 
-    async findSlugConflict(slug, excludedProductId) {
-      const snapshot = await db.collection("products").where("slug", "==", slug).limit(2).get();
+    async findSlugConflict(slug, excludedProductId, { transaction } = {}) {
+      const query = db.collection("products").where("slug", "==", slug).limit(2);
+      const snapshot = await (transaction ? transaction.get(query) : query.get());
       return snapshot.docs.find(document => document.id !== excludedProductId)?.id ?? null;
     },
 
-    async findSkuConflict(sku, excludedProductId) {
+    async findSkuConflict(sku, excludedProductId, { transaction } = {}) {
       // Dos resultados alcanzan para descartar el propio producto sin ocultar otro.
       // TEMPORAL hasta entrega 6: la segunda consulta cubre el SKU raíz viejo,
       // sin backfill. Se retira al eliminar esos productos en la puesta en marcha.
-      const [current, legacy] = await Promise.all([
-        db.collection("products").where("skus", "array-contains", sku).limit(2).get(),
-        db.collection("products").where("sku", "==", sku).limit(2).get(),
-      ]);
+      const queries = [
+        db.collection("products").where("skus", "array-contains", sku).limit(2),
+        db.collection("products").where("sku", "==", sku).limit(2),
+      ];
+      const [current, legacy] = await Promise.all(queries.map(query => transaction ? transaction.get(query) : query.get()));
       return [...current.docs, ...legacy.docs].find(document => document.id !== excludedProductId)?.id ?? null;
     },
+
+    async listAdminProducts() {
+      const snapshot = await db.collection("products").where("schemaVersion", "==", 2).get();
+      return snapshot.docs.map(adminDocument).sort((a, b) => a.name.localeCompare(b.name, "es") || a.id.localeCompare(b.id));
+    },
+
+    async getAdminProduct(id) {
+      const document = await db.collection("products").doc(validateDocumentId(id, "productId")).get();
+      if (document.exists && document.data().schemaVersion !== 2) {
+        throw new CatalogError("schemaVersion", "Este producto usa el modelo viejo y no se convierte desde el editor nuevo", 409);
+      }
+      return adminDocument(document);
+    },
+
+    createProduct(input) { return saveProduct(generateProductId(), input, { create: true }); },
+    updateProduct(id, input, options) { return saveProduct(id, input, options); },
+    deactivateProduct(id, input) { return saveProduct(id, { version: input?.version, active: false }, { patch: true }); },
+    reactivateProduct(id, input) { return saveProduct(id, { version: input?.version, active: true }, { patch: true }); },
 
     async createCategory(input) {
       const category = validateCategory(input);
@@ -115,4 +182,5 @@ export function createCatalogRepository(db, { timestampNow }) {
       });
     },
   };
+  return repository;
 }

@@ -137,10 +137,13 @@ async function runOrderPdfDecouplingTests() {
             },
           ],
           shippingAddress: {
+            recipientName: "Destinatario de prueba",
+            recipientDocument: "1234567",
             street: "Avda. Monday 555",
             city: "Presidente Franco",
-            department: "",
+            department: "Departamento de prueba",
           },
+          saveShippingAddress: false,
         }),
       });
 
@@ -159,7 +162,7 @@ async function runOrderPdfDecouplingTests() {
         assert(orderDoc.exists, "El pedido existe persistido en Firestore");
         const odata = orderDoc.data();
         assert(odata.pdfDelivered === false, "En Firestore pdfDelivered es false");
-        assert(odata.shippingAddress?.department === "", "En Firestore el departamento no tiene fallback de 'Alto Paraná'");
+        assert(odata.shippingAddress?.department === "Departamento de prueba", "En Firestore se conserva el departamento ingresado, sin fallback");
         assert(odata.shippingMethod === "transportadora_contra_entrega", "Método de envío asignado correctamente para Presidente Franco");
       }
 
@@ -395,10 +398,13 @@ async function runOrderPdfDecouplingTests() {
             },
           ],
           shippingAddress: {
+            recipientName: "Destinatario de prueba",
+            recipientDocument: "1234567",
             street: "Avda. Monday 555",
             city: "Presidente Franco",
-            department: "",
+            department: "Departamento de prueba",
           },
+          saveShippingAddress: false,
         }),
       });
 
@@ -432,10 +438,13 @@ async function runOrderPdfDecouplingTests() {
             },
           ],
           shippingAddress: {
+            recipientName: "Destinatario de prueba",
+            recipientDocument: "1234567",
             street: "Avda. Monday 555",
             city: "Presidente Franco",
-            department: "",
+            department: "Departamento de prueba",
           },
+          saveShippingAddress: false,
         }),
       });
 

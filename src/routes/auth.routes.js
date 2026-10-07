@@ -1,9 +1,12 @@
 import express from 'express';
-import { requestCode, verifyCode, session, logout } from '../controllers/auth.controller.js';
+import * as authController from '../controllers/auth.controller.js';
 
-export const router = express.Router();
-
-router.post('/request', requestCode);
-router.post('/verify', verifyCode);
-router.post('/session', session);
-router.post('/logout', logout);
+export function createAuthRouter(controller = authController) {
+  const router = express.Router();
+  router.post('/request', controller.requestCode);
+  router.post('/verify', controller.verifyCode);
+  router.post('/session', controller.session);
+  router.post('/logout', controller.logout);
+  return router;
+}
+export const router = createAuthRouter();

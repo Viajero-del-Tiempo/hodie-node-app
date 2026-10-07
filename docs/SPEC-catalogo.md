@@ -193,7 +193,7 @@ Todo acceso al catálogo pasa por un único servicio, y precios y stock se calcu
 
 El slug también se comprueba directamente con `where('slug', '==', slug).limit(2)`, excluyendo el propio producto al editar. Productos desactivados siguen ocupando sus SKU y su slug. No se lee todo el catálogo para comprobar unicidad.
 
-**Concurrencia:** esta validación detecta conflictos, pero no reserva SKU ni slug ni constituye por sí sola una garantía frente a dos guardados simultáneos. Antes de habilitar el CRUD nuevo de productos en la entrega 5, su comprobación y escritura deben serializarse en una transacción que también escriba un documento de control compartido (por ejemplo, en la colección existente `counters`). La unicidad no debe basarse solo en una consulta previa o en la caché. Todos los productos del modelo nuevo deben guardar `skus` derivado; no se hace ningún backfill en esta entrega.
+**Concurrencia:** esta validación detecta conflictos, pero no reserva SKU ni slug ni constituye por sí sola una garantía frente a dos guardados simultáneos. El CRUD nuevo de productos de la entrega 5a serializa su comprobación y escritura en una transacción que también escribe el documento de control compartido `counters/catalogWrites`. La unicidad no debe basarse solo en una consulta previa o en la caché. Todos los productos del modelo nuevo deben guardar `skus` derivado; no se hace ningún backfill en esta entrega.
 
 El CRUD viejo de productos mantiene su comportamiento en la entrega 1 y solo incorpora invalidación de caché tras una escritura exitosa. La validación del modelo nuevo todavía no se conecta a ese CRUD; se integrará al reemplazarlo. No se implementan precios de pedidos, stock por variante ni adaptador del bot en esta entrega.
 
@@ -220,7 +220,10 @@ El CRUD viejo de productos mantiene su comportamiento en la entrega 1 y solo inc
 
 ### Panel admin (API)
 
-- CRUD de productos con el esquema nuevo. Los `variantId` los genera el servidor y no cambian al editar.
+- CRUD de productos con el esquema nuevo. Los `variantId` los genera el servidor y no cambian al editar. En la entrega 5a reemplaza el CRUD viejo; el panel Angular se reemplaza en 5b.
+- Las lecturas administrativas de productos son frescas e incluyen variantes inactivas. Devuelven `version`, un token de transporte basado en `updateTime` de Firestore, que nunca se persiste. PUT/PATCH y desactivación/reactivación lo exigen. Un documento modificado desde su lectura devuelve 409 con `field: "version"`, `code: "CATALOG_VERSION_CONFLICT"`, mensaje que identifica los cambios y un arreglo `changes`. No sobrescribe el documento; el panel de 5b conserva el borrador.
+- GET/POST/PUT/PATCH de productos trabajan únicamente con `schemaVersion: 2`; los documentos viejos no se convierten. DELETE siempre desactiva y `force=true` se rechaza.
+- `POST /admin/images` recibe base64 y MIME, requiere autenticación y rol admin consultado en Firestore, admite JPG/PNG/WEBP hasta 10 MB y devuelve `imageUrl`. La subida a Cloudinary la firma y realiza el backend, sin preset sin firma del frontend. El panel lo utiliza en 5b.
 - Desactivar (no borrar) variantes y productos.
 - CRUD de `categories` y de `policies`. No se puede desactivar una categoría que tenga productos activos.
 - En la entrega 1, ambas APIs ofrecen GET de colección y documento, POST, PUT, PATCH y DELETE. PUT/PATCH de categorías y políticas validan el documento combinado con el existente, preservando el ID. Los IDs son slugs libres, sin temas ni categorías predefinidos. `DELETE /admin/categories/:id` desactiva la categoría; consulta sus productos directamente en una transacción y rechaza con 409 si alguno está activo. Las lecturas administrativas incluyen categorías inactivas. `DELETE /admin/policies/:id` elimina solo ese documento; `updatedAt` siempre lo genera el servidor. Campos inválidos devuelven 400 con `field`, documentos inexistentes 404 y duplicados o referencias que impiden desactivar 409.
@@ -339,10 +342,20 @@ Se conservan los números de las entregas restantes para mantener las referencia
 - **Entrega 1:** servicio de catálogo, validaciones del modelo y CRUD de `categories` y `policies`.
 - **Entrega 2:** precios y stock por variante.
 - **Entrega 4:** tienda: listado, detalle, carrito y checkout.
-- **Entrega 5:** panel admin: productos, categorías y políticas.
+- **Entrega 4b-1:** backend de perfil, direcciones y registros fiscales con
+  predeterminados; pedidos propios con procedencia de teléfono; modalidad de
+  envío, cédula condicional, RUC SET y confirmaciones; fotos de envío/facturación
+  en pedidos y PDF; fixtures y tests en emulador. Los históricos sin origen
+  explícito se excluyen, incluidos los web, hasta una revisión posterior.
+- **Entrega 4b-2:** pantallas Angular de checkout, Mi perfil y pedidos propios;
+  aviso fiscal/copiar razón social y RUC en el detalle administrativo. Guardar
+  dirección viene marcado si no hay ninguna guardada y desmarcado si ya hay.
+- **Entrega 5a:** entorno local con Firestore Emulator, fixtures ficticias, sesión local con secreto JWT propio y configuración Angular `emulator`; CRUD nuevo de productos en backend, unicidad de SKU/slug transaccional y endpoint de imágenes con subida firmada. Tests de regresión de `/auth/request`, `/auth/verify`, `/auth/session` y `/auth/logout`.
+- **Entrega 5b:** panel Angular: productos, categorías y políticas; conservación del borrador ante 409 y uso del endpoint de imágenes del backend. Eliminar servicios y modelos viejos que queden sin consumidores.
 - **Entrega 6:** puesta en marcha junto con el agente conversacional nuevo, que tiene su propia especificación: backup, borrado de productos viejos, deploy conjunto de backend/frontend/agente, carga manual y verificación.
   - Hasta entonces, nada de esta rama se deploya. El BudgetAgent actual no se modifica y se elimina cuando se reemplace.
   - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
+  - Configurar el índice de pedidos propios descrito en `firestore.indexes.json`.
 
 En cada entrega:
 

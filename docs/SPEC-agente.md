@@ -89,6 +89,12 @@ Las imágenes y audios del turno no se guardan en el estado.
     recipientName, recipientDocument,      // cédula, la exige la transportadora
     city, department, street, phone
   },
+  billing: {
+    invoiceRequested: null,                // null = todavía no se preguntó; false = consumidor final
+    legalName: null,
+    ruc: null,
+    rucValidation: null                    // lo calcula el servidor; no lo elige el LLM
+  },
   updatedAt: Timestamp,
   expiresAt: Timestamp                     // updatedAt + 3 días
 }
@@ -98,6 +104,13 @@ Las imágenes y audios del turno no se guardan en el estado.
 - **Identidad de línea**, igual que en la web: producto + variante + empaque + texto. Dos textos distintos son dos líneas.
 - **Vencimiento:** 3 días sin cambios. Se aplica con una política de TTL de Firestore sobre `expiresAt`. El carrito vencido simplemente deja de existir; el agente no lo menciona salvo que el cliente pregunte.
 - **La cédula del destinatario** solo se pide para envíos por transportadora.
+- **Facturación:** antes de cotizar, preguntar "¿Necesitás factura?". Si no necesita,
+  guardar `invoiceRequested: false`. Si necesita, pedir razón social y RUC; se
+  pueden elegir datos guardados del perfil. Un número base sin guion propone el
+  RUC completo calculado, pero necesita confirmación explícita del cliente. Un
+  DV distinto permite corregir o continuar con aceptación explícita. Ambos
+  casos usan las validaciones backend de la entrega 4b-1, sin cambiar el RUC
+  automáticamente. La decisión y los datos fiscales son parte de la huella.
 
 ## Herramientas
 
@@ -108,12 +121,13 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | `buscar_productos` | `consulta`, `categoriaId?`, `opciones?`, `soloDisponibles?` (false), `limite?` (5) | Resultados de `searchProducts`: producto, categoría, `priceFrom`, variantes con precio y `available`, `matchedTerms` |
 | `ver_producto` | `productId` | Producto completo: atributos, variantes, personalización y empaques |
 | `enviar_imagenes` | `productId`, `variantId?` | Envía por WhatsApp hasta 3 imágenes del producto o la variante. Devuelve cuántas envió |
-| `carrito_ver` | — | Líneas actuales, datos de envío y qué falta para cotizar |
+| `carrito_ver` | — | Líneas actuales, datos de envío/facturación y qué falta para cotizar |
 | `carrito_agregar` | `productId`, `variantId`, `quantity`, `packagingType?`, `texto?`, `attachmentId?` | Valida variante activa, stock (sumando líneas), cantidad, empaque y límites de personalización. Si hay `attachmentId`, sube la imagen a Cloudinary |
 | `carrito_modificar` | `linea`, cambios | Mismas validaciones que agregar |
 | `carrito_quitar` | `linea` | Quita la línea |
 | `datos_envio` | `recipientName?`, `recipientDocument?`, `city?`, `department?`, `street?`, `phone?` | Guarda los datos, normaliza el teléfono y devuelve el tipo de envío y los datos faltantes |
-| `cotizar` | — | Totales calculados con la función de precios del servidor, tipo de envío, datos faltantes, `quoteId` y huella del carrito |
+| `datos_facturacion` | `invoiceRequested`, `legalName?`, `ruc?`, `confirmedRuc?`, `acknowledgeRucMismatch?`, `billingProfileId?` | Guarda la decisión y valida datos; devuelve campos faltantes, propuesta de RUC o aviso de DV. Las confirmaciones deben corresponder a lo que aceptó el cliente; el LLM no las infiere. Solo accede al perfil del cliente actual |
+| `cotizar` | — | Totales calculados con la función de precios del servidor, tipo de envío, decisión/datos de facturación, datos faltantes, `quoteId` y huella del carrito |
 | `crear_pedido` | `quoteId` | Ver Creación segura de pedidos |
 | `estado_pedido` | `orderNumber?`, `phone?` | Aplica las reglas de verificación (ver Seguridad) |
 | `registrar_comprobante` | `attachmentId`, `orderNumber?` | Asocia la imagen al pedido pendiente del cliente y alerta al admin. Nunca cambia el estado del pedido |
@@ -133,16 +147,22 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 
 El modelo no puede crear un pedido por error: `crear_pedido` solo funciona si el cliente vio un resumen y respondió después, y si nada cambió desde entonces. Esas condiciones las verifica el código, no el modelo.
 
-1. **Cotizar.** `cotizar` calcula los totales con la función de precios del servidor y devuelve un `quoteId`, derivado de las líneas, los datos de envío y los precios.
+1. **Cotizar.** `cotizar` exige una decisión sobre factura y sus datos si corresponde, calcula los totales con la función de precios del servidor y devuelve un `quoteId`, derivado de las líneas, los datos de envío, facturación y los precios. El resumen muestra consumidor final o razón social/RUC; cualquier cambio fiscal requiere una cotización nueva.
 2. **Mostrar.** El agente envía el resumen con `responder` y pasa `quoteIdMostrado`. Solo entonces el código registra `lastQuote`: el `quoteId`, la huella del carrito y la hora.
 3. **Confirmar.** En un turno posterior, si el cliente confirma, el agente llama a `crear_pedido(quoteId)`. El servidor rechaza la llamada si:
    - el `quoteId` no es el de `lastQuote`, o se mostró en el mismo turno;
    - el carrito cambió desde que se mostró (`CARRITO_CAMBIO`);
    - recalculado ahora, el total no coincide con el mostrado (`PRECIO_CAMBIO`);
-   - faltan datos de envío (`DATO_FALTANTE`).
+   - faltan datos de envío o facturación, o una confirmación de RUC (`DATO_FALTANTE`).
 
    En cualquiera de esos casos, el agente vuelve a cotizar y muestra el resumen nuevo.
 4. **Crear.** El pedido se crea con la misma función del checkout web (`processAndSendOrder`), que vuelve a validar stock y precios. Origen del pedido: `whatsapp`.
+   El transporte pasa `{ identity: { origin: "whatsapp", resolvedPhone } }` como
+   opción de servidor. `resolvedPhone` solo procede de WhatsApp; nunca del
+   teléfono escrito por el cliente ni de argumentos del LLM. El pedido guarda
+   `phoneVerification` con procedencia y verificación. Un teléfono ingresado
+   manualmente queda sin verificar y no habilita la lectura en Mi perfil.
+   Dirección y facturación son fotos del pedido; el PDF aclara que no es factura.
 5. **Idempotencia.** Crear dos veces el mismo `quoteId` devuelve el mismo pedido, sin duplicarlo. La relación entre `quoteId` y pedido se guarda en una transacción.
 6. **Después.** Se borra el carrito. El agente responde con el número de pedido, el total y las instrucciones de pago que devuelve la herramienta, sin agregar datos propios. El PDF y su contingencia funcionan igual que hoy.
 

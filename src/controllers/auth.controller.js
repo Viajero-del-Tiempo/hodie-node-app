@@ -1,153 +1,27 @@
-import jwt from 'jsonwebtoken';
-import {
-  sendVerificationCode,
-  sendErrorMessage,
-  sendLimitError,
-} from '../services/whatsapp.service.js';
-import {
-  CODE_EXPIRATION_MINUTES,
-  RATE_LIMIT_WINDOW_MINUTES,
-  MAX_CODE_REQUESTS,
-} from '../config/auth.js';
 import { JWT_SECRET, JWT_EXPIRATION } from '../config/jwt.js';
-import { Timestamp } from 'firebase-admin/firestore';
-import { db } from '../config/firebase.js';
+import { tokenBlacklist } from '../services/auth-session.service.js';
+import { createAuthSessionController } from './auth-session.controller.js';
+import { createAuthCodeController } from './auth-code.controller.js';
 
+// Se conservan los exports usados por suites y consumidores existentes.
+export { tokenBlacklist };
 export const inMemoryStorage = {};
-export const tokenBlacklist = new Set();
+const sessionController = createAuthSessionController({ jwtSecret: JWT_SECRET, tokenBlacklist });
+export const session = sessionController.session;
+export const logout = sessionController.logout;
 
-const generateCode = () =>
-  Math.floor(100000 + Math.random() * 900000).toString();
-
-export const requestCode = async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) {
-    return res.status(400).json({ error: 'Número de teléfono requerido' });
+let codeController;
+async function getCodeController() {
+  if (!codeController) {
+    codeController = Promise.all([
+      import('../config/firebase.js'), import('firebase-admin/firestore'),
+      import('../services/whatsapp.service.js'),
+    ]).then(([{ db }, { Timestamp }, transport]) => createAuthCodeController({
+      db, timestampNow: () => Timestamp.now(), jwtSecret: JWT_SECRET,
+      jwtExpiration: JWT_EXPIRATION, inMemoryStorage, ...transport,
+    })).catch(error => { codeController = undefined; throw error; });
   }
-
-  const now = Date.now();
-  const phoneData = inMemoryStorage[phone] || { requests: [] };
-
-  // Filtrar las solicitudes que están dentro de la ventana de tiempo
-  phoneData.requests = phoneData.requests.filter(
-    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MINUTES * 60 * 1000
-  );
-
-  if (phoneData.requests.length >= MAX_CODE_REQUESTS) {
-    await sendLimitError(phone);
-    return res.status(429).json({
-      error:
-        'Has excedido el límite de solicitudes de código. Intenta de nuevo más tarde.',
-    });
-  }
-
-  try {
-    const code = generateCode();
-    phoneData.code = code;
-    phoneData.timestamp = now;
-    phoneData.requests.push(now);
-    inMemoryStorage[phone] = phoneData;
-
-    await sendVerificationCode(phone, code);
-    res.json({ success: true, message: 'Código enviado por WhatsApp' });
-  } catch (err) {
-    console.error('Error en requestCode:', err);
-    res.status(500).json({ error: 'Error enviando el código' });
-  }
-};
-
-export const verifyCode = async (req, res) => {
-  const { phone, code } = req.body;
-  if (!phone || !code) {
-    return res.status(400).json({ error: 'Faltan datos' });
-  }
-
-  try {
-    const storedData = inMemoryStorage[phone];
-    if (storedData && storedData.code === code) {
-      const now = Date.now();
-      const elapsedTime = now - storedData.timestamp;
-      if (elapsedTime < CODE_EXPIRATION_MINUTES * 60 * 1000) {
-        // Asegurar que el usuario existe en Firestore con Admin SDK
-        const snapshot = await db
-          .collection("users")
-          .where("phoneNumber", "==", phone)
-          .limit(1)
-          .get();
-
-        let userData;
-        if (snapshot.empty) {
-          const newDocRef = db.collection("users").doc();
-          userData = {
-            uid: newDocRef.id,
-            phoneNumber: phone,
-            displayName: "",
-            role: "customer",
-            whatsapp_verified: true,
-            profile_status: "incomplete",
-            addresses: [],
-            billingAddress: null,
-            active: true,
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-          };
-          await newDocRef.set(userData);
-        } else {
-          const userDoc = snapshot.docs[0];
-          userData = { uid: userDoc.id, ...userDoc.data(), whatsapp_verified: true };
-          await userDoc.ref.update({
-            whatsapp_verified: true,
-            updatedAt: Timestamp.now(),
-          });
-        }
-
-        const token = jwt.sign({ phone }, JWT_SECRET, { expiresIn: JWT_EXPIRATION });
-        res.json({
-          success: true,
-          message: 'Usuario verificado correctamente',
-          token,
-          user: userData,
-        });
-      } else {
-        try { await sendErrorMessage(phone); } catch (e) { console.warn("No se pudo enviar mensaje de error WhatsApp:", e.message); }
-        res.status(400).json({ error: 'Código expirado' });
-      }
-    } else {
-      try { await sendErrorMessage(phone); } catch (e) { console.warn("No se pudo enviar mensaje de error WhatsApp:", e.message); }
-      res.status(400).json({ error: 'Código inválido' });
-    }
-  } catch (err) {
-    console.error('Error en verifyCode:', err);
-    res.status(500).json({ error: 'Error verificando usuario' });
-  }
-};
-
-export const session = async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'Token no proporcionado' });
-  }
-
-  if (tokenBlacklist.has(token)) {
-    return res.status(401).json({ error: 'Token inválido (cerrado)' });
-  }
-
-  try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    res.json({ success: true, message: 'Sesión válida', phone: decoded.phone });
-  } catch (err) {
-    res.status(401).json({ error: 'Token inválido o expirado' });
-  }
-};
-
-export const logout = async (req, res) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (token) {
-    tokenBlacklist.add(token);
-  }
-
-  res.json({ success: true, message: 'Sesión cerrada correctamente' });
-};
-
+  return codeController;
+}
+export const requestCode = async (req, res) => (await getCodeController()).requestCode(req, res);
+export const verifyCode = async (req, res) => (await getCodeController()).verifyCode(req, res);

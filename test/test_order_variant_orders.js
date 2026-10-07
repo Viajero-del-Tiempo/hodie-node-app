@@ -32,18 +32,18 @@ test("pedidos persistidos y API con precios por variante y fotos inmutables", as
     const payload = {
       userId, userPhoneNumber: phone, userDisplayName: "Cliente Alfa",
       items: [{ productId, variantId, quantity: 2, packagingType: "test-pack", customization: "texto" }],
-      shippingAddress: { street: "Calle de prueba", city: "Ciudad de prueba" },
+      shippingAddress: { recipientName: "Destinatario Alfa", recipientDocument: "1234567", street: "Calle de prueba", city: "Ciudad de prueba", department: "Departamento Alfa" },
     };
     // Doble de la entrega externa; no genera archivos ni envía mensajes reales.
     const delivery = { generatePdf: async () => null, sendPdf: async () => true };
     let sequence = 0;
     let cleanPayload;
-    const checkout = createSendOrderController({ processOrder: async input => {
+    const checkout = createSendOrderController({ processOrder: async (input, options) => {
       cleanPayload = input;
       const id = scope.id(`api-order-${++sequence}`);
       scope.track("orders", id); // Registro antes de persistir, incluso si falla el test.
       // Los IDs/números los asigna este doble de servidor, nunca el body HTTP.
-      return processAndSendOrder({ ...input, id, orderNumber: id }, delivery);
+      return processAndSendOrder({ ...input, id, orderNumber: id }, { ...delivery, ...options });
     }, notifyStatus: async () => {} });
     const app = express();
     app.use(express.json());

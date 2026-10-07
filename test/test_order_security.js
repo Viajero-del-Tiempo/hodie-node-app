@@ -194,7 +194,7 @@ async function runOrderSecurityTests() {
             imageUrl: "https://res.cloudinary.com/test/termo.jpg",
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           alias: "Casa",
           street: "Palma 123",
           city: "Asunción",
@@ -248,7 +248,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -292,7 +292,7 @@ async function runOrderSecurityTests() {
             },
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -338,7 +338,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Calle Atacante 456",
           city: "San Lorenzo",
           department: "Central",
@@ -383,7 +383,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -426,7 +426,7 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdInactive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const inactiveData = await inactiveRes.json();
@@ -448,7 +448,7 @@ async function runOrderSecurityTests() {
               selectedPackaging: { type: "diamantes_oro" },
             },
           ],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const invalidPkgData = await invalidPkgRes.json();
@@ -464,7 +464,7 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 2.5 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const floatQtyData = await floatQtyRes.json();
@@ -480,7 +480,7 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 0 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const zeroQtyData = await zeroQtyRes.json();
@@ -496,7 +496,7 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 101 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const excessiveQtyData = await excessiveQtyRes.json();
@@ -517,7 +517,7 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
 
@@ -554,13 +554,45 @@ async function runOrderSecurityTests() {
       });
       assert(adminRes.status === 200, "GET /admin/orders con JWT admin responde HTTP 200");
 
-      // 8.d POST /orders/order/status eliminado -> 404
-      const noAuthStatusRes = await fetch(`${baseUrl}/orders/order/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: "some-order", status: "paid" }),
+      // 8.d La ruta eliminada no permite cambiar un pedido, con o sin sesión.
+      // El cliente autenticado es su dueño: el rechazo no depende de que sea ajeno.
+      const statusOrderId = `test-ord-status-${timestamp}`;
+      const statusOrderRef = db.collection("orders").doc(statusOrderId);
+      createdOrderIds.push(statusOrderId);
+      await statusOrderRef.create({
+        id: statusOrderId,
+        orderNumber: statusOrderId,
+        userId: testUserAId,
+        userPhoneNumber: testUserAPhone,
+        status: "pending",
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       });
-      assert(noAuthStatusRes.status === 404, "POST /order/status fue eliminado y responde HTTP 404");
+      const initialStatus = (await statusOrderRef.get()).data().status;
+
+      for (const { label, token } of [
+        { label: "sin JWT" },
+        { label: "con JWT válido de cliente", token: tokenA },
+      ]) {
+        const statusRes = await fetch(`${baseUrl}/orders/order/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ orderId: statusOrderId, status: "paid" }),
+        });
+        assert(
+          [401, 404].includes(statusRes.status),
+          `POST /orders/order/status ${label} se rechaza con HTTP 401 o 404`,
+          `Status: ${statusRes.status}`
+        );
+        const afterAttempt = await statusOrderRef.get();
+        assert(
+          afterAttempt.exists && afterAttempt.data().status === initialStatus,
+          `POST /orders/order/status ${label} conserva el estado del pedido`
+        );
+      }
     }
 
     // -------------------------------------------------------------
@@ -583,7 +615,7 @@ async function runOrderSecurityTests() {
             name: "bolsa",
             price: 20000,
           },
-          shippingAddress: {
+          shippingAddress: {recipientDocument: "1234567", 
             recipientName: "Cliente Presupuestador",
             city: "Caacupé",
             department: "Cordillera",
@@ -636,7 +668,7 @@ async function runOrderSecurityTests() {
             },
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientDocument: "1234567", 
           recipientName: "Test Sanitización",
           street: "Palma 123",
           city: "Asunción",
@@ -681,7 +713,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1, customization: longText600 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const customData = await customRes.json();
@@ -694,7 +726,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1, instructions: longText600 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const instrData = await instrRes.json();
@@ -707,13 +739,12 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: longText250, city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: longText250, city: "Asunción", department: "Central" },
         }),
       });
       const streetData = await streetRes.json();
       assert(streetRes.status === 400, "Calle de 250 caracteres responde HTTP 400");
-      // Esta validación del controlador todavía devuelve error, sin field.
-      assert(typeof streetData.error === "string" && streetData.error.trim().length > 0, "El rechazo de la dirección incluye un error textual no vacío");
+      assert(streetData.field === "shippingAddress.street", "El error de calle identifica shippingAddress.street");
     }
 
     // -------------------------------------------------------------
@@ -727,7 +758,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [null],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const invalidItemData = await invalidItemRes.json();
@@ -750,7 +781,7 @@ async function runOrderSecurityTests() {
           user: { uid: testUserAId, phoneNumber: testUserAPhone, displayName: "Cliente Legítimo A" },
           body: {
             items: [{ productId: testProductIdActive, quantity: 1 }],
-            shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+            shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
           },
         }, response);
       } finally {
@@ -773,7 +804,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Km 16", city: "minga guazu", department: "Alto Paraná" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Km 16", city: "minga guazu", department: "Alto Paraná" },
         }),
       });
       const mingaData = await mingaRes.json();
@@ -795,7 +826,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
           shippingMethod: "local_gratis", // Intento de inyectar local_gratis para Asunción
         }),
       });
@@ -818,7 +849,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Ruta PY02", city: "Minga Guazú km 20", department: "Alto Paraná" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Ruta PY02", city: "Minga Guazú km 20", department: "Alto Paraná" },
         }),
       });
       const km20Data = await km20Res.json();

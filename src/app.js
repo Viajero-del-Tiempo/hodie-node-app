@@ -4,6 +4,7 @@ import cors from "cors";
 import { router as authRouter } from "./routes/auth.routes.js";
 import { router as orderRouter } from "./routes/order.routes.js";
 import { router as adminOrderRouter } from "./routes/admin.order.routes.js";
+import { router as adminImageRouter } from "./routes/admin.image.routes.js";
 import { router as adminProductRouter } from "./routes/admin.product.routes.js";
 import { router as userRouter } from "./routes/user.routes.js";
 import { router as adminUserRouter } from "./routes/admin.user.routes.js";
@@ -26,6 +27,8 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
+// Catálogo e imágenes administran sus límites de JSON antes del parser general.
+app.use("/admin", adminImageRouter, adminProductRouter);
 app.use(bodyParser.json());
 // 👉 Ruta base para probar el servidor
 app.get("/", (req, res) => {
@@ -43,7 +46,6 @@ app.use("/auth", authRouter);
 app.use("/orders", orderRouter);
 app.use("/users", userRouter);
 app.use("/admin", adminOrderRouter);
-app.use("/admin", adminProductRouter);
 app.use("/admin", adminUserRouter);
 app.use("/admin", adminChatRouter);
 app.use("/admin", adminCategoryRouter);

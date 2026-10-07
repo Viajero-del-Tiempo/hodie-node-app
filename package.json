@@ -8,9 +8,14 @@
     "dev": "nodemon server.js",
     "postinstall": "patch-package",
     "test:unit": "node test/run-unit.js",
-    "test:integration": "ALLOW_PROD_FIRESTORE_TESTS=1 node --test test/test_catalog_crud.js test/test_catalog_admin_api.js test/test_order_variant_orders.js test/test_order_variant_transactions.js",
+    "test:integration": "ALLOW_PROD_FIRESTORE_TESTS=1 node --test test/test_catalog_crud.js test/test_catalog_admin_api.js test/test_order_variant_orders.js test/test_order_variant_transactions.js test/test_catalog_products_api.js",
     "test:llm": "ALLOW_PROD_FIRESTORE_TESTS=1 node test/test_llm_smoke.js",
-    "test:all": "npm run test:unit && npm run test:llm"
+    "test:all": "npm run test:unit && npm run test:llm",
+    "catalog:local": "node scripts/dev-catalog.js",
+    "test:catalog:unit": "node --test test/test_catalog_search.js test/test_catalog_validation.js test/test_catalog_service.js test/test_catalog_public_api.js test/test_auth_endpoints.js test/test_catalog_admin_contract.js test/test_catalog_images.js",
+    "test:integration:emulator": "node scripts/test-catalog-emulator.js",
+    "test:customer:unit": "node --test test/test_ruc_validation.js test/test_profile_validation.js test/test_order_customer_data.js test/test_order_billing_pdf.js",
+    "test:customer:integration": "node scripts/test-catalog-emulator.js --customer-only"
   },
   "keywords": [],
   "author": "Arnaldo Guerrero",

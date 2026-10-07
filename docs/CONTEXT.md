@@ -370,3 +370,140 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   de desarrollo como `http://localhost:3000` para verificar la API local.
 - El BudgetAgent no se modifica. No se hace commit, push ni deploy. El dueño
   corre tests y build; el asistente no ejecuta tests ni reconstruye salidas.
+
+# DECISIONES DE CATÁLOGO — ENTREGA 5a (6 de octubre de 2026)
+
+- El alcance de esta ronda es entorno local, CRUD backend nuevo de productos
+  y endpoint de imágenes. El panel Angular corresponde a 5b: ProductService,
+  product.model.ts y packaging.model.ts quedan hasta esa ronda. El CRUD viejo
+  deja de escribir productos; pricing y consulta de SKU raíz mantienen su
+  compatibilidad temporal hasta entrega 6. No se convierten productos viejos.
+- requireAdmin verifica el JWT y consulta role en users de Firestore; no
+  confía en el rol declarado en el token. La validación de sesión y la
+  blacklist se separan de WhatsApp. Los exports anteriores y contratos OTP,
+  expiración, límites, sesión y logout se conservan, con pruebas HTTP en memoria.
+- Los guardados de productos leen y escriben counters/catalogWrites dentro
+  de la misma transacción que valida categoría, consulta slug y SKU, y guarda
+  el documento. Todas las consultas ocurren antes de las escrituras. Los IDs
+  de variantes nuevas se preasignan para mantenerse en reintentos. skus y
+  priceFrom se derivan siempre; IDs existentes no se eliminan. DELETE solo
+  desactiva, force=true se rechaza. Las rutas exigen requireAuth + requireAdmin.
+- El admin lee datos frescos y recibe version basada en updateTime, sin
+  persistirla. Toda edición/desactivación/reactivación la exige. Un cambio
+  concurrente devuelve 409 con field, code y changes, identificando stock
+  anterior/actual u otros grupos modificados. No se afirma la causa de un
+  cambio sin evidencia. No se escribe el documento ni se altera el payload
+  del borrador; la conservación visual del borrador se implementa en 5b.
+- POST /admin/images valida base64, MIME/contenido y máximo de 10 MB, y usa
+  subida firmada desde el backend. En modo local el mismo endpoint usa una
+  carpeta temporal, sin Cloudinary. La subida de personalización conserva su
+  contrato y carpeta. El frontend viejo sigue pendiente del reemplazo en 5b.
+- npm run catalog:local levanta Firestore (8080), UI (4000), API (3000), con
+  proyecto demo-hodie-catalogo y datos ficticios solo en test/fixtures.
+  Exige Java 21 y Firebase CLI. Genera secreto JWT en cada ejecución y se
+  niega a arrancar si coincide con JWT_SECRET de .env o del entorno heredado.
+  El secreto no se imprime. La API imprime OTP local/JWT del admin ficticio;
+  no inicia WhatsApp ni LLM. Desde 4b-1 monta también checkout y pedidos propios,
+  con generación PDF real y transporte local; el resto conserva catálogo,
+  CRUD, imágenes y perfil.
+- Firebase local se inicializa antes de buscar certificados, con projectId
+  explícito. El supervisor usa scripts/emulator.env para no cargar .env.
+  Angular tiene configuración emulator y plantilla versionada en dev/;
+  el archivo generado en src/environments/ sigue ignorado. Conserva los
+  entornos actuales y conecta el SDK y la API al proyecto/puertos locales.
+- Los tests de memoria nuevos están en test:unit y test:catalog:unit. Los
+  de productos/API, concurrencia y conflictos de stock se agregan a
+  test:integration. test:integration:emulator ejecuta integración contra el
+  emulador ya levantado, sin habilitar producción. Los IDs y el documento de
+  control de cada ejecución son test- y se limpian en finally, sin barridos.
+- Guía de comandos y pruebas manuales: docs/VERIFICACION-catalogo-local.md.
+  El dueño corre tests, build y git diff. El asistente no los ejecuta ni
+  reconstruye sus salidas. No se hace commit, push ni deploy. El BudgetAgent
+  no se modifica; la puesta en producción sigue siendo conjunta en entrega 6.
+
+# DECISIONES DE PERFIL Y CHECKOUT — ENTREGA 4b-1 (7 de octubre de 2026)
+
+- División aprobada: 4b-1 es solo backend, PDF, emulador y tests. Checkout,
+  Mi perfil y detalle administrativo Angular corresponden a 4b-2. No se
+  modifica el BudgetAgent ni se hace commit, push o deploy.
+- El perfil del cliente se separa de admin.user.controller.js. GET/PUT
+  /users/me exige sesión y usuario activo. PUT permite nombre, listas y
+  predeterminados; ignora teléfono, UID, rol y estado enviados en el body.
+  El UID de los middlewares sale del ID del documento, no de un campo uid.
+- addresses agrega id, recipientName y recipientDocument. defaultAddressId
+  y defaultBillingProfileId apuntan a registros propios. Los IDs nuevos los
+  asigna el servidor; un ID ajeno o repetido se rechaza. Direcciones antiguas
+  reciben IDs deterministas al leer y se materializan al primer guardado
+  propio, sin backfill. Si faltan datos del destinatario, el checkout exige
+  completarlos. Se conserva billingAddress postal; no se infiere RUC de él.
+- billingProfiles guarda id, alias, legalName, ruc y rucValidation. Hay varios
+  registros y un predeterminado. Datos de dirección/facturación son borradores
+  del checkout hasta que el cliente confirma su guardado. El servidor limita
+  cada lista a 30 registros y los textos a 200 caracteres.
+- GET devuelve version basada en updateTime y hashes. PUT exige esa versión
+  y guarda en una transacción. Un 409 PROFILE_VERSION_CONFLICT identifica los
+  grupos que cambiaron y no altera el borrador recibido ni el documento.
+- GET /orders/shipping-options?city comparte la regla existente: normaliza
+  tildes, mayúsculas y espacios; Minga Guazú (incluido km/barrio) es local
+  gratuito, el resto transportadora contra entrega. shippingCost sigue 0.
+  POST /orders/order/send recalcula el método; cédula se exige y conserva
+  solo para transportadora. Errores tienen field con la ruta del control.
+- saveShippingAddress por defecto es true si no hay direcciones, false si
+  hay alguna. saveBillingProfile por defecto false. El guardado opcional
+  agrega sin reemplazar ni duplicar, conserva predeterminados y relee el
+  perfil en una transacción. Si falla después de crear el pedido, se devuelve
+  éxito con profileSaved=false y profileWarning: nunca se pide repetir la
+  compra para guardar el perfil.
+- RUC se valida como cadena numérica de longitud variable, sin prefijo 80
+  ni ocho dígitos obligatorios. DV SET: pesos 2..11 desde la derecha,
+  reiniciando en 2; módulo 11, restos 0/1 => 0, otros => 11-resto.
+  Fuente: https://www.dnit.gov.py/documents/20123/224893/D%C3%ADgito%2BVerificador.pdf/fb9f86c8-245d-9dad-2dc1-ac3b3dc307a7
+  POST /users/me/ruc/validate propone suggestedRuc sin guardar. Un número
+  base no se completa sin confirmedRuc igual a la propuesta o reenvío del
+  RUC completo que aceptó el cliente. Falta de confirmación => 400
+  RUC_COMPLETION_REQUIRED. DV distinto => RUC_DV_MISMATCH; permite corregir
+  o acknowledgeRucMismatch=true, guardando mismatch_confirmed y el RUC
+  original. Nunca se cambia el dígito automáticamente ni se valida inscripción.
+- Pedido nuevo tiene billing.invoiceRequested=false por defecto (consumidor
+  final); true exige razón social/RUC. Dirección y billing son fotos completas
+  e independientes del perfil. Un histórico sin billing se presenta como
+  datos fiscales no registrados, no como consumidor final inferido.
+- Origen y verificación no provienen del body web. Se guarda origin y
+  phoneVerification { verified, source }. Web usa web_session; WhatsApp
+  usa whatsapp_resolved o customer_supplied. El transporte nuevo pasa la
+  evidencia en opciones identity, fuera de argumentos del LLM. Sin cambiar
+  BudgetAgent actual, el servidor verifica coincidencia con chat PN o con
+  lid_phone_map, sin iniciar WhatsApp ni inferirla de un teléfono escrito.
+- GET /users/me/orders y /users/me/orders/:id filtran por teléfono de sesión
+  y por evidencia: verificado con origen/fuente coherentes, o histórico con
+  origin=web explícito y sin metadata de verificación. Una marca false nunca
+  se convierte en true por ser web. Por decisión expresa del dueño se excluye
+  TODO histórico sin origen explícito (también web), hasta revisar después
+  cuáles habilitar. No se reconoce por IDs, UID, perfil actual o chat actual.
+  Detalle y PDF de pedido ajeno/oculto devuelven 404. No hay migración masiva.
+- Lectura de lista paginada por createdAt y documentId descendentes. Lee solo
+  pedidos del teléfono autenticado, máximo 500 por petición; un bloque de
+  históricos ocultos puede devolver lista vacía con nextCursor. El cursor
+  está cifrado/autenticado y ligado al dueño. DTO omite chat, evidencia,
+  controles internos de stock y otros datos administrativos; fechas ISO.
+  El índice está en firestore.indexes.json para configurar en entrega 6.
+- Persistencia y procesamiento se separan del transporte. Exports anteriores
+  de order.service.js se mantienen. Compatibilidad de direcciones del bot
+  viejo se elimina al reemplazar el BudgetAgent. Las reglas de pricing y
+  movimientos de stock de entrega 2 se conservan.
+- PDF imprime destinatario, cédula condicional y facturación desde el pedido;
+  siempre aclara que es un resumen y no una factura. GET autenticado
+  /users/me/orders/:id/pdf regenera ese PDF y elimina el temporal después de
+  transmitirlo. Nombres incluyen timestamp/UUID; falla de generación elimina
+  archivos incompletos. La entrega por WhatsApp sigue independiente del guardado.
+- Emulador agrega clientes 0900000002 (dos direcciones, dos registros fiscales,
+  pedidos visibles y ocultos) y 0900000003 (sin direcciones ni pedidos).
+  Las fixtures están solo en test/; el seed no sobrescribe. El backend local
+  usa checkout real con entrega local y lecturas administrativas, sin WhatsApp.
+- Tests nuevos: test:customer:unit (sin Firestore) y test:customer:integration
+  (solo emulador). También se agregan a test:unit y test:integration:emulator.
+  Guardas antes del SDK, IDs test- por ejecución, limpieza finally, ningún
+  acceso a producción ni a counters/orderNumber en las nuevas integraciones.
+  El dueño ejecuta tests/build/diff; el asistente no reconstruye salidas.
+  Guía: docs/VERIFICACION-perfil-backend.md. SPEC-agente.md incorpora decisión
+  fiscal antes de cotizar, herramienta datos_facturacion y huella con billing.

@@ -2,9 +2,11 @@ import PDFDocument from "pdfkit";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { randomUUID } from "node:crypto";
 import { loadImageFromUrl } from "../services/image.service.js";
 import { toDate } from "../utils/date.util.js";
 import { BANK_CONFIG } from "../config/bank.config.js";
+import { renderOrderBilling, renderOrderRecipient } from "./order-pdf-customer.service.js";
 
 /**
  * Limpia PDFs huérfanos de pedidos que hayan quedado en el directorio temporal de runs anteriores.
@@ -31,365 +33,388 @@ export const cleanupStaleOrderPDFs = () => {
   }
 };
 
-export const generateOrderPDF = async (order) => {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const fileName = `pedido-${order.orderNumber}-${Date.now()}.pdf`;
-      const filePath = path.join(os.tmpdir(), fileName);
+export const generateOrderPDF = async (order, {
+  documentFactory = options => new PDFDocument(options), loadImage = loadImageFromUrl,
+} = {}) => {
+  let filePath;
+  let stream;
+  let doc;
+  try {
+    const safeNumber = String(order.orderNumber).replace(/[^\w-]/g, "_");
+    const fileName = `pedido-${safeNumber}-${Date.now()}-${randomUUID()}.pdf`;
+    filePath = path.join(os.tmpdir(), fileName);
 
-      const fontRegular = path.join(
-        process.cwd(),
-        "assets",
-        "fonts",
-        "Poppins-Regular.ttf"
-      );
-      const fontBold = path.join(
-        process.cwd(),
-        "assets",
-        "fonts",
-        "Poppins-Bold.ttf"
-      );
+    const fontRegular = path.join(
+      process.cwd(),
+      "assets",
+      "fonts",
+      "Poppins-Regular.ttf"
+    );
+    const fontBold = path.join(
+      process.cwd(),
+      "assets",
+      "fonts",
+      "Poppins-Bold.ttf"
+    );
 
-      const golden = "#f59e0b";
+    const golden = "#f59e0b";
 
-      const doc = new PDFDocument({
-        size: "A4",
-        margins: { top: 70, bottom: 70, left: 60, right: 60 },
-      });
+    doc = documentFactory({
+      size: "A4",
+      margins: { top: 70, bottom: 70, left: 60, right: 60 },
+    });
 
-      const stream = fs.createWriteStream(filePath);
-      doc.pipe(stream);
+    stream = fs.createWriteStream(filePath);
+    const finished = new Promise((resolve, reject) => {
+      stream.once("finish", resolve);
+      stream.once("error", reject);
+      doc.once("error", reject);
+    });
+    // El rechazo se espera al terminar; evitamos unhandled mientras se cargan imágenes.
+    finished.catch(() => {});
+    doc.pipe(stream);
 
-      doc.registerFont("Poppins", fontRegular);
-      doc.registerFont("Poppins-Bold", fontBold);
+    doc.registerFont("Poppins", fontRegular);
+    doc.registerFont("Poppins-Bold", fontBold);
 
-      // ======================================================
-      // FUNCIÓN DEL BORDE (REUSABLE)
-      // ======================================================
-      const drawBorder = () => {
-        doc
-          .save()
-          .lineWidth(3)
-          .strokeColor(golden)
-          .roundedRect(40, 40, doc.page.width - 80, doc.page.height - 80, 12)
-          .stroke()
-          .restore();
-      };
+    // ======================================================
+    // FUNCIÓN DEL BORDE (REUSABLE)
+    // ======================================================
+    const drawBorder = () => {
+      doc
+        .save()
+        .lineWidth(3)
+        .strokeColor(golden)
+        .roundedRect(40, 40, doc.page.width - 80, doc.page.height - 80, 12)
+        .stroke()
+        .restore();
+    };
 
-      // Dibujar borde en la primera página
+    // Dibujar borde en la primera página
+    drawBorder();
+
+    // Dibujar borde en cada página nueva
+    doc.on("pageAdded", () => {
       drawBorder();
+    });
 
-      // Dibujar borde en cada página nueva
-      doc.on("pageAdded", () => {
-        drawBorder();
-      });
+    // ======================================================
+    // LOGO
+    // ======================================================
+    const logoPath = path.join(process.cwd(), "assets", "logo.png");
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, 75, 50, { width: 140 });
+    }
 
-      // ======================================================
-      // LOGO
-      // ======================================================
-      const logoPath = path.join(process.cwd(), "assets", "logo.png");
-      if (fs.existsSync(logoPath)) {
-        doc.image(logoPath, 75, 50, { width: 140 });
+    const divider = () => {
+      doc
+        .moveTo(60, doc.y)
+        .lineTo(doc.page.width - 60, doc.y)
+        .strokeColor(golden)
+        .lineWidth(1.2)
+        .stroke();
+      doc.moveDown(1.2);
+    };
+
+    // Título
+    doc
+      .font("Poppins-Bold")
+      .fontSize(28)
+      .fillColor(golden)
+      .text("Pedido", { align: "right" });
+
+    doc
+      .font("Poppins")
+      .fontSize(16)
+      .fillColor("#333333")
+      .text(`#${order.orderNumber}`, { align: "right" });
+
+    doc.moveDown(4);
+    divider();
+
+    // ======================================================
+    // INFORMACIÓN CLIENTE
+    // ======================================================
+    doc
+      .font("Poppins-Bold")
+      .fontSize(22)
+      .fillColor(golden)
+      .text("Información del Cliente");
+
+    doc.moveDown(0.7);
+
+    doc
+      .font("Poppins")
+      .fontSize(16)
+      .fillColor("#333")
+      .text(`Nombre: ${order.userDisplayName}`)
+      .text(`Teléfono: ${order.userPhoneNumber}`)
+      .text(
+        `Fecha del pedido: ${(toDate(order.createdAt) || new Date()).toLocaleString("es-PY", {
+          timeZone: "America/Asuncion", // GMT-3
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        })}`
+      );
+
+    doc.moveDown(1.5);
+    divider();
+
+    // ======================================================
+    // ÍTEMS
+    // ======================================================
+    doc
+      .font("Poppins-Bold")
+      .fontSize(22)
+      .fillColor(golden)
+      .text("Ítems del Pedido");
+
+    doc.moveDown(1);
+
+    for (const item of order.items) {
+      // Definir precio total y descripción según el packaging
+      const priceTotal = item.selectedPackaging
+        ? item.price + item.selectedPackaging.price
+        : item.price;
+
+      const productDescription = item.selectedPackaging
+        ? ` con ${item.selectedPackaging.name}`
+        : "";
+
+      // Cargar la imagen correspondiente
+      let productImage = null;
+      try {
+        const imageUrl = item.selectedPackaging?.imageUrl || item.imageUrl;
+        if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
+          productImage = await loadImage(imageUrl);
+        }
+      } catch (err) {
+        console.log(
+          `Falló al cargar la imagen de ${
+            item.selectedPackaging ? "packaging" : "producto"
+          }`,
+          err
+        );
       }
 
-      const divider = () => {
-        doc
-          .moveTo(60, doc.y)
-          .lineTo(doc.page.width - 60, doc.y)
-          .strokeColor(golden)
-          .lineWidth(1.2)
-          .stroke();
-        doc.moveDown(1.2);
-      };
+      // Revisar espacio en página y agregar nueva si es necesario
+      const spaceLeftItem = doc.page.height - doc.y - 100; // margen de seguridad
+      if (spaceLeftItem < 50) doc.addPage();
 
-      // Título
-      doc
-        .font("Poppins-Bold")
-        .fontSize(28)
-        .fillColor(golden)
-        .text("Pedido", { align: "right" });
-
-      doc
-        .font("Poppins")
-        .fontSize(16)
-        .fillColor("#333333")
-        .text(`#${order.orderNumber}`, { align: "right" });
-
-      doc.moveDown(4);
-      divider();
-
-      // ======================================================
-      // INFORMACIÓN CLIENTE
-      // ======================================================
-      doc
-        .font("Poppins-Bold")
-        .fontSize(22)
-        .fillColor(golden)
-        .text("Información del Cliente");
-
-      doc.moveDown(0.7);
-
-      doc
-        .font("Poppins")
-        .fontSize(16)
-        .fillColor("#333")
-        .text(`Nombre: ${order.userDisplayName}`)
-        .text(`Teléfono: ${order.userPhoneNumber}`)
-        .text(
-          `Fecha del pedido: ${(toDate(order.createdAt) || new Date()).toLocaleString("es-PY", {
-            timeZone: "America/Asuncion", // GMT-3
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          })}`
-        );
-
-      doc.moveDown(1.5);
-      divider();
-
-      // ======================================================
-      // ÍTEMS
-      // ======================================================
-      doc
-        .font("Poppins-Bold")
-        .fontSize(22)
-        .fillColor(golden)
-        .text("Ítems del Pedido");
-
-      doc.moveDown(1);
-
-      for (const item of order.items) {
-        // Definir precio total y descripción según el packaging
-        const priceTotal = item.selectedPackaging
-          ? item.price + item.selectedPackaging.price
-          : item.price;
-
-        const productDescription = item.selectedPackaging
-          ? ` con ${item.selectedPackaging.name}`
-          : "";
-
-        // Cargar la imagen correspondiente
-        let productImage = null;
+      // Mostrar imagen si existe
+      if (productImage) {
         try {
-          const imageUrl = item.selectedPackaging?.imageUrl || item.imageUrl;
-          if (imageUrl && (imageUrl.startsWith("http://") || imageUrl.startsWith("https://"))) {
-            productImage = await loadImageFromUrl(imageUrl);
-          }
+          doc.image(productImage, { width: 85 });
         } catch (err) {
           console.log(
-            `Falló al cargar la imagen de ${
+            `Falló al incrustar la imagen de ${
               item.selectedPackaging ? "packaging" : "producto"
-            }`,
-            err
+            } en el PDF:`,
+            err.message
           );
         }
-
-        // Revisar espacio en página y agregar nueva si es necesario
-        const spaceLeftItem = doc.page.height - doc.y - 100; // margen de seguridad
-        if (spaceLeftItem < 50) doc.addPage();
-
-        // Mostrar imagen si existe
-        if (productImage) {
-          try {
-            doc.image(productImage, { width: 85 });
-          } catch (err) {
-            console.log(
-              `Falló al incrustar la imagen de ${
-                item.selectedPackaging ? "packaging" : "producto"
-              } en el PDF:`,
-              err.message
-            );
-          }
-        }
-
-        // Definir estilo de texto una sola vez
-        doc.font("Poppins").fontSize(15).fillColor("#333");
-
-        // Información del producto
-        doc
-          .text(`Producto: ${item.productName}${productDescription}`)
-          .text(`Código: ${item.productSku}`)
-          .text(`Cantidad: ${item.quantity}`)
-          .text(
-            `Precio unitario del producto: ${item.price.toLocaleString()} Gs.`
-          );
-
-        // Información de personalización
-        if (item.customization) {
-          doc.text(`Personalización: ${item.customization}`);
-        } else if (item.customizationPending) {
-          doc.text(`Personalización: Pendiente de confirmación`);
-        }
-        if (item.customizationImageUrl) {
-          doc.text(`Diseño adjunto: Imagen digital recibida`);
-        } else if (item.customizationImagePending) {
-          doc.text(`Diseño adjunto: Pendiente de recepción en WhatsApp`);
-        }
-
-        doc.moveDown(1);
-
-        // Información del packaging si existe
-        if (item.selectedPackaging) {
-          doc
-            .text(
-              `Precio unitario del paquete: ${item.selectedPackaging.price.toLocaleString()} Gs.`
-            )
-            .moveDown(1);
-        }
-
-        // Subtotal
-        doc
-          .text(
-            `Subtotal: ${(priceTotal * item.quantity).toLocaleString()} Gs.`
-          )
-          .moveDown(1);
-
-        // Divider entre productos
-        divider();
       }
 
-      // ======================================================
-      // DIRECCIÓN
-      // ======================================================
+      // Definir estilo de texto una sola vez
+      doc.font("Poppins").fontSize(15).fillColor("#333");
+
+      // Información del producto
       doc
-        .font("Poppins-Bold")
-        .fontSize(22)
-        .fillColor(golden)
-        .text("Dirección de Envío");
+        .text(`Producto: ${item.productName}${productDescription}`)
+        .text(`Código: ${item.productSku}`)
+        .text(`Cantidad: ${item.quantity}`)
+        .text(
+          `Precio unitario del producto: ${item.price.toLocaleString()} Gs.`
+        );
 
-      doc.moveDown(0.8);
-
-      doc
-        .font("Poppins")
-        .fontSize(16)
-        .fillColor("#333")
-        .text(`Ciudad: ${order.shippingAddress.city}`)
-        .text(`Departamento: ${order.shippingAddress.department}`)
-        .text(`Dirección: ${order.shippingAddress.street}`);
-
-      if (order.shippingAddress.instructions) {
-        doc.text(`Instrucciones: ${order.shippingAddress.instructions}`);
+      // Información de personalización
+      if (item.customization) {
+        doc.text(`Personalización: ${item.customization}`);
+      } else if (item.customizationPending) {
+        doc.text(`Personalización: Pendiente de confirmación`);
       }
-
-      doc.moveDown(1.5);
-      divider();
-
-      // ======================================================
-      // TOTALES
-      // ======================================================
-      doc.font("Poppins-Bold").fontSize(22).fillColor(golden).text("Totales");
-
-      doc.moveDown(0.7);
-
-      const isLocalGratis = order.shippingMethod === "local_gratis";
-      const shippingTypeLabel = isLocalGratis
-        ? "Envío local gratuito (Minga Guazú)"
-        : "Envío por transportadora (pago contra entrega)";
-      const shippingCostLabel = isLocalGratis
-        ? "Gratis (0 Gs.)"
-        : "Pago contra entrega (a abonar a transportadora)";
-
-      doc
-        .font("Poppins")
-        .fontSize(16)
-        .fillColor("#333")
-        .text(`Subtotal: ${order.subtotal.toLocaleString()} Gs.`)
-        .text(`Tipo de envío: ${shippingTypeLabel}`)
-        .text(`Costo de envío: ${shippingCostLabel}`)
-        .moveDown(0.5);
-
-      doc
-        .font("Poppins-Bold")
-        .fontSize(28)
-        .fillColor(golden)
-        .text(`Total a pagar: ${order.total.toLocaleString()} Gs.`, {
-          align: "right",
-        });
-
-      doc.moveDown(2);
-      divider();
-
-      // ======================================================
-      // INFORMACIÓN BANCARIA Y DE PAGO
-      // ======================================================
-      const bankImagePath = path.join(process.cwd(), "assets", "banco.png");
-
-      // nueva página para datos bancarios
-      doc.addPage();
-
-      doc
-        .font("Poppins-Bold")
-        .fontSize(22)
-        .fillColor(golden)
-        .text("Información de Pago");
-
-      doc.moveDown(0.8);
-
-      if (fs.existsSync(bankImagePath)) {
-        doc.image(bankImagePath, {
-          width: 250,
-          align: "center",
-        });
-        doc.moveDown(1);
-      } else {
-        // Fallback textual dinámico desde la fuente única BANK_CONFIG
-        doc
-          .font("Poppins")
-          .fontSize(16)
-          .fillColor("#333")
-          .text(`Entidad: ${BANK_CONFIG.bankName}`)
-          .text(`Titular: ${BANK_CONFIG.accountHolder}`)
-          .text(`Cédula / RUC: ${BANK_CONFIG.documentId}`)
-          .text(`Nro. de Cuenta: ${BANK_CONFIG.accountNumber}`)
-          .text(`Moneda: ${BANK_CONFIG.currency}`)
-          .text(`Alias: ${BANK_CONFIG.alias}`);
-        doc.moveDown(1.5);
+      if (item.customizationImageUrl) {
+        doc.text(`Diseño adjunto: Imagen digital recibida`);
+      } else if (item.customizationImagePending) {
+        doc.text(`Diseño adjunto: Pendiente de recepción en WhatsApp`);
       }
-
-      // Recordatorio del alias para transferencias desde BANK_CONFIG
-      doc
-        .font("Poppins-Bold")
-        .fontSize(14)
-        .fillColor("#333")
-        .text(`Alias para transferencia: ${BANK_CONFIG.alias}`, { align: "center" });
 
       doc.moveDown(1);
 
-      // ======================================================
-      // PIE
-      // ======================================================
-      // nueva página
-      doc.addPage();
-      // Obtener tamaño de página
-      const pageWidth = doc.page.width;
-      const pageHeight = doc.page.height;
+      // Información del packaging si existe
+      if (item.selectedPackaging) {
+        doc
+          .text(
+            `Precio unitario del paquete: ${item.selectedPackaging.price.toLocaleString()} Gs.`
+          )
+          .moveDown(1);
+      }
 
-      // Texto
-      const text = "Gracias por su compra";
+      // Subtotal
+      doc
+        .text(
+          `Subtotal: ${(priceTotal * item.quantity).toLocaleString()} Gs.`
+        )
+        .moveDown(1);
 
-      // Obtener ancho y alto del texto
-      const textWidth = doc.widthOfString(text);
-      const textHeight = doc.heightOfString(text, { width: pageWidth });
+      // Divider entre productos
+      divider();
+    }
 
-      // Calcular posición centrada
-      const x = (pageWidth - textWidth) / 2;
-      const y = (pageHeight - textHeight) / 2;
+    // ======================================================
+    // DIRECCIÓN
+    // ======================================================
+    doc
+      .font("Poppins-Bold")
+      .fontSize(22)
+      .fillColor(golden)
+      .text("Dirección de Envío");
 
-      doc.font("Poppins").fontSize(28).fillColor("#666").text(text, x, y, {
-        align: "center",
-        width: textWidth,
+    doc.moveDown(0.8);
+
+    doc
+      .font("Poppins")
+      .fontSize(16)
+      .fillColor("#333");
+    renderOrderRecipient(doc, order);
+    doc.text(`Ciudad: ${order.shippingAddress.city}`)
+      .text(`Departamento: ${order.shippingAddress.department}`)
+      .text(`Dirección: ${order.shippingAddress.street}`);
+
+    if (order.shippingAddress.instructions) {
+      doc.text(`Instrucciones: ${order.shippingAddress.instructions}`);
+    }
+
+    doc.moveDown(1.5);
+    divider();
+
+    renderOrderBilling(doc, order);
+    doc.moveDown(1);
+    divider();
+
+    // ======================================================
+    // TOTALES
+    // ======================================================
+    doc.font("Poppins-Bold").fontSize(22).fillColor(golden).text("Totales");
+
+    doc.moveDown(0.7);
+
+    const isLocalGratis = order.shippingMethod === "local_gratis";
+    const shippingTypeLabel = isLocalGratis
+      ? "Envío local gratuito (Minga Guazú)"
+      : "Envío por transportadora (pago contra entrega)";
+    const shippingCostLabel = isLocalGratis
+      ? "Gratis (0 Gs.)"
+      : "Pago contra entrega (a abonar a transportadora)";
+
+    doc
+      .font("Poppins")
+      .fontSize(16)
+      .fillColor("#333")
+      .text(`Subtotal: ${order.subtotal.toLocaleString()} Gs.`)
+      .text(`Tipo de envío: ${shippingTypeLabel}`)
+      .text(`Costo de envío: ${shippingCostLabel}`)
+      .moveDown(0.5);
+
+    doc
+      .font("Poppins-Bold")
+      .fontSize(28)
+      .fillColor(golden)
+      .text(`Total a pagar: ${order.total.toLocaleString()} Gs.`, {
+        align: "right",
       });
 
-      doc.end();
+    doc.moveDown(2);
+    divider();
 
-      stream.on("finish", () => resolve(filePath));
-      stream.on("error", reject);
-    } catch (err) {
-      console.log(err);
-      reject(err);
+    // ======================================================
+    // INFORMACIÓN BANCARIA Y DE PAGO
+    // ======================================================
+    const bankImagePath = path.join(process.cwd(), "assets", "banco.png");
+
+    // nueva página para datos bancarios
+    doc.addPage();
+
+    doc
+      .font("Poppins-Bold")
+      .fontSize(22)
+      .fillColor(golden)
+      .text("Información de Pago");
+
+    doc.moveDown(0.8);
+
+    if (fs.existsSync(bankImagePath)) {
+      doc.image(bankImagePath, {
+        width: 250,
+        align: "center",
+      });
+      doc.moveDown(1);
+    } else {
+      // Fallback textual dinámico desde la fuente única BANK_CONFIG
+      doc
+        .font("Poppins")
+        .fontSize(16)
+        .fillColor("#333")
+        .text(`Entidad: ${BANK_CONFIG.bankName}`)
+        .text(`Titular: ${BANK_CONFIG.accountHolder}`)
+        .text(`Cédula / RUC: ${BANK_CONFIG.documentId}`)
+        .text(`Nro. de Cuenta: ${BANK_CONFIG.accountNumber}`)
+        .text(`Moneda: ${BANK_CONFIG.currency}`)
+        .text(`Alias: ${BANK_CONFIG.alias}`);
+      doc.moveDown(1.5);
     }
-  });
+
+    // Recordatorio del alias para transferencias desde BANK_CONFIG
+    doc
+      .font("Poppins-Bold")
+      .fontSize(14)
+      .fillColor("#333")
+      .text(`Alias para transferencia: ${BANK_CONFIG.alias}`, { align: "center" });
+
+    doc.moveDown(1);
+
+    // ======================================================
+    // PIE
+    // ======================================================
+    // nueva página
+    doc.addPage();
+    // Obtener tamaño de página
+    const pageWidth = doc.page.width;
+    const pageHeight = doc.page.height;
+
+    // Texto
+    const text = "Gracias por su compra";
+
+    // Obtener ancho y alto del texto
+    const textWidth = doc.widthOfString(text);
+    const textHeight = doc.heightOfString(text, { width: pageWidth });
+
+    // Calcular posición centrada
+    const x = (pageWidth - textWidth) / 2;
+    const y = (pageHeight - textHeight) / 2;
+
+    doc.font("Poppins").fontSize(28).fillColor("#666").text(text, x, y, {
+      align: "center",
+      width: textWidth,
+    });
+
+    doc.end();
+
+    await finished;
+    return filePath;
+  } catch (error) {
+    doc?.destroy();
+    if (stream && !stream.closed) {
+      await new Promise(resolve => { stream.once("close", resolve); stream.destroy(); });
+    }
+    if (filePath) {
+      try { await fs.promises.unlink(filePath); }
+      catch (cleanupError) { if (cleanupError.code !== "ENOENT") console.warn("No se pudo eliminar un PDF incompleto:", cleanupError.message); }
+    }
+    throw error;
+  }
 };

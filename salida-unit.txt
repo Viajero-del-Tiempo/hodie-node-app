@@ -1,18 +1,75 @@
+npm notice run hodie-node-app@1.0.0 test:unit
+npm notice run node test/run-unit.js
 
-> hodie-node-app@1.0.0 test:unit
-> node test/run-unit.js
+=== test/test_ruc_validation.js ===
+✔ DV SET: RUC reales publicados de ANDE y COPACO (1.027861ms)
+✔ personas físicas: distintas longitudes y pesos 2 a 11 (0.868867ms)
+✔ número base propone RUC, no lo guarda sin confirmación exacta (0.610041ms)
+✔ DV distinto: corrección o aceptación explícita, nunca cambio automático (0.748272ms)
+✔ formato, tipos y consumidor final (0.458485ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.645475
 
+=== test/test_profile_validation.js ===
+✔ IDs, predeterminados y whitelist del perfil (2.363644ms)
+✔ direcciones antiguas se conservan y adquieren ID estable sin inventar destinatario (1.172375ms)
+✔ servicio guarda con versión, identifica conflicto y conserva el borrador (2.120361ms)
+✔ guardar desde checkout agrega sin reemplazar y no duplica (0.710159ms)
+✔ editar o borrar registros y conservar discrepancia aceptada solo si no cambia (0.410497ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 74.929818
+
+=== test/test_order_customer_data.js ===
+Error generando o enviando PDF para test-number: Fallo simulado
+✔ tipo de envío usa regla existente y cédula condicional (1.592892ms)
+✔ verificación viene de sesión/transporte; teléfono escrito y desconocido quedan fuera (0.710988ms)
+✔ persistencia guarda foto fiscal, ignora verificación forjada y no altera fotos existentes (2.887497ms)
+✔ consumidor final y fallo de PDF preservan el pedido (1.165889ms)
+✔ DTO del cliente no expone datos internos ni empaques extraños (0.406091ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 83.681209
+
+=== test/test_order_billing_pdf.js ===
+✔ PDF identifica consumidor final, históricos sin datos y solicitud con RUC (0.970865ms)
+✔ PDF solo imprime cédula para transportadora y usa destinatario del pedido (0.266167ms)
+✔ genera PDF real con datos de la foto del pedido, sin red, y limpia el archivo de test (136.361597ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 498.291661
 
 === test/test_catalog_search.js ===
-✔ normaliza acentos, diéresis, Unicode, puntuación y mayúsculas preservando ñ (2.70443ms)
-✔ plurales regulares funcionan en ambas direcciones sin diccionario del catálogo (0.427608ms)
-✔ consulta con datos ficticios devuelve coincidencia parcial sin etiqueta del destinatario (1.676069ms)
-✔ cantidad de términos precede a relevancia y cada campo participa de la búsqueda (1.250449ms)
-✔ prioriza coincidencia exacta dentro del mismo campo y admite términos repartidos (0.712161ms)
-✔ agotados visibles por defecto; filtros de categoría, disponibilidad y opciones (0.994162ms)
-✔ no combina términos o filtros de opciones de variantes distintas (0.514879ms)
-✔ orden estable, límite predeterminado, consulta vacía y ausencia de resultados (10.110883ms)
-✔ argumentos de búsqueda inválidos indican el campo (0.864142ms)
+✔ normaliza acentos, diéresis, Unicode, puntuación y mayúsculas preservando ñ (3.545484ms)
+✔ plurales regulares funcionan en ambas direcciones sin diccionario del catálogo (0.431718ms)
+✔ consulta con datos ficticios devuelve coincidencia parcial sin etiqueta del destinatario (1.736863ms)
+✔ cantidad de términos precede a relevancia y cada campo participa de la búsqueda (4.623891ms)
+✔ prioriza coincidencia exacta dentro del mismo campo y admite términos repartidos (0.920981ms)
+✔ agotados visibles por defecto; filtros de categoría, disponibilidad y opciones (1.051427ms)
+✔ no combina términos o filtros de opciones de variantes distintas (0.534299ms)
+✔ orden estable, límite predeterminado, consulta vacía y ausencia de resultados (10.195393ms)
+✔ argumentos de búsqueda inválidos indican el campo (0.894898ms)
 ℹ tests 9
 ℹ suites 0
 ℹ pass 9
@@ -20,21 +77,21 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 85.573449
+ℹ duration_ms 87.738927
 
 === test/test_catalog_validation.js ===
-✔ normaliza modelo y calcula campos del servidor, ignorando campos manipulados (3.486455ms)
-✔ nombre, versión, arrays, objetos y booleanos inválidos (1.096026ms)
-✔ precios y stock aceptan solo enteros seguros dentro de límites (0.600836ms)
-✔ ejes y combinaciones de opciones coherentes, independientemente del orden de claves (0.436876ms)
-✔ una variante creada nunca se elimina ni cambia de ID; puede desactivarse y reordenarse (0.683559ms)
-✔ SKU obligatorio y sin duplicados locales, incluso con variantes inactivas (0.218036ms)
-✔ empaques libres con tipos únicos, nombres y precios válidos (0.600206ms)
-✔ etiquetas y límites de personalización (0.642516ms)
-✔ categorías y políticas tienen IDs estables y campos tipados (0.704589ms)
-✔ categoría existente/activa y SKU global se consultan fuera de la caché (0.961664ms)
-✔ slug único usa consulta indexada limitada y excluye el propio producto (0.408539ms)
-✔ SKU global usa consultas indexadas y limitadas, sin leer todos los productos (0.339481ms)
+✔ normaliza modelo y calcula campos del servidor, ignorando campos manipulados (2.729113ms)
+✔ nombre, versión, arrays, objetos y booleanos inválidos (1.057122ms)
+✔ precios y stock aceptan solo enteros seguros dentro de límites (0.605619ms)
+✔ ejes y combinaciones de opciones coherentes, independientemente del orden de claves (0.435974ms)
+✔ una variante creada nunca se elimina ni cambia de ID; puede desactivarse y reordenarse (0.688767ms)
+✔ SKU obligatorio y sin duplicados locales, incluso con variantes inactivas (0.236997ms)
+✔ empaques libres con tipos únicos, nombres y precios válidos (0.605477ms)
+✔ etiquetas y límites de personalización (0.637754ms)
+✔ categorías y políticas tienen IDs estables y campos tipados (0.732444ms)
+✔ categoría existente/activa y SKU global se consultan fuera de la caché (0.965629ms)
+✔ slug único usa consulta indexada limitada y excluye el propio producto (0.475559ms)
+✔ SKU global usa consultas indexadas y limitadas, sin leer todos los productos (0.371918ms)
 ℹ tests 12
 ℹ suites 0
 ℹ pass 12
@@ -42,16 +99,16 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 81.939221
+ℹ duration_ms 80.099651
 
 === test/test_catalog_service.js ===
-✔ categorías activas en orden, administración incluye inactivas, políticas por ID (3.268051ms)
-✔ detalle conserva datos completos y variantes activas agotadas, sin mutar caché (1.857797ms)
-✔ no expone productos viejos, inactivos, sin variantes activas o de categoría inactiva (0.444517ms)
-✔ caché de cinco minutos y lecturas concurrentes comparten una carga (0.488327ms)
-✔ invalidar durante una carga descarta el resultado anterior y vuelve a leer (0.307049ms)
-✔ escrituras exitosas invalidan caché; escrituras fallidas no la invalidan (0.969534ms)
-✔ fallos de lectura no quedan cacheados (0.242689ms)
+✔ categorías activas en orden, administración incluye inactivas, políticas por ID (3.330316ms)
+✔ detalle conserva datos completos y variantes activas agotadas, sin mutar caché (1.831691ms)
+✔ no expone productos viejos, inactivos, sin variantes activas o de categoría inactiva (0.43097ms)
+✔ caché de cinco minutos y lecturas concurrentes comparten una carga (0.487024ms)
+✔ invalidar durante una carga descarta el resultado anterior y vuelve a leer (0.300711ms)
+✔ escrituras exitosas invalidan caché; escrituras fallidas no la invalidan (0.940319ms)
+✔ fallos de lectura no quedan cacheados (0.251415ms)
 ℹ tests 7
 ℹ suites 0
 ℹ pass 7
@@ -59,10 +116,10 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 75.428055
+ℹ duration_ms 77.073415
 
 === test/test_catalog_public_api.js ===
-✔ catálogo público: búsqueda, paginación, stock y detalle por slug sin Firebase (79.350497ms)
+✔ catálogo público: búsqueda, paginación, stock y detalle por slug sin Firebase (77.104442ms)
 ℹ tests 1
 ℹ suites 0
 ℹ pass 1
@@ -70,27 +127,91 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 276.26491
+ℹ duration_ms 207.955148
+
+=== test/test_auth_endpoints.js ===
+✔ cargar rutas y validación de sesión no carga WhatsApp ni Firebase (5.874486ms)
+Error en requestCode: Error: test-delivery-failure
+    at sendVerificationCode (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_auth_endpoints.js:54:76)
+    at requestCode (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/auth-code.controller.js:37:13)
+    at Layer.handleRequest (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/layer.js:152:17)
+    at next (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/route.js:157:13)
+    at Route.dispatch (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/route.js:117:3)
+    at handle (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:435:11)
+    at Layer.handleRequest (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/layer.js:152:17)
+    at /home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:295:15
+    at processParams (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:582:12)
+    at next (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:291:5)
+▶ regresión HTTP: request, verify, session y logout preservan contratos
+  ✔ request exige teléfono, envía OTP, limita y libera tras la ventana (66.052873ms)
+Error en verifyCode: Error: test-database-failure
+    at Object.get (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_auth_endpoints.js:43:35)
+    at verifyCode (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/auth-code.controller.js:62:14)
+    at Layer.handleRequest (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/layer.js:152:17)
+    at next (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/route.js:157:13)
+    at Route.dispatch (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/route.js:117:3)
+    at handle (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:435:11)
+    at Layer.handleRequest (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/lib/layer.js:152:17)
+    at /home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:295:15
+    at processParams (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:582:12)
+    at next (/home/arnaldoguerrero/Hodie/hodie-node-app/node_modules/router/index.js:291:5)
+  ✔ verify crea cliente, verifica existente sin cambiar rol y firma JWT (13.502775ms)
+  ✔ session rechaza ausente, inválido, expirado y revocado; logout sigue siendo idempotente (11.08983ms)
+✔ regresión HTTP: request, verify, session y logout preservan contratos (99.97608ms)
+ℹ tests 5
+ℹ suites 0
+ℹ pass 5
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 236.174579
+
+=== test/test_catalog_admin_contract.js ===
+✔ versión: identifica stock y otros campos, y conserva el borrador (3.832841ms)
+✔ entorno local: secreto nuevo, sin reutilizar .env, proyecto y host obligatorios (0.506903ms)
+✔ la comparación del secreto usa el valor de JWT_SECRET leído de .env (5.078822ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 73.844479
+
+=== test/test_catalog_images.js ===
+Error subiendo imagen del catálogo: CLOUDINARY_API_ERROR
+✔ subida firmada: contrato Cloudinary, carpetas y ausencia de preset/secreto en el body (18.342842ms)
+✔ imagen admin: valida contenido, MIME, tamaño y no sube archivos inválidos (52.021711ms)
+ℹ tests 2
+ℹ suites 0
+ℹ pass 2
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 136.439246
 
 === test/test_order_variant_pricing.js ===
-✔ foto comercial autoritativa, precio por variante y empaque por unidad (3.539885ms)
-✔ precios y stock frescos aunque el catálogo público esté cacheado; no reserva (1.175354ms)
-✔ stock insuficiente suma líneas de la misma variante e identifica disponibles (0.617035ms)
+✔ foto comercial autoritativa, precio por variante y empaque por unidad (2.744433ms)
+✔ precios y stock frescos aunque el catálogo público esté cacheado; no reserva (1.18369ms)
+✔ stock insuficiente suma líneas de la misma variante e identifica disponibles (0.619696ms)
 ▶ rechaza referencias, inactivos, cantidades y precios inválidos
-  ✔ producto ausente (0.280601ms)
-  ✔ producto inactivo (0.227069ms)
-  ✔ categoría inactiva (0.235089ms)
-  ✔ categoría ausente (0.243063ms)
-  ✔ variante ausente (3.711262ms)
-  ✔ variante inactiva (0.313525ms)
-  ✔ sin variante (0.385497ms)
-  ✔ precio fraccionario (0.215914ms)
-  ✔ precio cero (0.184378ms)
-  ✔ stock inválido (0.163918ms)
-✔ rechaza referencias, inactivos, cantidades y precios inválidos (8.370394ms)
-✔ empaques libres solo del producto, estándar gratuito y personalización configurada (0.802807ms)
-✔ compatibilidad temporal depende del modelo persistido, nunca del body (1.069366ms)
-✔ whitelist conserva referencias nuevas e ignora campos comerciales (0.149782ms)
+  ✔ producto ausente (0.278358ms)
+  ✔ producto inactivo (0.236488ms)
+  ✔ categoría inactiva (0.229961ms)
+  ✔ categoría ausente (0.242747ms)
+  ✔ variante ausente (0.259886ms)
+  ✔ variante inactiva (0.334945ms)
+  ✔ sin variante (0.399086ms)
+  ✔ precio fraccionario (0.215885ms)
+  ✔ precio cero (0.188154ms)
+  ✔ stock inválido (0.168266ms)
+✔ rechaza referencias, inactivos, cantidades y precios inválidos (5.00321ms)
+✔ empaques libres solo del producto, estándar gratuito y personalización configurada (0.795898ms)
+✔ compatibilidad temporal depende del modelo persistido, nunca del body (1.054807ms)
+✔ whitelist conserva referencias nuevas e ignora campos comerciales (0.140841ms)
 ℹ tests 17
 ℹ suites 0
 ℹ pass 17
@@ -98,24 +219,24 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 85.700836
+ℹ duration_ms 79.00854
 
 === test/test_order_variant_stock.js ===
-✔ agrupa líneas por producto y variante sin perder otras variantes/campos (4.04306ms)
-✔ pedidos viejos no consultan productos; avisos también en pedidos mixtos (0.4979ms)
+✔ agrupa líneas por producto y variante sin perder otras variantes/campos (3.20684ms)
+✔ pedidos viejos no consultan productos; avisos también en pedidos mixtos (0.500836ms)
 ▶ fallos revierten todo, no invalidan, no aceptan fallback al stock raíz
-  ✔ insuficiente por líneas repetidas (0.842613ms)
-  ✔ variante desaparecida (0.42908ms)
-  ✔ producto ausente (0.401281ms)
-  ✔ variante inactiva (0.371837ms)
-  ✔ producto inactivo (0.328451ms)
-  ✔ modelo viejo con variante (0.400502ms)
-  ✔ cantidad inválida (0.415355ms)
-  ✔ stock inválido (0.468555ms)
-✔ fallos revierten todo, no invalidan, no aceptan fallback al stock raíz (5.13054ms)
-✔ estado y stock atómicos; transiciones repetidas son idempotentes (1.134348ms)
-✔ transacción inyectada no anida ni invalida antes del commit (0.273572ms)
-✔ un fallo de stock deja pendiente el pedido y preserva su foto (0.343465ms)
+  ✔ insuficiente por líneas repetidas (0.812016ms)
+  ✔ variante desaparecida (0.383443ms)
+  ✔ producto ausente (0.406082ms)
+  ✔ variante inactiva (0.373058ms)
+  ✔ producto inactivo (0.333519ms)
+  ✔ modelo viejo con variante (0.387788ms)
+  ✔ cantidad inválida (0.406467ms)
+  ✔ stock inválido (0.525917ms)
+✔ fallos revierten todo, no invalidan, no aceptan fallback al stock raíz (5.121742ms)
+✔ estado y stock atómicos; transiciones repetidas son idempotentes (1.125543ms)
+✔ transacción inyectada no anida ni invalida antes del commit (0.272736ms)
+✔ un fallo de stock deja pendiente el pedido y preserva su foto (0.341864ms)
 ℹ tests 14
 ℹ suites 0
 ℹ pass 14
@@ -123,7 +244,7 @@
 ℹ cancelled 0
 ℹ skipped 0
 ℹ todo 0
-ℹ duration_ms 85.494365
+ℹ duration_ms 83.591724
 
 === test/test_budget_agent_v2.js ===
 🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
@@ -192,56 +313,55 @@
 
 === test/test_handoff_alert_transition.js ===
 🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
-◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
 ==================================================================
 🧪 TEST DE TRANSICIÓN Y GARANTÍA DE ALERTA DE HANDOFF (REQUISITO 9)
 ==================================================================
 
 --- PASO 1: Primer mensaje solicitando persona (no derivado -> derivado) ---
-📩 Mensaje entrante de +595981794897: "Hola, quiero hablar con una persona por favor"
-🧭 [595981794897@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
-🚨 Activando HumanHandoff para +595981794897. Motivo: Reclamo o solicitud explícita de atención humana
+📩 Mensaje entrante de +595981881651: "Hola, quiero hablar con una persona por favor"
+🧭 [595981881651@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+🚨 Activando HumanHandoff para +595981881651. Motivo: Reclamo o solicitud explícita de atención humana
 📢 [TEST MOCK] Alerta de WhatsApp enviada al admin (595983957102@c.us):
 🚨 *Derivación a Asesor Humano*
 
-• *Cliente:* +595981794897
-• *ChatId:* 59598179...
+• *Cliente:* +595981881651
+• *ChatId:* 59598188...
 
 📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
-📋 Hilo 595981794897@c.us registrado en índice handoff_threads.
-📤 Respuesta enviada a 595981794897@c.us
+📋 Hilo 595981881651@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981881651@c.us
 ✅ [PASS] El hilo se encuentra en handoff activo tras el primer mensaje
 ✅ [PASS] Se envió exactamente 1 alerta al admin en la primera derivación
 
 --- PASO 2: Mensaje adicional durante handoff activo (debe mantener silencio) ---
-📩 Mensaje entrante de +595981794897: "¿Hay alguien ahí?"
-🔒 Handoff humano activo para 595981794897. Manteniendo intervención.
-🧭 [595981794897@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
-📋 Hilo 595981794897@c.us registrado en índice handoff_threads.
-🔇 Sin respuesta automática para 595981794897@c.us (handoff humano activo o nodo terminal mudo).
+📩 Mensaje entrante de +595981881651: "¿Hay alguien ahí?"
+🔒 Handoff humano activo para 595981881651. Manteniendo intervención.
+🧭 [595981881651@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+📋 Hilo 595981881651@c.us registrado en índice handoff_threads.
+🔇 Sin respuesta automática para 595981881651@c.us (handoff humano activo o nodo terminal mudo).
 ✅ [PASS] El bot mantiene silencio durante handoff activo
 ✅ [PASS] NO se duplicó la alerta en mensajes posteriores durante el mismo handoff
 
 --- PASO 3: Admin reactiva el bot mediante POST /admin/chats/:threadId/resume-bot ---
-🤖 [BOT RESUMED] Administrador 'Admin Test' (admin-1791211662627) reactivó el bot para el hilo '595981794897@c.us' el 2026-10-05T14:47:47.103Z
+🤖 [BOT RESUMED] Administrador 'Admin Test' (admin-1791414448278) reactivó el bot para el hilo '595981881651@c.us' el 2026-10-07T23:07:32.336Z
 ✅ [PASS] El endpoint resume-bot respondió 200 OK
 ✅ [PASS] El bot está reactivado (humanHandoffRequired = false)
 ✅ [PASS] El contador de fallos se reinició a 0
 ✅ [PASS] Se registró marca temporal resumedAt
 
 --- PASO 4: Cliente escribe tras reactivación y vuelve a solicitar derivación ---
-📩 Mensaje entrante de +595981794897: "Buenas noches, pasame con un asesor"
-🧭 [595981794897@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
-🚨 Activando HumanHandoff para +595981794897. Motivo: Reclamo o solicitud explícita de atención humana
+📩 Mensaje entrante de +595981881651: "Buenas noches, pasame con un asesor"
+🧭 [595981881651@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo o solicitud explícita de atención humana"
+🚨 Activando HumanHandoff para +595981881651. Motivo: Reclamo o solicitud explícita de atención humana
 📢 [TEST MOCK] Alerta de WhatsApp enviada al admin (595983957102@c.us):
 🚨 *Derivación a Asesor Humano*
 
-• *Cliente:* +595981794897
-• *ChatId:* 59598179...
+• *Cliente:* +595981881651
+• *ChatId:* 59598188...
 
 📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
-📋 Hilo 595981794897@c.us registrado en índice handoff_threads.
-📤 Respuesta enviada a 595981794897@c.us
+📋 Hilo 595981881651@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981881651@c.us
 ✅ [PASS] El hilo volvió a quedar en handoff tras la segunda solicitud
 ✅ [PASS] Se enviaron exactamente DOS alertas en total (una por cada derivación)
 
@@ -315,25 +435,25 @@ Test adicional: SupportAgent consulta de pedidos sin número...
   ✅ PASS: SupportAgent solicita número de pedido o teléfono de compra en vez de buscar con ""
 
 Test 6: E2E con @lid irresoluble, captura de teléfono y persistencia de pedido...
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
   ✅ PASS: E2E: Tras calle, solicita número de teléfono porque @lid no tenía número resuelto
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
   ✅ PASS: E2E: BudgetAgent normalizó y guardó userPhoneNumber: '595981234567'
   ✅ PASS: E2E: quoteContext avanzó a 'confirmation'
-⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791211671258@lid): no se obtuvo pn válido terminado en @c.us.
+⚠️ No se pudo resolver número de teléfono para @lid (test_lid_e2e_1791414456522@lid): no se obtuvo pn válido terminado en @c.us.
 🛍️ Cliente 595981234567 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
   ✅ PASS: E2E: activeAgent queda en null tras confirmación de pedido
   ✅ PASS: E2E: Pedido encontrado en Firestore para el cliente @lid
   ✅ PASS: E2E: Pedido en Firestore guardó userPhoneNumber = "595981234567" (obtenido: "595981234567")
-  ✅ PASS: E2E: Pedido en Firestore guardó whatsappChatId = "test_lid_e2e_1791211671258@lid"
+  ✅ PASS: E2E: Pedido en Firestore guardó whatsappChatId = "test_lid_e2e_1791414456522@lid"
   ✅ PASS: E2E: Pedido guardado en estado 'pending'
 
 ==================================================================
@@ -342,23 +462,23 @@ Test 6: E2E con @lid irresoluble, captura de teléfono y persistencia de pedido.
 
 === test/test_order_pdf_decoupling.js ===
 🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
-◇ injected env (0) from .env // tip: ◈ secrets for agents [www.dotenvx.com]
 ==================================================================
 🧪 BATERÍA DE PRUEBAS: DESACOPLAMIENTO PEDIDO/PDF, PERSONALIZACIÓN Y FILTROS
 ==================================================================
 
-🌐 Servidor de pruebas iniciado en http://localhost:38283
+🌐 Servidor de pruebas iniciado en http://localhost:36015
 
 --- PRUEBA 1: Checkout Web con fallo en sendOrderPDF ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
     at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
-    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
-    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:180:24)
+    at Module.sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at sendPdf (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:90:79)
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:51:22
-⚠️ PDF no entregado para el pedido #hodie000367. Activando flujo de contingencia.
-⚠️ [FALLBACK orderFallbackText] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+    at async processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order-processing.service.js:10:30)
+    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:41:22
+⚠️ PDF no entregado para el pedido #hodie000418. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 📢 Alerta enviada al WhatsApp del admin (595983957102)
 ✅ [PASS] Checkout web responde HTTP 200 a pesar del fallo en PDF
 ✅ [PASS] Respuesta del checkout tiene status 'success'
@@ -366,21 +486,22 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Respuesta incluye orderNumber generado
 ✅ [PASS] El pedido existe persistido en Firestore
 ✅ [PASS] En Firestore pdfDelivered es false
-✅ [PASS] En Firestore el departamento no tiene fallback de 'Alto Paraná'
+✅ [PASS] En Firestore se conserva el departamento ingresado, sin fallback
 ✅ [PASS] Método de envío asignado correctamente para Presidente Franco
 ✅ [PASS] Se despachó el mensaje de texto de contingencia al cliente
 ✅ [PASS] Se despachó la alerta al administrador informando el PDF pendiente
 
 --- PRUEBA 2: BudgetAgent con fallo en sendOrderPDF ---
-🛍️ Cliente 595981613582 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+🛍️ Cliente 595981171327 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
 Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
     at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
-    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
-    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:180:24)
+    at Module.sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at sendPdf (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:90:79)
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order-processing.service.js:10:30)
     at async budgetAgentNode (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/agents/nodes/budget.node.js:1522:29)
-    at async runOrderPdfDecouplingTests (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:209:22)
-⚠️ PDF no entregado para el pedido #hodie000368. Activando flujo de contingencia.
+    at async runOrderPdfDecouplingTests (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:212:22)
+⚠️ PDF no entregado para el pedido #hodie000419. Activando flujo de contingencia.
 📢 Alerta enviada al WhatsApp del admin (595983957102)
 ✅ [PASS] BudgetAgent NUNCA deriva a handoff si el pedido se creó
 ✅ [PASS] activeAgent se desactiva tras cerrar la venta
@@ -388,7 +509,7 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Mensaje de respuesta incluye el número de pedido generado
 ✅ [PASS] Mensaje informa éxito y confirmación del pedido
 ✅ [PASS] Mensaje menciona que el PDF está siendo preparado
-✅ [PASS] Pedido #hodie000368 encontrado en Firestore
+✅ [PASS] Pedido #hodie000419 encontrado en Firestore
 ✅ [PASS] Pedido generado por BudgetAgent tiene pdfDelivered: false
 ✅ [PASS] Departamento guardado como string vacío (sin default)
 
@@ -410,36 +531,38 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Reconoce 'vasos térmicos' y asocia el producto 'Vaso Térmico Acero Inoxidable'
 
 --- PRUEBA 5: Personalización Web/Bot y Edición Admin ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
     at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
-    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
-    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:180:24)
+    at Module.sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at sendPdf (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:90:79)
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:51:22
-⚠️ PDF no entregado para el pedido #hodie000369. Activando flujo de contingencia.
-⚠️ [FALLBACK orderFallbackText] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+    at async processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order-processing.service.js:10:30)
+    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:41:22
+⚠️ PDF no entregado para el pedido #hodie000420. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 📢 Alerta enviada al WhatsApp del admin (595983957102)
 ✅ [PASS] Pedido web con personalización responde HTTP 200
 ✅ [PASS] Respuesta web indica customizationPending = false
 ✅ [PASS] Firestore: orden tiene customizationPending = false
 ✅ [PASS] Firestore: ítem contiene texto de personalización
 ✅ [PASS] Firestore: ítem tiene customizationPending = false
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id property (it's how we memoize) but got undefined
     at whatsappClient.sendMessage (file:///home/arnaldoguerrero/Hodie/hodie-node-app/test/test_order_pdf_decoupling.js:112:15)
-    at sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
-    at processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:180:24)
+    at Module.sendOrderPDF (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/whatsapp.service.js:87:26)
+    at sendPdf (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order.service.js:90:79)
     at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
-    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:51:22
-⚠️ PDF no entregado para el pedido #hodie000370. Activando flujo de contingencia.
-⚠️ [FALLBACK orderFallbackText] Destinatario '595981613582' no incluye '@'. Reconstruyendo '595981613582@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+    at async processAndSendOrder (file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/services/order-processing.service.js:10:30)
+    at async file:///home/arnaldoguerrero/Hodie/hodie-node-app/src/controllers/order.controller.js:41:22
+⚠️ PDF no entregado para el pedido #hodie000421. Activando flujo de contingencia.
+⚠️ [FALLBACK orderFallbackText] Destinatario '595981171327' no incluye '@'. Reconstruyendo '595981171327@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 📢 Alerta enviada al WhatsApp del admin (595983957102)
 ✅ [PASS] Pedido web sin personalización responde HTTP 200
 ✅ [PASS] Respuesta web indica customizationPending = true
 ✅ [PASS] Firestore: orden sin personalización tiene customizationPending = true
 ✅ [PASS] Firestore: ítem tiene customizationPending = true
-✍️ Personalización actualizada para pedido #hodie000370, ítem 0: "Texto cargado por el Administrador"
+✍️ Personalización actualizada para pedido #hodie000421, ítem 0: "Texto cargado por el Administrador"
 ✅ [PASS] PATCH /admin/orders/:id/customization responde HTTP 200
 ✅ [PASS] PATCH response indica success: true
 ✅ [PASS] Tras PATCH admin, customizationPending de la orden se limpia a false
@@ -471,13 +594,13 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] sendOrderStatus NO solicita personalización si hasPendingCustomization es false
 
 🧹 Limpiando recursos de prueba en Firestore...
-  🗑️ Pedido eliminado: orders/SP5m8bMi2LTPAdiU4WYf
-  🗑️ Pedido eliminado: orders/ord-1791211704936-hodie000368
-  🗑️ Pedido eliminado: orders/09VRPXHFG4e64KjnxqgY
-  🗑️ Pedido eliminado: orders/BGs0mhjJfVaeUcaGj1qQ
-  🗑️ Producto eliminado: products/test-prod-pdf-1791211703221
-  🗑️ Usuario eliminado: users/test-usr-1791211703221
-  🗑️ Usuario eliminado: users/test-adm-1791211703221
+  🗑️ Pedido eliminado: orders/Li7pOeAq7HICm23giREw
+  🗑️ Pedido eliminado: orders/ord-1791414493519-hodie000419
+  🗑️ Pedido eliminado: orders/uDfWxSNIuL1K1yNKZOgK
+  🗑️ Pedido eliminado: orders/8EHMJq4hqFY3FfTEY8sN
+  🗑️ Producto eliminado: products/test-prod-pdf-1791414491459
+  🗑️ Usuario eliminado: users/test-usr-1791414491459
+  🗑️ Usuario eliminado: users/test-adm-1791414491459
 ✅ Servidor de prueba cerrado y Firestore 100% limpio.
 
 ==================================================================
@@ -486,19 +609,18 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 
 === test/test_order_security.js ===
 🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
-◇ injected env (0) from .env // tip: ⌘ override existing { override: true }
 ==================================================================
 🔒 BATERÍA DE PRUEBAS - BLINDAJE DE SEGURIDAD EN CHECKOUT WEB
 ==================================================================
 
-🌐 Servidor de pruebas iniciado en http://localhost:33733
+🌐 Servidor de pruebas iniciado en http://localhost:44555
 
 🛠️ Preparando usuarios y catálogo de prueba en Firestore...
 ✅ Recursos de prueba configurados correctamente.
 
 --- TEST 1: Payload exacto del frontend (checkout-page.ts) ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Frontend payload devuelve HTTP 200
 ✅ [PASS] Respuesta indica success: true
 ✅ [PASS] Estado guardado en Firestore es 'pending'
@@ -509,14 +631,14 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] userPhoneNumber coincide con el teléfono del JWT
 
 --- TEST 2: Manipulación de status en body (status: 'paid') ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido procesado con HTTP 200
 ✅ [PASS] El status forzado en Firestore es 'pending' ignorando 'paid'
 
 --- TEST 3: Manipulación de precios en body (price: 1, total: 1) ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido con precios manipulados responde HTTP 200
 ✅ [PASS] Precio del ítem recalculado al precio oficial de catálogo (67.000)
 ✅ [PASS] Precio del empaque recalculado al precio oficial de catálogo (35.000)
@@ -524,16 +646,16 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Total recalculado correctamente (102.000) ignorando '2'
 
 --- TEST 4: Intento de sobreescribir pedido de otro usuario con id en body ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Petición procesada exitosamente
 ✅ [PASS] El pedido de la víctima conserva su userId intacto
 ✅ [PASS] El pedido de la víctima conserva su total original (999999)
-✅ [PASS] Se generó un nuevo ID independiente (QmV0X6sjKjPAAV6NXZGT !== test-ord-other-1791211714861)
+✅ [PASS] Se generó un nuevo ID independiente (2CvfA7OyX8M34KJ6bgOC !== test-ord-other-1791414502885)
 
 --- TEST 5: Suplantación de identidad (userPhoneNumber falso en body) ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido procesado con HTTP 200
 ✅ [PASS] userId en Firestore proviene del JWT y no del body
 ✅ [PASS] userPhoneNumber en Firestore proviene del JWT y no del body
@@ -560,10 +682,13 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] GET /users/me con JWT válido responde HTTP 200
 ✅ [PASS] GET /users/me retorna perfil correcto del usuario
 ✅ [PASS] GET /admin/orders con JWT admin responde HTTP 200
-✅ [PASS] POST /order/status fue eliminado y responde HTTP 404
+✅ [PASS] POST /orders/order/status sin JWT se rechaza con HTTP 401 o 404
+✅ [PASS] POST /orders/order/status sin JWT conserva el estado del pedido
+✅ [PASS] POST /orders/order/status con JWT válido de cliente se rechaza con HTTP 401 o 404
+✅ [PASS] POST /orders/order/status con JWT válido de cliente conserva el estado del pedido
 
 --- TEST 9: Flujo de creación de pedidos en BudgetAgent ---
-🛍️ Cliente 595981297662 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
+🛍️ Cliente 595981686739 confirmó el pedido. Invocando generateUniqueOrderNumber y order.service.js...
 ✅ [PASS] BudgetAgent ejecutó y emitió mensaje final de confirmación
 ✅ [PASS] El mensaje final incluye el número de pedido oficial
 ✅ [PASS] La orden generada por BudgetAgent fue persistida en Firestore
@@ -572,8 +697,8 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] BudgetAgent registró status = 'pending'
 
 --- TEST 10: Sanitización de packaging e imágenes en body ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido con imágenes/nombres en body procesado con HTTP 200
 ✅ [PASS] Nombre del empaque del modelo viejo usa su clave de catálogo e ignora el body
 ✅ [PASS] imageUrl de packaging en Firestore no toma la URL maliciosa del cliente
@@ -585,7 +710,7 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Instrucciones de 600 caracteres responde HTTP 400
 ✅ [PASS] El error identifica instructions como campo inválido
 ✅ [PASS] Calle de 250 caracteres responde HTTP 400
-✅ [PASS] El rechazo de la dirección incluye un error textual no vacío
+✅ [PASS] El error de calle identifica shippingAddress.street
 
 --- TEST 12: Errores 500 devuelven mensaje genérico al cliente ---
 ✅ [PASS] Ítem nulo responde HTTP 400
@@ -596,46 +721,47 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Error 500 solo expone el campo público error
 
 --- TEST 13: Política de envío real y shippingMethod ---
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido en Minga Guazú responde HTTP 200
 ✅ [PASS] Ciudad 'minga guazu' asigna shippingMethod = 'local_gratis'
 ✅ [PASS] Costo de envío en orden es 0
 ✅ [PASS] Total en Minga Guazú es 67.000 Gs.
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido en Asunción responde HTTP 200
 ✅ [PASS] Ciudad 'Asunción' asigna shippingMethod = 'transportadora_contra_entrega' ignorando body
 ✅ [PASS] Costo de envío en orden es 0 (contra entrega)
 ✅ [PASS] Total en Asunción es 67.000 Gs. (igual que en Minga Guazú)
-⚠️ [FALLBACK sendOrderPDF] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
-⚠️ [FALLBACK sendOrderStatus] Destinatario '595981297662' no incluye '@'. Reconstruyendo '595981297662@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderPDF] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
+⚠️ [FALLBACK sendOrderStatus] Destinatario '595981686739' no incluye '@'. Reconstruyendo '595981686739@c.us'. Si este usuario opera con @lid en WhatsApp, el mensaje podría fallar en silencio.
 ✅ [PASS] Pedido en 'Minga Guazú km 20' responde HTTP 200
 ✅ [PASS] Ciudad 'Minga Guazú km 20' asigna shippingMethod = 'local_gratis'
 ✅ [PASS] Costo de envío en orden es 0
 ✅ [PASS] Total en Minga Guazú km 20 es 67.000 Gs.
 
 🧹 Limpiando recursos de prueba en Firestore...
-  🗑️ Pedido eliminado: orders/test-ord-other-1791211714861
-  🗑️ Pedido eliminado: orders/rytJF3ysFFD7cdPL8kiN
-  🗑️ Pedido eliminado: orders/MImvE7w0UwNd1XkNDcuz
-  🗑️ Pedido eliminado: orders/qTpCQb1jL12eHHQDOTX3
-  🗑️ Pedido eliminado: orders/QmV0X6sjKjPAAV6NXZGT
-  🗑️ Pedido eliminado: orders/TktXpbFOU7TwW7UbjKLy
-  🗑️ Pedido eliminado: orders/ord-1791211720593-hodie000376
-  🗑️ Pedido eliminado: orders/nDzxuicWa34bZCP8qe3l
-  🗑️ Pedido eliminado: orders/is13nRDKQz9P2Z70D6w5
-  🗑️ Pedido eliminado: orders/xniB4xcgH6QWv25dMLYE
-  🗑️ Pedido eliminado: orders/SvLsmewyZL5kiQ7t5hfC
-  🗑️ Producto eliminado: products/test-prod-act-1791211714861
-  🗑️ Producto eliminado: products/test-prod-inact-1791211714861
-  🗑️ Usuario eliminado: users/test-usr-a-1791211714861
-  🗑️ Usuario eliminado: users/test-usr-b-1791211714861
-  🗑️ Usuario eliminado: users/test-usr-admin-1791211714861
+  🗑️ Pedido eliminado: orders/test-ord-other-1791414502885
+  🗑️ Pedido eliminado: orders/XX1wqcbqJfaHDoLnG4vv
+  🗑️ Pedido eliminado: orders/d7gO3csn1nP9J1zMtix1
+  🗑️ Pedido eliminado: orders/gHamajASaWLFGBENH5PX
+  🗑️ Pedido eliminado: orders/2CvfA7OyX8M34KJ6bgOC
+  🗑️ Pedido eliminado: orders/mxwESkh5JbZ31sWmFPc8
+  🗑️ Pedido eliminado: orders/test-ord-status-1791414502885
+  🗑️ Pedido eliminado: orders/ord-1791414509395-hodie000427
+  🗑️ Pedido eliminado: orders/zdXHnZDZFppb6lBt4CO5
+  🗑️ Pedido eliminado: orders/m4GUmbiSdxqHwjQDVnhM
+  🗑️ Pedido eliminado: orders/jPNAOj5TAbzBnfDsA4e0
+  🗑️ Pedido eliminado: orders/u07yWyctVPyz5vcj5nwE
+  🗑️ Producto eliminado: products/test-prod-act-1791414502885
+  🗑️ Producto eliminado: products/test-prod-inact-1791414502885
+  🗑️ Usuario eliminado: users/test-usr-a-1791414502885
+  🗑️ Usuario eliminado: users/test-usr-b-1791414502885
+  🗑️ Usuario eliminado: users/test-usr-admin-1791414502885
 ✅ Servidor de prueba cerrado y Firestore 100% limpio.
 
 ==================================================================
-📊 RESULTADO FINAL: 74 PASADAS, 0 FALLIDAS
+📊 RESULTADO FINAL: 77 PASADAS, 0 FALLIDAS
 ==================================================================
 
 === test/test_whatsapp_chat_id.js ===
@@ -644,7 +770,7 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 🧪 BATERÍA DE PRUEBAS - DECOUPLING userPhoneNumber vs whatsappChatId
 ==================================================================
 
-🛠️ Creando producto de prueba propio: test-prod-chatid-1791211726134...
+🛠️ Creando producto de prueba propio: test-prod-chatid-1791414515023...
 
 --- TEST 1: resolveChatId Behavior ---
 ✅ [PASS] Conserva @lid sin alterar
@@ -697,11 +823,11 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] updateAdminOrderStatus usa fallback para órdenes antiguas sin whatsappChatId
 
 🧹 Limpiando datos de prueba generados en Firestore...
-  🗑️ Pedido de prueba eliminado: orders/test-ord-t4-1791211726134
-  🗑️ Pedido de prueba eliminado: orders/test-ord-fake-date-1791211726134
-  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-lid-1791211726134
-  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-old-1791211726134
-  🗑️ Producto de prueba eliminado: products/test-prod-chatid-1791211726134
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t4-1791414515023
+  🗑️ Pedido de prueba eliminado: orders/test-ord-fake-date-1791414515023
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-lid-1791414515023
+  🗑️ Pedido de prueba eliminado: orders/test-ord-t6-old-1791414515023
+  🗑️ Producto de prueba eliminado: products/test-prod-chatid-1791414515023
 ✅ Limpieza de Firestore finalizada sin alterar datos reales de catálogo ni clientes.
 
 ==================================================================
@@ -714,14 +840,14 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 🧪 BATERÍA DE PRUEBAS - STATEGRAPH MULTI-AGENTE & FIRESTORE CHECKPOINT
 ==================================================================
 
-📱 Usando número de prueba: +595981348099 (chatId: 595981348099@c.us)
+📱 Usando número de prueba: +595981374187 (chatId: 595981374187@c.us)
 
 --- TURNO 1: Mensaje inicial de saludo y soporte ---
 ⚠️ Error parseando JSON de supportAgent, usando heurística: Unexpected token '�', "📍 Nos enc"... is not valid JSON
 ✅ [PASS] Turno 1: Generó al menos 2 mensajes en el historial (Human + AI)
 ✅ [PASS] Turno 1: El último mensaje es un AIMessage
 ✅ [PASS] Turno 1: Respondió con información de ubicación/soporte
-✅ [PASS] Turno 1: Checkpoint persistido exitosamente en Firestore para thread_id: 595981348099@c.us
+✅ [PASS] Turno 1: Checkpoint persistido exitosamente en Firestore para thread_id: 595981374187@c.us
 
 --- TURNO 2: Cotización de producto y persistencia multi-turno ---
 ✅ [PASS] Turno 2: Recuperó el historial previo y acumuló los nuevos mensajes (mínimo 4)
@@ -735,7 +861,7 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Turno 3: Cliente recibió mensaje cordial de derivación
 
 --- TURNO 4: Regla de Silencio con Handoff Activo (1.a) ---
-🔒 Handoff humano activo para 595981348099. Manteniendo intervención.
+🔒 Handoff humano activo para 595981374187. Manteniendo intervención.
 ✅ [PASS] Turno 4: El grafo terminó sin generar ningún nuevo AIMessage automático (silencio activo)
 ✅ [PASS] Turno 4: humanHandoffRequired se mantiene en true
 
@@ -774,26 +900,26 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Punto 3: La entrada en threadQueues se limpió automáticamente al vaciarse la cola (sin fuga de memoria)
 
 --- PRUEBA PUNTO 4: Handoff desde SupportAgent y regla de silencio ---
-📩 Mensaje entrante de +595981787272: "Tuvimos un problema con el pedido, tardaron mucho y es una queja"
-🧭 [595981787272@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
-🚨 Activando HumanHandoff para +595981787272. Motivo: Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja"
+📩 Mensaje entrante de +595981873139: "Tuvimos un problema con el pedido, tardaron mucho y es una queja"
+🧭 [595981873139@c.us] intent=human_handoff agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
+🚨 Activando HumanHandoff para +595981873139. Motivo: Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja"
 📢 Alerta de handoff enviada al WhatsApp del admin (595983957102)
-📋 Hilo 595981787272@c.us registrado en índice handoff_threads.
-📤 Respuesta enviada a 595981787272@c.us
+📋 Hilo 595981873139@c.us registrado en índice handoff_threads.
+📤 Respuesta enviada a 595981873139@c.us
 ✅ [PASS] Punto 4: SupportAgent activó humanHandoffRequired desde su propio nodo
 ✅ [PASS] Punto 4: Se envió exactamente 1 alerta al administrador en la derivación inicial
 ✅ [PASS] Punto 4: Cliente recibió respuesta cordial de derivación emitida por SupportAgent
-📩 Mensaje entrante de +595981787272: "Hola, sigo esperando una respuesta"
-🔒 Handoff humano activo para 595981787272. Manteniendo intervención.
-🧭 [595981787272@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
-📋 Hilo 595981787272@c.us registrado en índice handoff_threads.
-🔇 Sin respuesta automática para 595981787272@c.us (handoff humano activo o nodo terminal mudo).
+📩 Mensaje entrante de +595981873139: "Hola, sigo esperando una respuesta"
+🔒 Handoff humano activo para 595981873139. Manteniendo intervención.
+🧭 [595981873139@c.us] intent=handoff_active_silence agente=handoff derivar=si motivo="Reclamo del cliente: "tuvimos un problema con el pedido, tardaron mucho y es una queja""
+📋 Hilo 595981873139@c.us registrado en índice handoff_threads.
+🔇 Sin respuesta automática para 595981873139@c.us (handoff humano activo o nodo terminal mudo).
 ✅ [PASS] Punto 4: En el siguiente mensaje, el bot quedó en 100% de silencio (sin nuevo AIMessage)
 ✅ [PASS] Punto 4: El administrador NO recibió una segunda alerta en los turnos subsiguientes
 
 --- PRUEBA PUNTO 6: Cancelación real con AbortController y omisión de respuesta tardía ---
-⏱️ [TIMEOUT COLA] Tarea expirada tras 402ms para chat 595981130011@c.us. Liberando cola.
-🛑 Tarea abortada para 595981130011@c.us. Omitiendo checkpoint y respuesta tardía.
+⏱️ [TIMEOUT COLA] Tarea expirada tras 401ms para chat 595981333007@c.us. Liberando cola.
+🛑 Tarea abortada para 595981333007@c.us. Omitiendo checkpoint y respuesta tardía.
 ✅ [PASS] Punto 6: Tarea 1 falló por QueueTimeoutError al vencer el tiempo límite (400ms)
 ✅ [PASS] Punto 6: Segundo mensaje del mismo chat se ejecutó y resolvió con éxito tras liberarse la cola
 ✅ [PASS] Punto 6: El cliente recibió ÚNICAMENTE el mensaje de contingencia (sin respuesta tardía)
@@ -804,15 +930,15 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 
 --- PRUEBA: getLatestOrderForUser con múltiples pedidos y Firestore Timestamp ---
 ✅ [PASS] getLatestOrderForUser encuentra el pedido del usuario
-✅ [PASS] getLatestOrderForUser devuelve el pedido más reciente (esperado: test_ord_newer_1791211739836, obtenido: test_ord_newer_1791211739836)
+✅ [PASS] getLatestOrderForUser devuelve el pedido más reciente (esperado: test_ord_newer_1791414529684, obtenido: test_ord_newer_1791414529684)
 ✅ [PASS] getLatestOrderForUser coincide con el orderNumber más reciente
 ✅ [PASS] getLatestOrderForUser retorna createdAt con formato Timestamp válido
 
 🧹 Limpiando órdenes de prueba en Firestore...
-✅ Órdenes de prueba (test_ord_older_1791211739836, test_ord_newer_1791211739836) eliminadas de Firestore.
+✅ Órdenes de prueba (test_ord_older_1791414529684, test_ord_newer_1791414529684) eliminadas de Firestore.
 
 🧹 Limpiando checkpoints de prueba en Firestore...
-✅ Datos de prueba (595981348099@c.us, 595981348099, 150697601421342@lid, 270819405632198@lid, 595981443516@c.us, 595981443516, 595981649813@c.us, 595981649813, 595981787272@c.us, 595981787272, 595981130011@c.us, 595981130011) eliminados de Firestore.
+✅ Datos de prueba (595981374187@c.us, 595981374187, 150697601421342@lid, 270819405632198@lid, 595981909142@c.us, 595981909142, 595981188073@c.us, 595981188073, 595981873139@c.us, 595981873139, 595981333007@c.us, 595981333007) eliminados de Firestore.
 
 ==================================================================
 📊 RESULTADO FINAL: 51 PASADAS, 0 FALLIDAS
@@ -820,12 +946,11 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 
 === test/test_bot_resume_and_filters.js ===
 🔥 Firebase Admin inicializado correctamente con serviceAccountKey.json (Proyecto: hodie-tienda-de-regalos)
-◇ injected env (0) from .env // tip: ⌘ suppress logs { quiet: true }
 ==================================================================
 🧪 BATERÍA DE PRUEBAS - RESUME BOT, HANDOFF INDEX & WHATSAPP FILTERS
 ==================================================================
 
-🚀 Servidor de prueba iniciado en http://127.0.0.1:40871
+🚀 Servidor de prueba iniciado en http://127.0.0.1:37023
 
 --- TEST 1: Autenticación y Autorización ---
 ✅ [PASS] GET /admin/chats/handoff sin JWT responde HTTP 401
@@ -848,9 +973,9 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] Motivo coincide exactamente con el del estado
 ✅ [PASS] lastCustomerMessage coincide con el mensaje del cliente
 ✅ [PASS] Fecha de derivación presente en formato ISO
-🔒 Handoff humano activo para 595981117446. Manteniendo intervención.
+🔒 Handoff humano activo para 595981437347. Manteniendo intervención.
 ✅ [PASS] Turno 2: Bot en 100% de silencio durante handoff (sin nuevo AIMessage)
-🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791211760400) reactivó el bot para el hilo '595981117446@c.us' el 2026-10-05T14:49:24.300Z
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791414552261) reactivó el bot para el hilo '595981437347@c.us' el 2026-10-07T23:09:16.369Z
 ✅ [PASS] Reactivar bot con JWT admin responde HTTP 200
 ✅ [PASS] Reactivación exitosa en respuesta
 ✅ [PASS] humanHandoffRequired se actualizó a false
@@ -872,12 +997,12 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] BudgetAgent asignó motivo explícito de handoff
 ✅ [PASS] El handoff originado en BudgetAgent figura en GET /admin/chats/handoff
 ✅ [PASS] Motivo de BudgetAgent coincide
-🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791211760400) reactivó el bot para el hilo 'test-resume-budget-1791211760400@c.us' el 2026-10-05T14:49:28.247Z
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791414552261) reactivó el bot para el hilo 'test-resume-budget-1791414552261@c.us' el 2026-10-07T23:09:20.208Z
 ✅ [PASS] Reactivar hilo de BudgetAgent responde HTTP 200
 
 --- TEST 5.b: Reactivación HTTP real de hilo con @lid ---
 ✅ [PASS] Hilo @lid activó handoff en Turno 1
-🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791211760400) reactivó el bot para el hilo '150697601421342@lid' el 2026-10-05T14:49:29.899Z
+🤖 [BOT RESUMED] Administrador 'Admin Test Resume' (usr-adm-1791414552261) reactivó el bot para el hilo '150697601421342@lid' el 2026-10-07T23:09:21.822Z
 ✅ [PASS] POST /admin/chats/<id con @lid>/resume-bot responde HTTP 200
 ✅ [PASS] Respuesta exitosa de reactivación para @lid
 ✅ [PASS] thread_id devuelto coincide con el id @lid
@@ -905,10 +1030,10 @@ Error enviando PDF por WhatsApp: Error: Data passed to getter must include an id
 ✅ [PASS] 6.e Contenido recortado coincide
 
 🧹 Limpiando recursos de prueba en Firestore...
-  🗑️ Usuario eliminado: users/usr-cli-1791211760400
-  🗑️ Usuario eliminado: users/usr-adm-1791211760400
-  🗑️ Checkpoints, writes e índice eliminados para thread: 595981117446@c.us
-  🗑️ Checkpoints, writes e índice eliminados para thread: test-resume-budget-1791211760400@c.us
+  🗑️ Usuario eliminado: users/usr-cli-1791414552261
+  🗑️ Usuario eliminado: users/usr-adm-1791414552261
+  🗑️ Checkpoints, writes e índice eliminados para thread: 595981437347@c.us
+  🗑️ Checkpoints, writes e índice eliminados para thread: test-resume-budget-1791414552261@c.us
   🗑️ Checkpoints, writes e índice eliminados para thread: 150697601421342@lid
 ✅ Servidor de prueba cerrado y Firestore 100% limpio.
 

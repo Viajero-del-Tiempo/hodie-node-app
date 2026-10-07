@@ -69,6 +69,13 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
     return clone(result);
   }
 
+  async function writeProduct(method, ...args) {
+    const stored = await repository[method](...args);
+    // Ya hubo commit: invalidar incluso si la lectura posterior de la versión falla.
+    invalidateCache();
+    return clone(await repository.getAdminProduct(stored.id));
+  }
+
   function publicProduct(data, product) {
     if (!product || product.schemaVersion !== 2 || product.active !== true
         || !data.categories.some(category => category.id === product.categoryId && category.active === true)) return null;
@@ -79,6 +86,12 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
 
   return {
     invalidateCache,
+    listAdminProducts: () => repository.listAdminProducts(),
+    getAdminProduct: id => repository.getAdminProduct(id),
+    createProduct: input => writeProduct("createProduct", input),
+    updateProduct: (id, input, options) => writeProduct("updateProduct", id, input, options),
+    deactivateProduct: (id, input) => writeProduct("deactivateProduct", id, input),
+    reactivateProduct: (id, input) => writeProduct("reactivateProduct", id, input),
     // Lectura interna fresca: incluye documentos viejos/inactivos para validarlos
     // explícitamente y permite usar la misma transacción que el pedido.
     async getProductForPricing(id, options = {}) {
@@ -192,5 +205,6 @@ export const searchProducts = async input => (await getDefaultService()).searchP
 export const catalogService = Object.fromEntries([
   "getProductForPricing", "getCategoryForPricing", "setProductVariants",
   "getCategories", "getProduct", "getProductBySlug", "searchProducts", "listCategories", "getCategory", "listPolicies", "getPolicy",
+  "listAdminProducts", "getAdminProduct", "createProduct", "updateProduct", "deactivateProduct", "reactivateProduct",
   "validateProduct", "createCategory", "updateCategory", "deactivateCategory", "createPolicy", "updatePolicy", "deletePolicy",
 ].map(method => [method, async (...args) => (await getDefaultService())[method](...args)]));

@@ -1,0 +1,302 @@
+{
+  "admin": {
+    "uid": "test-local-admin",
+    "phoneNumber": "595900000001",
+    "displayName": "Administrador de prueba",
+    "role": "admin",
+    "active": true,
+    "whatsapp_verified": true,
+    "profile_status": "complete",
+    "addresses": [],
+    "billingAddress": null
+  },
+  "categories": [
+    {
+      "id": "test-local-category-alpha",
+      "name": "Categoría Alfa",
+      "description": "Datos ficticios para pruebas locales",
+      "order": 1,
+      "active": true
+    },
+    {
+      "id": "test-local-category-beta",
+      "name": "Categoría Beta",
+      "description": "",
+      "order": 2,
+      "active": true
+    },
+    {
+      "id": "test-local-category-inactive",
+      "name": "Categoría Inactiva",
+      "order": 3,
+      "active": false
+    }
+  ],
+  "policies": [
+    {
+      "id": "test-local-policy",
+      "title": "Tema de prueba",
+      "text": "Texto ficticio para verificar el editor. No representa una política del negocio."
+    }
+  ],
+  "products": [
+    {
+      "id": "test-local-product-alpha",
+      "name": "Producto Alfa",
+      "slug": "test-local-product-alpha",
+      "description": "Producto ficticio para probar variantes, personalización y empaques.",
+      "categoryId": "test-local-category-alpha",
+      "tags": [
+        "ejemplo",
+        "personalizable"
+      ],
+      "attributes": {
+        "serie": "Serie de prueba"
+      },
+      "optionNames": [
+        "acabado",
+        "diseño"
+      ],
+      "variants": [
+        {
+          "sku": "TEST-ALPHA-1",
+          "options": {
+            "acabado": "Opción A",
+            "diseño": "Diseño A"
+          },
+          "price": 10000,
+          "stock": 8,
+          "active": true,
+          "imageUrls": [
+            "/local-images/example.png"
+          ]
+        },
+        {
+          "sku": "TEST-ALPHA-2",
+          "options": {
+            "acabado": "Opción A",
+            "diseño": "Diseño B"
+          },
+          "price": 12000,
+          "stock": 0,
+          "active": true,
+          "imageUrls": [
+            "/local-images/example.png"
+          ]
+        },
+        {
+          "sku": "TEST-ALPHA-3",
+          "options": {
+            "acabado": "Opción B",
+            "diseño": "Diseño A"
+          },
+          "price": 11000,
+          "stock": 3,
+          "active": false,
+          "imageUrls": []
+        }
+      ],
+      "customization": {
+        "allowed": true,
+        "allowsText": true,
+        "maxChars": 20,
+        "allowsImage": true,
+        "notes": "Instrucción ficticia de personalización"
+      },
+      "packagingOptions": [
+        {
+          "type": "test-pack-alpha",
+          "name": "Empaque Alfa",
+          "price": 2000,
+          "imageUrl": "/local-images/example.png"
+        },
+        {
+          "type": "test-pack-beta",
+          "name": "Empaque Beta",
+          "price": 0
+        }
+      ]
+    },
+    {
+      "id": "test-local-product-beta",
+      "name": "Producto Beta",
+      "slug": "test-local-product-beta",
+      "description": "Ejemplo sin ejes de opciones.",
+      "categoryId": "test-local-category-beta",
+      "tags": [
+        "ejemplo"
+      ],
+      "attributes": {},
+      "optionNames": [],
+      "variants": [
+        {
+          "sku": "TEST-BETA-1",
+          "options": {},
+          "price": 15000,
+          "stock": 1,
+          "active": true,
+          "imageUrls": [
+            "/local-images/example.png"
+          ]
+        }
+      ],
+      "customization": {
+        "allowed": false,
+        "allowsText": false,
+        "allowsImage": false,
+        "notes": ""
+      },
+      "packagingOptions": [
+        {
+          "type": "test-pack-gamma",
+          "name": "Empaque Gamma",
+          "price": 3000
+        }
+      ]
+    }
+  ],
+  "customers": [
+    {
+      "uid": "test-local-customer-alpha",
+      "phoneNumber": "595900000002",
+      "displayName": "Cliente Alfa",
+      "role": "customer",
+      "active": true,
+      "whatsapp_verified": true,
+      "profile_status": "complete",
+      "addresses": [
+        {
+          "id": "test-local-address-alpha",
+          "alias": "Dirección Alfa",
+          "recipientName": "Destinatario Alfa",
+          "city": "Minga Guazú",
+          "department": "Alto Paraná",
+          "street": "Referencia ficticia Alfa"
+        },
+        {
+          "id": "test-local-address-beta",
+          "alias": "Dirección Beta",
+          "recipientName": "Destinatario Beta",
+          "recipientDocument": "1234567",
+          "city": "Ciudad Alfa",
+          "department": "Departamento Alfa",
+          "street": "Referencia ficticia Beta"
+        }
+      ],
+      "defaultAddressId": "test-local-address-alpha",
+      "billingProfiles": [
+        {
+          "id": "test-local-billing-person",
+          "alias": "Personal",
+          "legalName": "Persona de prueba Alfa",
+          "ruc": "1234567-9",
+          "rucValidation": {
+            "status": "valid",
+            "expectedDigit": 9
+          }
+        },
+        {
+          "id": "test-local-billing-company",
+          "alias": "Empresa",
+          "legalName": "Entidad de prueba Alfa",
+          "ruc": "80000001-3",
+          "rucValidation": {
+            "status": "valid",
+            "expectedDigit": 3
+          }
+        }
+      ],
+      "defaultBillingProfileId": "test-local-billing-person",
+      "billingAddress": null
+    },
+    {
+      "uid": "test-local-customer-beta",
+      "phoneNumber": "595900000003",
+      "displayName": "Cliente Beta",
+      "role": "customer",
+      "active": true,
+      "whatsapp_verified": true,
+      "profile_status": "complete",
+      "addresses": [],
+      "defaultAddressId": null,
+      "billingProfiles": [],
+      "defaultBillingProfileId": null,
+      "billingAddress": null
+    }
+  ],
+  "orders": [
+    {
+      "id": "test-local-order-web",
+      "customerId": "test-local-customer-alpha",
+      "daysAgo": 1,
+      "status": "pending",
+      "origin": "web",
+      "phoneVerification": {
+        "verified": true,
+        "source": "web_session"
+      },
+      "addressId": "test-local-address-beta",
+      "billingProfileId": "test-local-billing-company",
+      "items": [
+        {
+          "productId": "test-local-product-alpha",
+          "variantSku": "TEST-ALPHA-1",
+          "quantity": 1,
+          "packagingType": "test-pack-alpha",
+          "customization": "Texto anterior"
+        }
+      ]
+    },
+    {
+      "id": "test-local-order-web-history",
+      "customerId": "test-local-customer-alpha",
+      "daysAgo": 2,
+      "status": "cancelled",
+      "origin": "web",
+      "addressId": "test-local-address-alpha",
+      "items": [
+        {
+          "productId": "test-local-product-beta",
+          "variantSku": "TEST-BETA-1",
+          "quantity": 1,
+          "packagingType": null
+        }
+      ]
+    },
+    {
+      "id": "test-local-order-manual-phone",
+      "customerId": "test-local-customer-alpha",
+      "daysAgo": 3,
+      "status": "pending",
+      "origin": "whatsapp",
+      "phoneVerification": {
+        "verified": false,
+        "source": "customer_supplied"
+      },
+      "addressId": "test-local-address-beta",
+      "items": [
+        {
+          "productId": "test-local-product-alpha",
+          "variantSku": "TEST-ALPHA-1",
+          "quantity": 1,
+          "packagingType": null
+        }
+      ]
+    },
+    {
+      "id": "test-local-order-unknown-history",
+      "customerId": "test-local-customer-alpha",
+      "daysAgo": 4,
+      "status": "pending",
+      "addressId": "test-local-address-alpha",
+      "items": [
+        {
+          "productId": "test-local-product-alpha",
+          "variantSku": "TEST-ALPHA-1",
+          "quantity": 1,
+          "packagingType": null
+        }
+      ]
+    }
+  ]
+}

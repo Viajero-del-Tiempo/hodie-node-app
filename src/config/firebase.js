@@ -6,7 +6,17 @@ import path from "path";
 
 let app;
 
-if (getApps().length === 0) {
+const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
+if (process.env.LOCAL_CATALOG_MODE === "1" && (emulatorHost !== "127.0.0.1:8080" || process.env.GCLOUD_PROJECT !== "demo-hodie-catalogo")) {
+  throw new Error("El catálogo local exige Firestore Emulator y el proyecto demo-hodie-catalogo");
+}
+
+if (getApps().length === 0 && emulatorHost) {
+  // El SDK dirige las solicitudes al emulador. No se leen certificados ni ADC.
+  const projectId = process.env.GCLOUD_PROJECT || process.env.CATALOG_TEST_PROJECT_ID;
+  if (!projectId) throw new Error("El emulador requiere un projectId explícito");
+  app = initializeApp({ projectId });
+} else if (getApps().length === 0) {
   let serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH
     ? path.resolve(process.cwd(), process.env.FIREBASE_SERVICE_ACCOUNT_PATH)
     : path.join(process.cwd(), "serviceAccountKey.json");
@@ -64,6 +74,9 @@ if (getApps().length === 0) {
   }
 } else {
   app = getApps()[0];
+  if (emulatorHost && app.options.projectId !== (process.env.GCLOUD_PROJECT || process.env.CATALOG_TEST_PROJECT_ID)) {
+    throw new Error("La aplicación Firebase existente no corresponde al proyecto del emulador");
+  }
 }
 
 export const db = getFirestore(app);

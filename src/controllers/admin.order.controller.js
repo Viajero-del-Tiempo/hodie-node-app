@@ -1,6 +1,6 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../config/firebase.js";
-import { sendOrderStatus } from "../services/whatsapp.service.js";
+const sendOrderStatus = async (...args) => (await import("../services/whatsapp.service.js")).sendOrderStatus(...args);
 
 import { catalogService, invalidateCatalogCache } from "../services/catalog.service.js";
 import { createOrderStockService, getStockWarnings } from "../services/order-stock.service.js";
