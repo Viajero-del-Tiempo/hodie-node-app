@@ -554,3 +554,57 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   precedencia del supervisor a test_catalog_admin_contract.js. Sin nuevas
   dependencias ni cambios de package.json. Tests/build/diff los corre el dueño.
   Guía manual: hodie-tienda/docs/VERIFICACION-perfil-tienda.md.
+
+
+# DECISIONES DE CATÁLOGO — ENTREGA 5b (8 de octubre de 2026)
+
+- El panel Angular reemplaza los componentes anteriores de productos con un
+  listado y editor de schemaVersion 2, más páginas de categorías y políticas
+  incorporadas al menú admin. Conserva los guards y endpoints de la 5a.
+  AdminCatalogService solo usa HTTP autenticado: no escribe desde el SDK ni
+  intenta adaptar documentos viejos. Las APIs backend no se modifican.
+- El editor carga nombre, slug, descripción, categoría, etiquetas, atributos,
+  ejes, variantes, personalización y empaques del producto. Sugiere slug al
+  crear hasta una edición manual; editar nombre nunca modifica el slug de un
+  producto guardado. Las opciones se generan desde sus ejes libres. Renombrar
+  un eje conserva sus valores. Precio y stock se editan por variante.
+- Los IDs guardados de variantes se conservan; no hay acción para borrarlas
+  y el handler también rechaza retirarlas. Las filas nuevas del borrador sí
+  pueden quitarse y se envían sin ID para que lo asigne el servidor. Los IDs
+  de categorías y políticas quedan de solo lectura al editar. SKU, slug y
+  modelo siguen validándose en la transacción backend de la 5a; se envía la
+  versión de lectura y nunca skus, priceFrom ni timestamps editables.
+- Los errores se asocian al control de formulario indicado por field, incluidas
+  rutas de arreglos y claves libres de opciones/atributos. Se conservan como
+  validadores mientras ese campo no cambie, compartiendo el helper existente
+  de errores persistentes. El rechazo por productos activos aparece junto a
+  la activación de la categoría y conserva el resto del borrador.
+- Ante CATALOG_VERSION_CONFLICT, el editor muestra el mensaje y los cambios
+  informados por el servidor sin atribuirles una causa desconocida. Conserva
+  borrador y versión. Consultar la versión actual no los reemplaza. La revisión
+  compara original/borrador/actual, identifica variantes por ID e incorpora
+  cambios remotos en campos no editados (incluido stock), conservando los
+  cambios locales restantes. Si ambas versiones cambiaron un campo, exige
+  elegir actual o borrador. No suma stock, no guarda automáticamente y exige
+  revisar/guardar nuevamente. Atributos, ejes, etiquetas, personalización y
+  empaques se comparan por grupo. Descartar el borrador es una acción explícita.
+- Listado: categoría, precio desde calculado por el backend, cantidad de todas
+  las variantes y estado, con búsqueda/filtros, editar, desactivar y reactivar
+  con versión. Un rechazo no cambia el estado local; consultar datos actuales
+  permite volver a intentar con la versión fresca. Categorías permiten alta,
+  edición, orden y activación; políticas permiten temas libres, título y texto.
+- Imágenes de variantes y empaques se suben únicamente a POST /admin/images.
+  El mismo endpoint firma en producción y guarda localmente en el emulador.
+  Se conserva un archivo fallido para reintentar o quitarlo y se bloquea el
+  guardado mientras hay subidas pendientes. No hay presets del frontend.
+  Quitar una imagen la retira del borrador, sin borrar archivos remotos.
+- La búsqueda de referencias en src/ y test/ deja sin consumidores los modelos
+  product.model.ts y packaging.model.ts, ProductService y CloudinaryService.
+  Se eliminan con los componentes de producto anteriores, incluido su diálogo.
+  No se cambian dependencias, package.json ni los entornos locales existentes.
+- Tests Angular en memoria/HTTP simulado: servicio admin, editor, comparación
+  de versiones, listados/categorías/políticas e imágenes; datos inventados en
+  test/helpers/admin-catalog-fixtures.ts. Recorrido y comandos en
+  hodie-tienda/docs/VERIFICACION-panel-catalogo.md. El dueño corre tests/build/diff;
+  el asistente no los ejecuta ni reconstruye salidas. No se hace commit, push
+  ni deploy y el BudgetAgent actual no se modifica.

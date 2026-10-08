@@ -1,4 +1,4 @@
-# Catálogo local — entregas 5a y 4b-1
+# Catálogo local — entregas 5a, 4b y 5b
 
 Este entorno usa exclusivamente el proyecto ficticio `demo-hodie-catalogo`.
 Los datos de `test/fixtures/catalog-emulator.json` son ejemplos inventados:
@@ -60,11 +60,10 @@ consulta el rol real de ese usuario en el Firestore del emulador.
 La API local monta las rutas reales de catálogo, productos, categorías,
 políticas, imágenes, sesión y perfil. No inicia WhatsApp ni el grafo.
 Desde 4b-1 también monta checkout, pedidos propios y lectura administrativa
-de pedidos. Las pantallas nuevas de perfil/checkout corresponden a 4b-2;
-el contrato backend y sus comandos están en `VERIFICACION-perfil-backend.md`.
-El editor nuevo
-de Angular y el uso del endpoint de imágenes corresponden a la entrega 5b;
-el panel viejo todavía envía un formato que el CRUD nuevo rechaza.
+de pedidos. Las pantallas de perfil/checkout de 4b-2 y el panel de catálogo de 5b usan
+estos contratos. La guía backend de perfil está en
+`VERIFICACION-perfil-backend.md`; el recorrido del panel está en
+`hodie-tienda/docs/VERIFICACION-panel-catalogo.md`.
 
 ## Contrato del CRUD de productos
 

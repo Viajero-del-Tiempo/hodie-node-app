@@ -356,6 +356,7 @@ Se conservan los números de las entregas restantes para mantener las referencia
   - Hasta entonces, nada de esta rama se deploya. El BudgetAgent actual no se modifica y se elimina cuando se reemplace.
   - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
   - Preparar la configuración Firebase productiva con `firestore.indexes` apuntando a `firestore.indexes.json` y publicar los índices (incluido pedidos propios) con `firebase deploy --only firestore:indexes`, verificando antes el proyecto de producción seleccionado. No usar la configuración del emulador para este deploy.
+  - Borrar el upload preset sin firma de la cuenta de Cloudinary (Settings → Upload → Upload presets).
 
 En cada entrega:
 
