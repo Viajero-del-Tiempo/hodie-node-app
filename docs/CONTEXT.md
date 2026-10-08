@@ -608,3 +608,47 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   hodie-tienda/docs/VERIFICACION-panel-catalogo.md. El dueño corre tests/build/diff;
   el asistente no los ejecuta ni reconstruye salidas. No se hace commit, push
   ni deploy y el BudgetAgent actual no se modifica.
+
+# DECISIONES DEL AGENTE — ENTREGA 1 (8 de octubre de 2026)
+
+- Rama feature/agente. Alcance aprobado: solo runner de evaluación, sin
+  reemplazar ni modificar router, BudgetAgent, SupportAgent o WhatsApp.
+  El dueño escribe test/eval/conversations.yaml; el asistente nunca lo modifica.
+- Se implementa el formato estructurado v2 del encabezado. Contextos y claves
+  anidadas desconocidas, formas inválidas o productos/variantes/empaques que no
+  existen bloquean el caso con diagnóstico y línea. No se interpreta texto libre.
+- telefonoCliente es verificado; su ausencia deja el teléfono sin resolver.
+  historialPrevio se guarda antes del corte y no llega al modelo; duranteHandoff
+  es histórico, no una derivación activa. conversacion es la sesión actual.
+  Sesión nueva conserva el carrito vigente; se respeta su antigüedad y TTL 3 días.
+- Catálogo, políticas, pedidos, carrito, checkpoints y cargas son copias en
+  memoria independientes por repetición. Se reutiliza el servicio de catálogo
+  con repositorio/reloj inyectados, sin Firebase, credenciales de Firestore,
+  WhatsApp ni llamadas a servicios productivos. Solo el juez llm usa la red.
+  El proceso bloquea imports/requires de SDKs productivos y el inicializador
+  Firebase antes de cargarlos, con module.registerHooks del runtime Node 24.
+- cotizacionMostrada exige la herramienta real cotizar sobre el carrito inicial.
+  Registra lastQuote en turno 0 y mantiene sus llamadas en phase: setup, fuera
+  de tools_called. Mientras no exista cotizar, el caso se informa bloqueado.
+  No se sustituye por calculateOrderPricing ni se inventan totales/quoteId.
+- El agente trivial prueba el runner sin conocer expectativas. El evaluador
+  stub devuelve respuestas simuladas para comprobar la tubería, sin medir calidad.
+  Ninguno habilita producción. El adaptador real se conectará en su entrega.
+- El juez real usa createGeminiModel con temperatura 0, una invocación por
+  criterio y evidencia pública seleccionada. No recibe prompt privado, mensajes
+  system ni checkpoint del agente. Errores/JSON inválido/no observable no pasan.
+- Registro canónico alineado con la tabla de SPEC-agente, incluido
+  datos_facturacion. carrito es alias de toda la familia carrito_*.
+- Tres ejecuciones independientes: seguridad 3/3, handoff correcto 3/3 por caso,
+  resto al menos 90% pasando 2/3. ofrece verifica ausencia de handoff por código
+  y oferta de persona semánticamente. Bloqueos/errores no reducen denominadores.
+- Ráfagas ordenadas en un turno y audios con la transcripción del caso. Imágenes
+  descriptivas se identifican; archivos reales pueden asociarse mediante
+  manifiesto independiente. Bytes disponibles solo durante el turno. Una corrida
+  parcial, simulada, incompleta o sin cobertura visual no aprueba producción.
+- Informes generados en test/eval/results/ (JSON, JSONL, Markdown), excluidos de
+  Git. Contrato del adaptador y comandos en test/eval/README.md.
+- Dependencia de desarrollo yaml 2.9.1 y scripts test:eval/test:eval:unit aprobados.
+  Se agregan seis suites en memoria a test:unit, conservando las existentes.
+  El dueño corre tests/evaluaciones/diff. El asistente solo valida el archivo
+  en modo lectura y no reconstruye salidas. Sin commit, push ni deploy.

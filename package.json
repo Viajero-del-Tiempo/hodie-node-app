@@ -15,7 +15,9 @@
     "test:catalog:unit": "node --test test/test_catalog_search.js test/test_catalog_validation.js test/test_catalog_service.js test/test_catalog_public_api.js test/test_auth_endpoints.js test/test_catalog_admin_contract.js test/test_catalog_images.js",
     "test:integration:emulator": "node scripts/test-catalog-emulator.js",
     "test:customer:unit": "node --test test/test_ruc_validation.js test/test_profile_validation.js test/test_order_customer_data.js test/test_order_billing_pdf.js",
-    "test:customer:integration": "node scripts/test-catalog-emulator.js --customer-only"
+    "test:customer:integration": "node scripts/test-catalog-emulator.js --customer-only",
+    "test:eval": "node test/eval/run-eval.js",
+    "test:eval:unit": "node --test test/test_eval_loader.js test/test_eval_context.js test/test_eval_transport.js test/test_eval_checks.js test/test_eval_judge.js test/test_eval_runner.js"
   },
   "keywords": [],
   "author": "Arnaldo Guerrero",
@@ -39,6 +41,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
-    "patch-package": "^8.0.1"
+    "patch-package": "^8.0.1",
+    "yaml": "2.9.1"
   }
 }

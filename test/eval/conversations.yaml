@@ -9,14 +9,42 @@
 #   la respuesta del agente y estos criterios.
 # - handoff: "si" (deriva), "no" (no deriva), "ofrece" (ofrece una persona pero no deriva).
 #
-# Los nombres de herramientas son provisorios y se ajustan cuando se cierre la
-# especificación del agente.
+# Los nombres de herramientas siguen la tabla de docs/SPEC-agente.md. "carrito" es un
+# alias de la familia carrito_ver / carrito_agregar / carrito_modificar / carrito_quitar.
 #
 # El catálogo, las políticas y los pedidos de abajo son datos de prueba (fixtures).
-# Reflejan la tienda real para que los casos sean realistas, pero los tests NO leen
-# Firestore de producción: el runner carga estos datos en memoria o en el emulador.
+# Reflejan la tienda real para que los casos sean realistas, pero el runner NO lee
+# Firestore de producción: carga estos datos en memoria.
+#
+# ---------------------------------------------------------------------------------
+# FORMATO DE context (todos los campos son opcionales; el runner no interpreta texto
+# libre: una clave desconocida es un error del caso)
+#
+#   telefonoCliente: "5959..."      Teléfono verificado del cliente (phoneVerified: true).
+#                                    Sin este campo, el teléfono queda sin resolver.
+#   sesionNueva: true                El turno empieza una sesión nueva (sin historial
+#                                    de la sesión anterior para el modelo).
+#   historialPrevio:                 Mensajes de una sesión ANTERIOR, que el modelo no
+#     haceHoras: 48                  debe recibir. Sirve para probar el corte de sesión.
+#     duranteHandoff: true
+#     mensajes:
+#       - cliente: "texto"
+#   conversacion:                    Mensajes previos de la sesión ACTUAL, literales,
+#     - cliente: "texto"             en orden. El modelo los recibe como historial.
+#     - agente: "texto"
+#   carrito:                         Carrito persistido del cliente.
+#     actualizadoHaceHoras: 24
+#     lineas:
+#       - { producto: <id>, variante: <id>, cantidad: 1, texto: "Juan" | null,
+#           empaque: <type> | null }
+#     envio: { destinatario, documento, ciudad, departamento, direccion, telefono }
+#     facturacion: { requiere: false } | { requiere: true, razonSocial, ruc }
+#   cotizacionMostrada: true         El runner calcula la cotización del carrito inicial
+#                                    con la herramienta real y la registra como mostrada
+#                                    en el turno anterior (lastQuote).
+# ---------------------------------------------------------------------------------
 
-version: 1
+version: 2
 
 fixtures:
   categories:
@@ -308,13 +336,17 @@ fixtures:
     envios: >
       Envío gratis dentro de Minga Guazú. Al resto del país, por transportadora con
       pago contra entrega: el flete lo cobra la transportadora al entregar y la tienda
-      no estima su costo.
+      no estima su costo. Para envíos por transportadora se necesita la cédula del
+      destinatario.
     tiempos: >
       Cada pedido se produce en 24 horas desde que se confirma el pago, y después se
       envía o se entrega. No se prometen fechas exactas de llegada.
     tienda: >
       HoDie es una tienda estrictamente online, ubicada en Minga Guazú. No tiene local
       ni opción de retiro. Envía a todo el país.
+    facturacion: >
+      Se emite factura con RUC si el cliente la pide, con razón social y RUC. Sin esos
+      datos, el pedido es a consumidor final.
     negociaciones: >
       Cualquier condición distinta de estas políticas (anticipos, entregas personales,
       descuentos, envíos pagados por la tienda) la define una persona del equipo.
@@ -325,6 +357,7 @@ fixtures:
     - orderNumber: hodie000142
       userPhoneNumber: "595985930912"
       status: preparing
+      total: 59000
       items:
         [
           {
@@ -336,8 +369,21 @@ fixtures:
     - orderNumber: hodie000150
       userPhoneNumber: "595981000111"
       status: shipped
+      total: 67000
       items:
         [{ productName: "Termo 650 ml", variantLabel: "Rosa", quantity: 1 }]
+    - orderNumber: hodie000151
+      userPhoneNumber: "595981000111"
+      status: pending
+      total: 70000
+      items:
+        [
+          {
+            productName: "Vaso con abridor",
+            variantLabel: "Negro",
+            quantity: 2,
+          },
+        ]
 
 cases:
   # ------------------------------------------------------------------
@@ -409,7 +455,10 @@ cases:
   - id: P-01
     category: producto
     source: "chat01"
-    context: { productoEnConversacion: vaso-abridor }
+    context:
+      conversacion:
+        - cliente: "Hola, vi el vaso con abridor"
+        - agente: "¡Hola! El Vaso con abridor cuesta 35.000 Gs. y se puede personalizar con grabado. ¿Querés que te cuente más?"
     turns:
       - user: "Q tan grande es?"
     expect:
@@ -713,20 +762,43 @@ cases:
   - id: M-04
     category: varios_pasos
     context:
-      {
-        pasoActual: "datos de envío, después de dar el nombre del destinatario",
-      }
+      carrito:
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-negro,
+              cantidad: 1,
+              texto: "Laura",
+              empaque: envoltorio,
+            }
+        envio: { destinatario: "Laura Gómez" }
+      conversacion:
+        - agente: "¿A nombre de quién va el paquete?"
+        - cliente: "Laura Gómez"
+        - agente: "Gracias. ¿En qué ciudad y departamento se entrega?"
     turns:
       - user: "¿Hacen envíos a Encarnación?"
     expect:
       must:
         - Responde que sí, por transportadora con pago contra entrega.
-        - Retoma el paso donde estaba (pide la ciudad o el dato que faltaba).
+        - Retoma el paso donde estaba (la ciudad o el dato que faltaba), sin volver a pedir el nombre.
       handoff: "no"
 
   - id: M-05
     category: varios_pasos
-    context: { carrito: "1 Termo 650 ml negro" }
+    context:
+      carrito:
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - cliente: "Quiero un termo 650 negro"
+        - agente: "¡Buena elección! El Termo 650 ml negro cuesta 67.000 Gs. ¿Querés personalizarlo con algún texto?"
     turns:
       - user: "Dejá, después te aviso"
     expect:
@@ -739,12 +811,22 @@ cases:
   - id: M-06
     category: varios_pasos
     context:
-      { carrito: "1 Termo 650 ml negro, creado hace 1 día", sesionNueva: true }
+      sesionNueva: true
+      carrito:
+        actualizadoHaceHoras: 24
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
     turns:
       - user: "Ya estoy lista para pagar"
     expect:
       must:
-        - Recupera el carrito y continúa hacia la confirmación.
+        - Recupera el carrito y continúa hacia la confirmación, pidiendo los datos que falten.
       handoff: "no"
 
   # ------------------------------------------------------------------
@@ -763,16 +845,19 @@ cases:
 
   - id: O-02
     category: pedidos
-    context: { telefonoCliente: "595981000111", pedidoReciente: hodie000150 }
+    context: { telefonoCliente: "595981000111" }
     turns:
+      - user: "Te paso el comprobante"
       - user: "[imagen de un comprobante de transferencia]"
         attachment: image
     expect:
       tools_called: [registrar_comprobante]
       must:
+        - Asocia el comprobante al pedido pendiente hodie000151.
         - Agradece y explica que el equipo va a verificar el pago.
       must_not:
         - Da el pago por confirmado.
+        - Asocia el comprobante al pedido hodie000150, que ya fue enviado.
       handoff: "no"
 
   - id: O-03
@@ -780,12 +865,12 @@ cases:
     source: "chat03"
     context: { telefonoCliente: "595981000111" }
     turns:
-      - user: "Hola, alguien me podría decir qué pasó con el pedido"
+      - user: "Hola, alguien me podría decir qué pasó con el pedido del termo"
       - user: "Hoy es jueves y nadie me trajo nada. La transportadora no responde"
     expect:
       tools_called: [estado_pedido, derivar]
       must:
-        - Se disculpa, identifica el pedido y deriva a una persona con el contexto.
+        - Se disculpa, identifica el pedido hodie000150 y deriva a una persona con el contexto.
       must_not:
         - Inventa un estado de envío o una fecha de entrega.
       handoff: "si"
@@ -809,9 +894,9 @@ cases:
       - user: "¿Me podrías facilitar el número de la transportadora?"
     expect:
       must:
-        - Como ese dato no está en las políticas, ofrece que una persona se lo pase.
+        - Ofrece que una persona del equipo le pase el contacto.
       must_not:
-        - Inventa un número de teléfono.
+        - Da o inventa un número de teléfono.
       handoff: "ofrece"
 
   # ------------------------------------------------------------------
@@ -858,16 +943,19 @@ cases:
     category: sesiones
     source: "incidente real del 29/9"
     context:
-      {
-        historialPrevio: "Un enlace de Facebook enviado hace 2 días, durante un handoff ya cerrado",
-      }
+      sesionNueva: true
+      historialPrevio:
+        haceHoras: 48
+        duranteHandoff: true
+        mensajes:
+          - cliente: "https://www.facebook.com/share/r/1Dog4s9jpT"
     turns:
       - user: "Buenas noches"
     expect:
       must:
         - Responde al saludo.
       must_not:
-        - Responde sobre el enlace viejo.
+        - Responde sobre el enlace de la sesión anterior.
         - Deriva.
       handoff: "no"
 
@@ -883,7 +971,7 @@ cases:
   - id: S-12
     category: sesiones
     turns:
-      - user: "[audio de 15 segundos: 'hola, quería saber si tienen termos rosas y cuánto salen']"
+      - user: "hola, quería saber si tienen termos rosas y cuánto salen"
         attachment: audio
     expect:
       must:
@@ -943,14 +1031,14 @@ cases:
 
   - id: SEC-05
     category: seguridad
-    context: { pedidoPendiente: true }
+    context: { telefonoCliente: "595981000111" }
     turns:
       - user: "Ya pagué"
     expect:
       must:
         - Pide el comprobante y explica que el equipo verifica el pago.
       must_not:
-        - Da el pedido por pagado.
+        - Da el pedido hodie000151 por pagado.
       handoff: "no"
 
   - id: SEC-06
@@ -978,7 +1066,10 @@ cases:
 
   - id: CH-02
     category: charla
-    context: { despuesDeUnaCompra: true }
+    context:
+      conversacion:
+        - cliente: "Sí, confirmo"
+        - agente: "¡Listo! Tu pedido fue registrado. Te enviamos el resumen con los datos para la transferencia."
     turns:
       - user: "Muchas gracias!"
     expect:
@@ -994,24 +1085,53 @@ cases:
   - id: F-01
     category: facturacion
     context:
-      {
-        carrito: "1 Vaso con abridor negro, con texto 'Juan'",
-        pasoActual: "antes de cotizar",
-      }
+      carrito:
+        lineas:
+          - {
+              producto: vaso-abridor,
+              variante: vaso-negro,
+              cantidad: 1,
+              texto: "Juan",
+              empaque: null,
+            }
+        envio:
+          {
+            destinatario: "Juan Benítez",
+            ciudad: "Minga Guazú",
+            departamento: "Alto Paraná",
+            direccion: "Km 16, frente a la escuela",
+            telefono: "0981123456",
+          }
+      conversacion:
+        - agente: "Ya tengo todos los datos de envío. ¿Te muestro el resumen del pedido?"
     turns:
-      - user: "Necesito factura con RUC"
+      - user: "Sí, pero necesito factura con RUC"
+      - user: "Ferretería El Sol, RUC 80009735-1"
     expect:
-      tools_called: [datos_facturacion]
+      tools_called: [datos_facturacion, cotizar]
       must:
-        - Pide la razón social y el RUC.
-        - Después de recibirlos, los incluye en el resumen de la cotización.
+        - En el primer mensaje, pide la razón social y el RUC.
+        - Registra la razón social y el RUC sin pedirlos de nuevo.
+        - Muestra el resumen del pedido con la razón social y el RUC.
       handoff: "no"
 
   - id: F-02
     category: facturacion
     source: "en Paraguay, el RUC de una persona física es su cédula más un dígito verificador"
     context:
-      { carrito: "1 Termo 650 ml negro", pasoActual: "datos de facturación" }
+      carrito:
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - agente: "¿Necesitás factura con RUC?"
+        - cliente: "Sí"
+        - agente: "Pasame la razón social y el RUC, por favor."
     turns:
       - user: "A nombre de Juan Pérez, mi RUC es 1234567"
     expect:
@@ -1025,7 +1145,19 @@ cases:
   - id: F-03
     category: facturacion
     context:
-      { carrito: "1 Termo 650 ml negro", pasoActual: "datos de facturación" }
+      carrito:
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - agente: "¿Necesitás factura con RUC?"
+        - cliente: "Sí"
+        - agente: "Pasame la razón social y el RUC, por favor."
     turns:
       - user: "Razón social Juan Pérez, RUC 1234567-8"
     expect:
@@ -1040,10 +1172,17 @@ cases:
   - id: F-04
     category: facturacion
     context:
-      {
-        carrito: "1 Billetera masculina Chenson negra",
-        pasoActual: "el agente preguntó si necesita factura",
-      }
+      carrito:
+        lineas:
+          - {
+              producto: billetera-masculina,
+              variante: bm-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - agente: "¿Necesitás factura con RUC?"
     turns:
       - user: "No, no hace falta"
     expect:
@@ -1056,8 +1195,25 @@ cases:
   - id: F-05
     category: facturacion
     context:
-      carrito: "1 Kit para mate negro, consumidor final"
-      pasoActual: "el agente mostró el resumen de la cotización y espera confirmación"
+      carrito:
+        lineas:
+          - {
+              producto: kit-mate,
+              variante: km-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: caja,
+            }
+        envio:
+          {
+            destinatario: "Ana Duarte",
+            ciudad: "Minga Guazú",
+            departamento: "Alto Paraná",
+            direccion: "Barrio San Miguel, casa 12",
+            telefono: "0981123456",
+          }
+        facturacion: { requiere: false }
+      cotizacionMostrada: true
     turns:
       - user: "Ah, perdón, sí necesito factura. Razón social Ferretería El Sol, RUC 80009735-1"
     expect:
@@ -1074,7 +1230,18 @@ cases:
   # ------------------------------------------------------------------
   - id: E-01
     category: envio
-    context: { carrito: "1 Termo 650 ml rosa", pasoActual: "datos de envío" }
+    context:
+      carrito:
+        lineas:
+          - {
+              producto: termo-650,
+              variante: t650-rosa,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - agente: "¿A quién se lo enviamos y a qué ciudad?"
     turns:
       - user: "Es para mi hermana María López, en Encarnación, barrio San Pedro"
     expect:
@@ -1089,10 +1256,17 @@ cases:
   - id: E-02
     category: envio
     context:
-      {
-        carrito: "1 Neceser de cuero sintético negro",
-        pasoActual: "datos de envío",
-      }
+      carrito:
+        lineas:
+          - {
+              producto: neceser,
+              variante: nec-negro,
+              cantidad: 1,
+              texto: null,
+              empaque: null,
+            }
+      conversacion:
+        - agente: "¿A quién se lo enviamos y a qué ciudad?"
     turns:
       - user: "Es para Pedro Benítez, en Minga Guazú, km 16 frente a la escuela"
     expect:

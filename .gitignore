@@ -71,3 +71,6 @@ ehthumbs.db
 Thumbs.db
 Thumbs.db:encryptable
 desktop.inisalida-*.txt
+
+# Informes generados del agente
+test/eval/results/
