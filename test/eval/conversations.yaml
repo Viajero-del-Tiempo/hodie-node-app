@@ -987,3 +987,118 @@ cases:
       must_not:
         - Abre una cotización nueva.
       handoff: "no"
+
+  # ------------------------------------------------------------------
+  # Facturación
+  # ------------------------------------------------------------------
+  - id: F-01
+    category: facturacion
+    context:
+      {
+        carrito: "1 Vaso con abridor negro, con texto 'Juan'",
+        pasoActual: "antes de cotizar",
+      }
+    turns:
+      - user: "Necesito factura con RUC"
+    expect:
+      tools_called: [datos_facturacion]
+      must:
+        - Pide la razón social y el RUC.
+        - Después de recibirlos, los incluye en el resumen de la cotización.
+      handoff: "no"
+
+  - id: F-02
+    category: facturacion
+    source: "en Paraguay, el RUC de una persona física es su cédula más un dígito verificador"
+    context:
+      { carrito: "1 Termo 650 ml negro", pasoActual: "datos de facturación" }
+    turns:
+      - user: "A nombre de Juan Pérez, mi RUC es 1234567"
+    expect:
+      must:
+        - Propone el RUC completo 1234567-9 y pide confirmación.
+      must_not:
+        - Guarda el RUC con el dígito verificador sin que el cliente lo confirme.
+        - Rechaza el dato por no tener guion.
+      handoff: "no"
+
+  - id: F-03
+    category: facturacion
+    context:
+      { carrito: "1 Termo 650 ml negro", pasoActual: "datos de facturación" }
+    turns:
+      - user: "Razón social Juan Pérez, RUC 1234567-8"
+    expect:
+      must:
+        - Avisa que el dígito verificador no coincide con el número.
+        - Ofrece corregirlo o continuar igual, con confirmación explícita.
+      must_not:
+        - Cambia el dígito por su cuenta.
+        - Acepta el RUC sin mencionar la discrepancia.
+      handoff: "no"
+
+  - id: F-04
+    category: facturacion
+    context:
+      {
+        carrito: "1 Billetera masculina Chenson negra",
+        pasoActual: "el agente preguntó si necesita factura",
+      }
+    turns:
+      - user: "No, no hace falta"
+    expect:
+      must:
+        - Sigue con la cotización como consumidor final.
+      must_not:
+        - Pide razón social o RUC.
+      handoff: "no"
+
+  - id: F-05
+    category: facturacion
+    context:
+      carrito: "1 Kit para mate negro, consumidor final"
+      pasoActual: "el agente mostró el resumen de la cotización y espera confirmación"
+    turns:
+      - user: "Ah, perdón, sí necesito factura. Razón social Ferretería El Sol, RUC 80009735-1"
+    expect:
+      tools_called: [datos_facturacion, cotizar]
+      tools_not_called: [crear_pedido]
+      must:
+        - Registra los datos de facturación y muestra un resumen nuevo antes de pedir confirmación.
+      must_not:
+        - Crea el pedido con el resumen anterior.
+      handoff: "no"
+
+  # ------------------------------------------------------------------
+  # Datos de envío
+  # ------------------------------------------------------------------
+  - id: E-01
+    category: envio
+    context: { carrito: "1 Termo 650 ml rosa", pasoActual: "datos de envío" }
+    turns:
+      - user: "Es para mi hermana María López, en Encarnación, barrio San Pedro"
+    expect:
+      tools_called: [datos_envio]
+      must:
+        - Registra a María López como destinataria, distinta del cliente.
+        - Pide la cédula de la destinataria, porque el envío es por transportadora.
+      must_not:
+        - Usa los datos del cliente como destinatario.
+      handoff: "no"
+
+  - id: E-02
+    category: envio
+    context:
+      {
+        carrito: "1 Neceser de cuero sintético negro",
+        pasoActual: "datos de envío",
+      }
+    turns:
+      - user: "Es para Pedro Benítez, en Minga Guazú, km 16 frente a la escuela"
+    expect:
+      tools_called: [datos_envio]
+      must:
+        - Indica que el envío es gratis dentro de Minga Guazú.
+      must_not:
+        - Pide la cédula del destinatario.
+      handoff: "no"
