@@ -62,7 +62,7 @@ export function createStubJudge() {
   return {
     kind: "stub", metadata: { kind: "stub", model: null, temperature: null },
     async evaluate() {
-      return { verdict: "pass", explanation: "Respuesta fija del evaluador simulado; no mide calidad.", evidence: [], simulated: true };
+      return { verdict: "not_evaluated", explanation: "Criterio no evaluado: el evaluador simulado solo comprueba la tubería.", evidence: [], simulated: true };
     },
   };
 }

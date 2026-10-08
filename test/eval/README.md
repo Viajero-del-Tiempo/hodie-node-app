@@ -24,7 +24,14 @@ Desde hodie-node-app:
 No ejecuta el agente, el evaluador ni genera informes.
 
 El agente trivial responde de forma genérica. El juez stub siempre devuelve
-pass, marcado simulated: true: verifica la tubería, no la calidad.
+not_evaluated, marcado simulated: true: verifica la tubería, no la calidad.
+must, must_not y handoff: ofrece quedan sin evaluar y nunca cuentan como
+aprobados. Los umbrales de seguridad y del resto indican evaluated: false,
+passed: 0 y pass: false; thresholdsPassed siempre es false con stub.
+Las verificaciones determinísticas conservan lo observado. El umbral de handoff
+puede evaluarse para si/no, pero una oferta requiere un veredicto semántico real.
+Una repetición sin fallos determinísticos queda como not_evaluated; si falla una
+verificación determinística, se conserva fail y sus criterios siguen sin evaluar.
 Ninguna combinación con agente trivial o juez stub aprueba producción.
 Con llm, createGeminiModel crea un juez independiente a temperatura 0; requiere
 GEMINI_API_KEY y usa el modelo configurado por la fábrica del proyecto.
@@ -150,9 +157,14 @@ Bloqueos, criterios no observables y errores no reducen denominadores y hacen la
 corrida incompleta. Filtros, stub, agente trivial y cobertura visual insuficiente
 no aprueban producción aunque los umbrales seleccionados se cumplan.
 
-Códigos de salida: 0 = umbrales del alcance ejecutado cumplidos; 1 = umbrales
-incumplidos; 2 = corrida incompleta/error de configuración. El código 0 por sí
-solo no es una aprobación: revisar productionEligible y productionApproved.
+Códigos de salida: 0 = umbrales del alcance ejecutado cumplidos con juez llm;
+1 = umbrales incumplidos; 2 = corrida incompleta/error de configuración;
+3 = diagnóstico completado con juez stub, sin evaluación de calidad.
+Bloqueos y errores tienen prioridad: conservan el código 2 incluso con stub.
+completed indica que terminaron las tres ejecuciones de cada caso, no que se
+haya medido calidad. diagnostic y criteriaNotEvaluated lo distinguen en el
+informe. El código 0 por sí solo no es una aprobación: revisar productionEligible
+y productionApproved.
 
 ## Informes
 

@@ -19,10 +19,14 @@ export async function writeReport(report, outputRoot) {
     "# Evaluación del agente", "",
     "Modo: " + report.metadata.agentKind + " / " + report.metadata.judgeKind + ".",
     "Corrida completa: " + report.summary.completed + ".",
+    "Diagnóstico sin evaluación de calidad: " + report.summary.diagnostic + ".",
+    "Criterios no evaluados: " + report.summary.criteriaNotEvaluated + ".",
+    "Código de salida: " + report.summary.exitCode + ".",
     "Aprobación de producción: " + report.summary.productionApproved + ".", "",
     "## Umbrales", "",
     ...Object.entries(report.summary.gates).map(([name, gate]) =>
       "- " + name + ": " + gate.passed + "/" + gate.total + "; cumple: " + gate.pass
+      + "; evaluado: " + gate.evaluated
       + (gate.required !== undefined ? "; mínimo: " + gate.required : "")),
     "", "## Casos", "",
   ];
@@ -32,7 +36,8 @@ export async function writeReport(report, outputRoot) {
       lines.push("- Ejecución " + result.number + ": " + result.status + ".");
       for (const check of result.checks.filter(check => !check.pass)) lines.push("  - Verificación fallida: " + JSON.stringify(check));
       for (const criterion of result.criteria.filter(criterion => criterion.verdict !== "pass")) {
-        lines.push("  - " + criterion.kind + ": " + criterion.text + " — " + criterion.verdict + ": " + criterion.explanation);
+        lines.push("  - " + criterion.kind + ": " + criterion.text + " — "
+          + (criterion.verdict === "not_evaluated" ? "no evaluado" : criterion.verdict) + ": " + criterion.explanation);
       }
       for (const diagnostic of result.diagnostics) {
         lines.push("  - " + diagnostic.code + ": " + diagnostic.message

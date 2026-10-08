@@ -25,6 +25,9 @@ test("runner trivial completa tres repeticiones y no expone expectativas al adap
   assert.equal(report.summary.executed, 3);
   assert.equal(report.summary.completed, true);
   assert.equal(report.summary.productionApproved, false);
+  assert.equal(report.summary.thresholdsPassed, false);
+  assert.equal(report.summary.exitCode, 3);
+  assert.ok(report.cases[0].repetitions.every(run => run.status === "not_evaluated" && run.criteria[0].verdict === "not_evaluated"));
   assert.ok(report.cases[0].repetitions.every(run => run.turns[0].outgoing[0].text === run.tools.find(tool => tool.name === "responder").args.texto));
 });
 test("resolver bloquea SDKs productivos y el inicializador Firebase antes de ejecutarlos", () => {
@@ -93,7 +96,7 @@ test("turnos mal formados bloquean el caso y permiten informar y ejecutar los de
   assert.equal(report.cases.length, 3);
   assert.ok(report.cases[0].repetitions.every(run => run.status === "blocked"));
   assert.ok(report.cases[1].repetitions.every(run => run.status === "blocked"));
-  assert.ok(report.cases[2].repetitions.every(run => run.status === "pass"));
+  assert.ok(report.cases[2].repetitions.every(run => run.status === "not_evaluated"));
 });
 test("contextos inválidos y cotizacionMostrada sin herramienta quedan bloqueados sin inventar una ejecución", async () => {
   const dataset = evalDataset([
@@ -108,7 +111,7 @@ test("contextos inválidos y cotizacionMostrada sin herramienta quedan bloqueado
   assert.equal(report.summary.exitCode, 2);
   assert.ok(report.cases[0].repetitions.every(run => run.status === "blocked" && run.diagnostics[0].line > 0));
   assert.ok(report.cases[1].repetitions.every(run => run.status === "blocked" && run.diagnostics[0].code === "QUOTE_TOOL_UNAVAILABLE"));
-  assert.ok(report.cases[2].repetitions.every(run => run.status === "pass"));
+  assert.ok(report.cases[2].repetitions.every(run => run.status === "not_evaluated"));
 });
 test("cotización inicial real no satisface la expectativa de volver a cotizar durante el caso", async () => {
   const report = await runEvaluation(evalDataset([evalCase({
@@ -133,6 +136,52 @@ test("fallo del evaluador conserva los demás criterios y casos; no reduce el de
   assert.ok(report.cases[1].repetitions.every(run => run.status === "pass"));
   assert.equal(report.summary.gates.rest.total, 2);
   assert.equal(report.summary.productionApproved, false);
+});
+test("must y must_not quedan sin evaluar con stub, incluso con verificaciones determinísticas correctas", async () => {
+  const report = await runEvaluation(evalDataset([evalCase({
+    expect: { must: ["Saluda."], must_not: ["Inventa productos."], handoff: "no" },
+  })]), options);
+  assert.equal(report.summary.criteriaNotEvaluated, 6);
+  assert.equal(report.summary.gates.rest.passed, 0);
+  assert.equal(report.summary.gates.rest.evaluated, false);
+  assert.equal(report.summary.gates.handoff.pass, true);
+  assert.equal(report.summary.thresholdsPassed, false);
+  assert.equal(report.summary.exitCode, 3);
+  for (const run of report.cases[0].repetitions) {
+    assert.equal(run.status, "not_evaluated");
+    assert.ok(run.checks.every(check => check.pass));
+    assert.deepEqual(run.criteria.map(criterion => [criterion.kind, criterion.verdict]), [
+      ["must", "not_evaluated"], ["must_not", "not_evaluated"],
+    ]);
+  }
+  const withoutCriteria = await runEvaluation(evalDataset([evalCase({ expect: { handoff: "no" } })]), options);
+  assert.ok(withoutCriteria.cases[0].repetitions.every(run => run.status === "not_evaluated" && run.criteria.length === 0));
+  assert.equal(withoutCriteria.summary.thresholdsPassed, false);
+  assert.equal(withoutCriteria.summary.exitCode, 3);
+});
+test("CLI con C-01, agente trivial y stub sale con diagnóstico 3 y guarda criterios no evaluados", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "test-eval-stub-cli-"));
+  try {
+    const child = spawnSync(process.execPath, [new URL("./eval/run-eval.js", import.meta.url).pathname,
+      "--agent", "trivial", "--judge", "stub", "--case", "C-01", "--output", directory,
+    ], { encoding: "utf8", timeout: 15000 });
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 3, child.stderr + child.stdout);
+    const folders = await readdir(directory);
+    assert.equal(folders.length, 1);
+    const report = JSON.parse(await readFile(join(directory, folders[0], "report.json"), "utf8"));
+    assert.equal(report.summary.exitCode, child.status);
+    assert.equal(report.summary.thresholdsPassed, false);
+    assert.equal(report.summary.gates.rest.passed, 0);
+    assert.equal(report.cases[0].id, "C-01");
+    assert.equal(report.cases[0].repetitions.length, 3);
+    assert.ok(report.cases[0].repetitions.every(run => run.status === "not_evaluated"
+      && run.criteria.some(criterion => criterion.kind === "must_not")
+      && run.criteria.every(criterion => criterion.verdict === "not_evaluated")));
+    const summary = await readFile(join(directory, folders[0], "summary.md"), "utf8");
+    assert.match(summary, /no evaluado/);
+    assert.match(summary, /Código de salida: 3/);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 test("criterio no observable y timeout del agente tienen diagnósticos distintos del fallo de calidad", async () => {
   const unobservable = await runEvaluation(evalDataset(), { ...options, judge: {

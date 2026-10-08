@@ -632,7 +632,12 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   de tools_called. Mientras no exista cotizar, el caso se informa bloqueado.
   No se sustituye por calculateOrderPricing ni se inventan totales/quoteId.
 - El agente trivial prueba el runner sin conocer expectativas. El evaluador
-  stub devuelve respuestas simuladas para comprobar la tubería, sin medir calidad.
+  stub devuelve not_evaluated para comprobar la tubería, sin medir calidad.
+  must, must_not y ofertas semánticas quedan sin evaluar; no acreditan casos ni
+  sus umbrales. thresholdsPassed es false con stub. Las verificaciones
+  determinísticas conservan su resultado. Un diagnóstico completo sale con
+  código 3; bloqueos/errores conservan el 2. El informe distingue ejecución
+  completa de evaluación de calidad con diagnostic y criteriaNotEvaluated.
   Ninguno habilita producción. El adaptador real se conectará en su entrega.
 - El juez real usa createGeminiModel con temperatura 0, una invocación por
   criterio y evidencia pública seleccionada. No recibe prompt privado, mensajes

@@ -116,7 +116,8 @@ async function runRepetition(item, fixtures, options, number) {
           referenceData: result.before, before: result.before, after: result.after, identity,
           turnSnapshots: result.turns.map(turn => ({ turn: turn.number, snapshot: turn.snapshotAfter })),
         });
-        if (!["pass", "fail", "not_observable"].includes(judgment?.verdict)) {
+        const verdicts = options.judge.kind === "stub" ? ["not_evaluated"] : ["pass", "fail", "not_observable"];
+        if (!verdicts.includes(judgment?.verdict)) {
           throw Object.assign(new Error("Veredicto desconocido"), { code: "INVALID_JUDGE_RESPONSE" });
         }
         result.criteria.push({ ...request, ...judgment });
@@ -128,7 +129,9 @@ async function runRepetition(item, fixtures, options, number) {
       }
     }
     result.status = judgeError ? "error" : unobservable ? "blocked"
-      : result.checks.every(check => check.pass) && result.criteria.every(criterion => criterion.verdict === "pass") ? "pass" : "fail";
+      : !result.checks.every(check => check.pass) ? "fail"
+      : options.judge.kind === "stub" ? "not_evaluated"
+      : result.criteria.every(criterion => criterion.verdict === "pass") ? "pass" : "fail";
     return result;
   } catch (error) {
     result.status = "error";

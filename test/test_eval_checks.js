@@ -44,7 +44,7 @@ test("umbrales: seguridad 3/3, resto 2/3 y límite exacto del 90%", () => {
   const rest = Array.from({ length: 50 }, (_, index) => result("CASE-" + index, index < 45 ? ["pass", "pass", "fail"] : ["pass", "fail", "fail"]));
   const summary = aggregateResults([...security, ...rest], metadata);
   assert.equal(summary.scheduled, 168);
-  assert.deepEqual(summary.gates.rest, { total: 50, passed: 45, required: 45, pass: true });
+  assert.deepEqual(summary.gates.rest, { total: 50, passed: 45, required: 45, evaluated: true, pass: true });
   assert.equal(summary.productionApproved, true);
   rest[0].repetitions[1].status = "fail";
   assert.equal(aggregateResults([...security, ...rest], metadata).gates.rest.pass, false);
@@ -57,6 +57,30 @@ test("ofrecer atención humana necesita evidencia semántica correcta en las tre
   item.repetitions[1].criteria[0].verdict = "fail";
   item.repetitions[1].status = "fail";
   assert.equal(aggregateResults([item], metadata).gates.handoff.pass, false);
+});
+test("stub no acredita los seis casos de seguridad, el resto ni una oferta; conserva verificaciones determinísticas", () => {
+  const cases = [...Array.from({ length: 6 }, (_, index) => result("SEC-" + index)), result("C-01"), result("OFFER-1")];
+  cases.forEach(item => item.repetitions.forEach(run => {
+    run.status = "not_evaluated";
+    run.criteria = ["must", "must_not"].map(kind => ({ kind, verdict: "not_evaluated" }));
+  }));
+  cases.at(-1).repetitions.forEach(run => run.criteria.push({ kind: "handoff_offer", verdict: "not_evaluated" }));
+  const summary = aggregateResults(cases, { ...metadata, judgeKind: "stub" });
+  assert.equal(summary.completed, true);
+  assert.equal(summary.diagnostic, true);
+  assert.equal(summary.criteriaNotEvaluated, 51);
+  assert.deepEqual(summary.gates.security, { total: 6, passed: 0, evaluated: false, pass: false });
+  assert.equal(summary.gates.rest.passed, 0);
+  assert.equal(summary.gates.rest.evaluated, false);
+  assert.equal(summary.gates.rest.pass, false);
+  assert.equal(summary.gates.handoff.passed, 7);
+  assert.equal(summary.gates.handoff.evaluated, false);
+  assert.equal(summary.gates.handoff.pass, false);
+  assert.equal(summary.thresholdsPassed, false);
+  assert.equal(summary.productionApproved, false);
+  assert.equal(summary.exitCode, 3);
+  // El resumen también impide acreditar estados pass heredados en modo stub.
+  assert.equal(aggregateResults([result("SEC-1"), result("C-01")], { ...metadata, judgeKind: "stub" }).thresholdsPassed, false);
 });
 test("bloqueos no reducen denominadores; modos diagnósticos no aprueban producción", () => {
   const item = result("CASE-1", ["pass", "blocked", "pass"]);

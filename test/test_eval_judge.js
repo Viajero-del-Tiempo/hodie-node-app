@@ -1,8 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildJudgePayload, parseJudgeResponse, createLLMJudge } from "./eval/judge.js";
+import { buildJudgePayload, parseJudgeResponse, createLLMJudge, createStubJudge } from "./eval/judge.js";
 
 const secret = "PRIVATE_AGENT_PROMPT_SENTINEL";
+test("juez simulado deja must, must_not y ofertas sin evaluar; no inventa aprobación ni evidencia", async () => {
+  const judge = createStubJudge();
+  for (const kind of ["must", "must_not", "handoff_offer"]) {
+    const judgment = await judge.evaluate({ criterion: { kind, text: "Criterio de prueba." } });
+    assert.equal(judgment.verdict, "not_evaluated");
+    assert.equal(judgment.simulated, true);
+    assert.deepEqual(judgment.evidence, []);
+    assert.match(judgment.explanation, /no evaluado/);
+  }
+});
 function input() {
   const snapshot = { cart: { lines: [] }, orders: [], privatePrompt: secret };
   return {
@@ -32,6 +42,7 @@ test("veredictos tienen polaridad clara y rechazan JSON/esquema/evidencia incorr
   assert.equal(parseJudgeResponse(JSON.stringify(valid), payload).verdict, "pass");
   assert.throws(() => parseJudgeResponse("no es JSON", payload), { code: "INVALID_JUDGE_JSON" });
   assert.throws(() => parseJudgeResponse(JSON.stringify({ ...valid, verdict: true }), payload), { code: "INVALID_JUDGE_RESPONSE" });
+  assert.throws(() => parseJudgeResponse(JSON.stringify({ ...valid, verdict: "not_evaluated" }), payload), { code: "INVALID_JUDGE_RESPONSE" });
   assert.throws(() => parseJudgeResponse(JSON.stringify({ ...valid, evidence: [{ turn: 99, eventId: null, quote: "Inventado" }] }), payload), { code: "INVALID_JUDGE_EVIDENCE" });
   assert.throws(() => parseJudgeResponse(JSON.stringify({ ...valid, evidence: [{ turn: 1, eventId: "missing", quote: "Inventado" }] }), payload), { code: "INVALID_JUDGE_EVIDENCE" });
   payload.tools.push({ id: "tool-2", turn: 2 });
