@@ -43,6 +43,7 @@ pid
 # Coverage & Testing
 coverage/
 .nyc_output/
+salida-*.txt
 
 # IDEs & Code Editors
 .vscode/

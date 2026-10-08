@@ -9,6 +9,14 @@ export const localCatalog = Object.freeze({
   projectId: "demo-hodie-catalogo", host: "127.0.0.1", firestorePort: 8080,
   apiPort: 3000, uiPort: 4000, hubPort: 4400,
 });
+// Revisar valores explícitos antes de reemplazarlos por los defaults locales.
+export function assertLocalCatalogTarget(env) {
+  if ((env.GCLOUD_PROJECT !== undefined && env.GCLOUD_PROJECT !== localCatalog.projectId)
+      || (env.CATALOG_TEST_PROJECT_ID !== undefined && env.CATALOG_TEST_PROJECT_ID !== localCatalog.projectId)
+      || (env.FIRESTORE_EMULATOR_HOST !== undefined && env.FIRESTORE_EMULATOR_HOST !== `${localCatalog.host}:${localCatalog.firestorePort}`)) {
+    throw new Error("Configuración inválida: se requiere demo-hodie-catalogo y Firestore Emulator en 127.0.0.1:8080");
+  }
+}
 export function readProductionSecret(directory = projectDirectory) {
   try { return parse(readFileSync(join(directory, ".env"))).JWT_SECRET; }
   catch (error) { if (error.code === "ENOENT") return undefined; throw error; }

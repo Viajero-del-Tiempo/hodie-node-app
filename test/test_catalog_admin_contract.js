@@ -7,8 +7,23 @@ import { productVersion, assertProductVersion } from "../src/utils/catalog-versi
 import { createProductController } from "../src/controllers/admin.product.controller.js";
 import { makeLocalEnvironment, assertLocalEnvironment, readProductionSecret } from "../scripts/local-catalog.config.js";
 import { productFixture } from "./helpers/catalog-fixtures.js";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const snapshot = (product, nanoseconds = 1) => ({ id: product.id, data: () => product, updateTime: { seconds: 1700000000, nanoseconds } });
+test("arranque: proyecto/host inválidos se rechazan antes de herramientas o puertos", () => {
+  for (const override of [{ GCLOUD_PROJECT: "test-wrong-project" }, { FIRESTORE_EMULATOR_HOST: "remote.example:8080" }]) {
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("../scripts/dev-catalog.js", import.meta.url))], {
+      env: { ...process.env, ...override, PATH: "", GCLOUD_PROJECT: override.GCLOUD_PROJECT ?? "demo-hodie-catalogo",
+        CATALOG_TEST_PROJECT_ID: "demo-hodie-catalogo", FIRESTORE_EMULATOR_HOST: override.FIRESTORE_EMULATOR_HOST ?? "127.0.0.1:8080" },
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes("Configuración inválida: se requiere demo-hodie-catalogo"));
+    assert.equal(result.stderr.includes("Se requiere Java"), false);
+    assert.equal(result.stderr.includes("puerto local"), false);
+  }
+});
 test("versión: identifica stock y otros campos, y conserva el borrador", async () => {
   const product = productFixture("test-category");
   const version = productVersion(snapshot(product));

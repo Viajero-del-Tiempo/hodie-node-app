@@ -507,3 +507,50 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   El dueño ejecuta tests/build/diff; el asistente no reconstruye salidas.
   Guía: docs/VERIFICACION-perfil-backend.md. SPEC-agente.md incorpora decisión
   fiscal antes de cotizar, herramienta datos_facturacion y huella con billing.
+
+# PANTALLAS DE PERFIL Y CHECKOUT — ENTREGA 4b-2 (7 de octubre de 2026)
+
+- Angular incorpora /profile, /profile/orders y /profile/orders/:id, protegidas
+  por authGuard y accesibles desde la navegación. El teléfono es de solo lectura.
+  Listado/detalle/PDF usan únicamente /users/me/orders; nunca lecturas admin o
+  consultas directas a Firestore. El detalle es de solo lectura y muestra fotos.
+- Checkout selecciona el predeterminado, otra dirección o una nueva. Sin
+  direcciones abre el formulario incluso si profile_status=complete. Guardar
+  dirección viene marcado sin direcciones y desmarcado cuando hay alguna.
+  No actualiza perfil antes de comprar: flags de guardado van en el POST.
+- Formulario compartido de envío consulta modalidad en el backend al cambiar
+  ciudad (250 ms para agrupar escritura). Cancela consultas anteriores; no tiene
+  ciudades/reglas hardcodeadas. Cédula se exige y envía solo para transportadora.
+- Factura desmarcada por defecto. Registros fiscales propios o datos nuevos usan
+  validación RUC del backend, sin duplicar el algoritmo. Base numérica necesita
+  confirmar propuesta; DV distinto necesita aceptación explícita. Editar RUC
+  cancela consulta/reset de ambas confirmaciones. Aún guardado con discrepancia,
+  elegirlo para otra compra vuelve a mostrar aviso y requiere aceptación.
+- Mi perfil mantiene listas en borrador, IDs existentes y versión. Agregar,
+  editar, borrar y predeterminados se guardan con un PUT; nuevos IDs salen del
+  servidor. Un registro nuevo se guarda antes de poder elegirlo como default;
+  el primero se vuelve predeterminado automáticamente en el servidor.
+- 409 muestra explicación del servidor y conserva todo el borrador/version.
+  Consultar perfil actual muestra datos sin pisarlo. Descartar es explícito;
+  conservar usando la nueva versión tampoco guarda solo y advierte que las
+  listas del borrador reemplazarán las actuales al guardar. Errores field se
+  muestran junto al control o fila, y al abrir el editor junto al campo concreto.
+- Checkout conserva revisión de catálogo, ambos IDs, empaques reales y texto
+  por línea. 400 no borra datos/carrito. Compra guardada bloquea doble envío,
+  incluso si falla navegación; profileWarning se muestra en confirmación.
+- Mis pedidos recorre páginas vacías con cursor por históricos ocultos (hasta
+  cinco páginas por acción; después ofrece continuar). No cambia la regla de
+  históricos sin origen. PDF es descarga autenticada y no una factura.
+- Detalle administrativo muestra destinatario/cédula y solicitud fiscal con
+  razón social/RUC copiables y aviso de discrepancia. El panel de productos
+  5b continúa pendiente; BudgetAgent no se toca ni hay deploys.
+- dev-catalog valida proyecto/host explícitos heredados ANTES de generar el
+  entorno, revisar herramientas o puertos; no los sobrescribe para ocultar una
+  configuración errónea. Sin variables se usan los defaults locales seguros.
+  La entrega 6 incluye firebase deploy --only firestore:indexes y su config
+  productiva. No se ejecuta este paso ahora.
+- Tests Angular nuevos en test/, sin Firebase/WhatsApp/red real; se adaptó el
+  recorrido de tienda existente al contrato nuevo. Se agrega regresión de
+  precedencia del supervisor a test_catalog_admin_contract.js. Sin nuevas
+  dependencias ni cambios de package.json. Tests/build/diff los corre el dueño.
+  Guía manual: hodie-tienda/docs/VERIFICACION-perfil-tienda.md.

@@ -2,8 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { makeLocalEnvironment, assertLocalEnvironment, localCatalog, projectDirectory } from "./local-catalog.config.js";
+import { makeLocalEnvironment, assertLocalCatalogTarget, assertLocalEnvironment, localCatalog, projectDirectory } from "./local-catalog.config.js";
 
+// La configuración se valida antes de secretos, herramientas y puertos.
+assertLocalCatalogTarget(process.env);
 const env = makeLocalEnvironment();
 assertLocalEnvironment(env);
 const java = spawnSync("java", ["-version"], { encoding: "utf8" });

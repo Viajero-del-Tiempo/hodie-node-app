@@ -1,8 +1,8 @@
 # Backend de perfil, checkout y facturación — entrega 4b-1
 
-Esta ronda implementa el backend. La tienda Angular todavía envía el contrato
-anterior: los formularios, selección de direcciones y facturación se harán en
-4b-2. Verificá esta entrega mediante HTTP y sus tests, contra el emulador.
+Esta guía describe el backend 4b-1. Las pantallas Angular se conectan al contrato
+en 4b-2; su guía está en hodie-tienda/docs/VERIFICACION-perfil-tienda.md.
+También se puede verificar el backend mediante HTTP y sus tests, contra el emulador.
 Nada se deploya antes de la entrega 6 conjunta con el agente nuevo.
 
 ## Arranque y clientes locales

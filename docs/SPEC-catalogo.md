@@ -355,7 +355,7 @@ Se conservan los números de las entregas restantes para mantener las referencia
 - **Entrega 6:** puesta en marcha junto con el agente conversacional nuevo, que tiene su propia especificación: backup, borrado de productos viejos, deploy conjunto de backend/frontend/agente, carga manual y verificación.
   - Hasta entonces, nada de esta rama se deploya. El BudgetAgent actual no se modifica y se elimina cuando se reemplace.
   - Eliminar la compatibilidad temporal con productos del modelo viejo en pricing y en la consulta de SKU raíz antes del deploy conjunto. Mantener el manejo de pedidos históricos sin `variantId`, con aviso y sin movimientos de stock.
-  - Configurar el índice de pedidos propios descrito en `firestore.indexes.json`.
+  - Preparar la configuración Firebase productiva con `firestore.indexes` apuntando a `firestore.indexes.json` y publicar los índices (incluido pedidos propios) con `firebase deploy --only firestore:indexes`, verificando antes el proyecto de producción seleccionado. No usar la configuración del emulador para este deploy.
 
 En cada entrega:
 
