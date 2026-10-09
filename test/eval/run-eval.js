@@ -13,10 +13,13 @@ import { createStubJudge, createLLMJudge } from "./judge.js";
 import { checkToolSpecification } from "./tool-names.js";
 import { writeReport } from "./report.js";
 import { enableMemoryOnly } from "./production-guard.js";
+import { emptyModelUsage, readModelUsage, sumModelUsage, modelUsageSince } from "../../src/utils/model-usage.util.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const errorDiagnostic = (error, location = {}) => ({
-  code: error.code ?? "EVALUATION_ERROR", message: error.message, ...location,
+  code: error.code ?? "EVALUATION_ERROR", message: error.message,
+  ...(typeof error.rawExcerpt === "string" ? { rawExcerpt: error.rawExcerpt.slice(0, 300) } : {}),
+  ...location,
 });
 
 async function runRepetition(item, fixtures, options, number) {
@@ -24,21 +27,26 @@ async function runRepetition(item, fixtures, options, number) {
     number, status: "blocked", executed: false, agentKind: null,
     checks: [], criteria: [], tools: [], turns: [], diagnostics: structuredClone(item.diagnostics),
     before: null, after: null,
+    modelUsage: { agent: emptyModelUsage(), evaluator: emptyModelUsage() },
   };
   if (item.diagnostics.length) return result;
+  const evaluatorBefore = readModelUsage(options.judge, { knownZero: options.judge.kind === "stub" });
   const clock = createClock(options.now);
   const transport = createFakeWhatsApp({ mediaResolver: options.mediaResolver });
   const world = createMemoryWorld(fixtures, { clock, transport });
   let agent;
   let initialized = false;
+  let factoryStarted = false;
   try {
     const initial = buildInitialState(item.input.context ?? {}, fixtures, {
       chatId: "eval-" + randomUUID() + "@lid", now: clock.now(),
     });
     world.initialize(initial);
     initialized = true;
+    factoryStarted = true;
     agent = assertAgent(await withTimeout(signal => options.createAgent({ world, transport, signal }), options.timeoutMs, "AGENT_SETUP_TIMEOUT"));
     result.agentKind = agent.kind;
+    result.agentModelInjected = agent.metadata?.modelInjected === true;
     try {
       await withTimeout(signal => prepareShownQuote(item.input.context, world, signal), options.timeoutMs, "QUOTE_SETUP_TIMEOUT");
     } catch (error) {
@@ -61,6 +69,7 @@ async function runRepetition(item, fixtures, options, number) {
       conversation.push(...incoming);
       let failure = null;
       let usage = null;
+      let agentDiagnostics = [];
       try {
         await withTimeout(async signal => {
           world.beginTurn(number, signal);
@@ -72,6 +81,7 @@ async function runRepetition(item, fixtures, options, number) {
             }, signal,
           });
           usage = response?.usage ?? null;
+          agentDiagnostics = response?.diagnostics ?? [];
         }, options.timeoutMs);
       } catch (error) { failure = error; }
       finally { transport.endTurn(); }
@@ -89,7 +99,7 @@ async function runRepetition(item, fixtures, options, number) {
       world.setState(state);
       result.turns.push({
         number, incoming, outgoing, handoffBefore, handoffAfter: state.humanHandoffRequired,
-        durationMs: performance.now() - startedAt, usage, snapshotAfter: world.snapshot(),
+        durationMs: performance.now() - startedAt, usage, agentDiagnostics, snapshotAfter: world.snapshot(),
       });
       if (failure) throw failure;
       clock.advance(1000);
@@ -146,6 +156,8 @@ async function runRepetition(item, fixtures, options, number) {
       try { await withTimeout(signal => agent.dispose({ signal }), Math.min(options.timeoutMs, 5000), "DISPOSE_TIMEOUT"); }
       catch (error) { result.status = "error"; result.diagnostics.push(errorDiagnostic(error)); }
     }
+    result.modelUsage.agent = factoryStarted ? readModelUsage(agent, { knownZero: agent?.kind === "trivial" }) : emptyModelUsage();
+    result.modelUsage.evaluator = modelUsageSince(evaluatorBefore, readModelUsage(options.judge, { knownZero: options.judge.kind === "stub" }));
   }
 }
 
@@ -172,6 +184,7 @@ export async function runEvaluation(dataset, {
     mediaComplete: true,
   };
   const options = { createAgent, judge, timeoutMs, now, mediaResolver, filename: dataset.filename };
+  const judgeUsageBefore = readModelUsage(judge, { knownZero: judge.kind === "stub" });
   const cases = [];
   for (const item of selected) {
     const repetitions = [];
@@ -184,22 +197,38 @@ export async function runEvaluation(dataset, {
   }
   const kinds = [...new Set(cases.flatMap(item => item.repetitions.map(result => result.agentKind).filter(Boolean)))];
   metadata.agentKind = kinds.length === 1 ? kinds[0] : kinds.length ? "mixed" : "unknown";
+  metadata.agentModelInjected = cases.some(item => item.repetitions.some(result => result.agentModelInjected));
+  metadata.judgeModelInjected = judge.metadata?.modelInjected === true;
   // Un caso con imágenes no ejecutado tampoco certifica cobertura visual.
   metadata.mediaComplete = selected.every((item, index) => Array.isArray(item.input?.turns)
     && item.input.turns.every((turn, turnIndex) => turn !== null && typeof turn === "object"
       && (turn.attachment !== "image" || cases[index].repetitions.every(result =>
         result.turns[turnIndex]?.incoming.some(message => message.attachment?.mode === "file")))));
   metadata.finishedAt = new Date().toISOString();
-  return { metadata, summary: aggregateResults(cases, metadata), cases };
+  const summary = aggregateResults(cases, metadata);
+  summary.modelUsage = {
+    agent: sumModelUsage(cases.flatMap(item => item.repetitions.map(result => result.modelUsage.agent))),
+    evaluator: modelUsageSince(judgeUsageBefore, readModelUsage(judge, { knownZero: judge.kind === "stub" })),
+  };
+  return { metadata, summary, cases };
 }
 
 async function loadAgent(name) {
   const url = name === "trivial" ? new URL("./agents/trivial-agent.js", import.meta.url)
-    : name === "real" ? null : pathToFileURL(resolve(name));
-  if (!url) throw new Error("El agente nuevo todavía no existe; use trivial o la ruta explícita de un adaptador");
+    : name === "real" ? new URL("../../src/agents/consultation/eval-adapter.js", import.meta.url) : pathToFileURL(resolve(name));
   const module = await import(url.href);
   if (typeof module.createAgent !== "function") throw new Error("El módulo debe exportar createAgent");
   return { factory: module.createAgent, module: url.href };
+}
+
+export function parseCaseSelection({ case: individual = [], cases: lists = [] } = {}) {
+  const ids = [...individual];
+  for (const list of lists) {
+    const parts = list.split(",").map(id => id.trim());
+    if (parts.some(id => !id)) throw new Error("--cases contiene un ID vacío");
+    ids.push(...parts);
+  }
+  return [...new Set(ids)];
 }
 
 async function loadMediaResolver(filename, dataset) {
@@ -227,14 +256,14 @@ export async function main(args = process.argv.slice(2)) {
       validate: { type: "boolean", default: false }, help: { type: "boolean", default: false },
       file: { type: "string", default: resolve(HERE, "conversations.yaml") },
       agent: { type: "string", default: "trivial" }, judge: { type: "string", default: "stub" },
-      case: { type: "string", multiple: true }, category: { type: "string", multiple: true },
+      case: { type: "string", multiple: true }, cases: { type: "string", multiple: true }, category: { type: "string", multiple: true },
       output: { type: "string", default: resolve(HERE, "results") }, media: { type: "string" },
       now: { type: "string" }, "timeout-ms": { type: "string", default: "60000" },
       "judge-timeout-ms": { type: "string", default: "60000" },
     }, strict: true, allowPositionals: false,
   });
   if (values.help) {
-    console.log("npm run test:eval -- [--validate] [--agent trivial|ruta] [--judge stub|llm] [--case ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
+    console.log("npm run test:eval -- [--validate] [--agent trivial|real|ruta] [--judge stub|llm] [--case ID] [--cases ID,ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
     return 0;
   }
   enableMemoryOnly();
@@ -249,13 +278,19 @@ export async function main(args = process.argv.slice(2)) {
     return dataset.errors.length || dataset.warnings.length || dataset.cases.some(item => item.diagnostics.length) ? 2 : 0;
   }
   if (!["stub", "llm"].includes(values.judge)) throw new Error("Evaluador desconocido");
+  const caseIds = parseCaseSelection(values);
+  // Validar la selección antes de crear clientes que podrían usar la red.
+  for (const id of caseIds) if (!dataset.cases.some(item => item.id === id)) throw new Error("Caso inexistente: " + id);
+  for (const category of values.category ?? []) if (!dataset.cases.some(item => item.category === category)) throw new Error("Categoría inexistente: " + category);
+  if (!dataset.cases.some(item => (!caseIds.length || caseIds.includes(item.id))
+      && (!values.category?.length || values.category.includes(item.category)))) throw new Error("La selección no contiene casos");
   const timeoutMs = Number(values["timeout-ms"]);
   const judgeTimeoutMs = Number(values["judge-timeout-ms"]);
   if (!(timeoutMs > 0) || !Number.isFinite(timeoutMs) || !(judgeTimeoutMs > 0) || !Number.isFinite(judgeTimeoutMs)) throw new Error("Timeout inválido");
   const now = values.now === undefined ? Date.now() : Date.parse(values.now);
   if (!Number.isFinite(now)) throw new Error("Fecha inicial inválida");
-  if (values.judge === "llm") {
-    // Solo este modo lee .env; no inicia Firebase, WhatsApp ni servicios de pedidos.
+  if (values.judge === "llm" || values.agent !== "trivial") {
+    // Agente/evaluador reales usan Gemini; no se inicia ningún servicio productivo.
     const dotenv = await import("dotenv");
     dotenv.config({ quiet: true });
   }
@@ -263,7 +298,7 @@ export async function main(args = process.argv.slice(2)) {
   const judge = values.judge === "stub" ? createStubJudge() : await createLLMJudge({ timeoutMs: judgeTimeoutMs });
   const report = await runEvaluation(dataset, {
     createAgent: adapter.factory, judge, timeoutMs, now,
-    caseIds: values.case ?? [], categories: values.category ?? [],
+    caseIds, categories: values.category ?? [],
     mediaResolver: await loadMediaResolver(values.media, dataset),
     onRepetition: result => console.log(JSON.stringify(result)),
   });

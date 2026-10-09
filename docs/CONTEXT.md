@@ -657,3 +657,52 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   Se agregan seis suites en memoria a test:unit, conservando las existentes.
   El dueño corre tests/evaluaciones/diff. El asistente solo valida el archivo
   en modo lectura y no reconstruye salidas. Sin commit, push ni deploy.
+
+# DECISIONES DEL AGENTE — ENTREGA 2 (8 de octubre de 2026)
+
+- Agente de consulta independiente en src/agents/consultation, conectado solo
+  al runner mediante agent-contract.js. No se modifica el grafo actual, router,
+  BudgetAgent, SupportAgent ni whatsapp.js. Sin integración ni deploy.
+- createGeminiModel es la única fábrica. Prompt versionado en
+  src/agents/prompts/agente.md, derivado de SPEC, sin nombres, precios o listas
+  del negocio. Sus restricciones de carrito/pedidos y comprobantes/derivación
+  están en bloques TEMPORAL ENTREGA 4 y TEMPORAL ENTREGA 5; se retiran en esas
+  entregas, junto con los controles de capacidad correspondientes.
+- Herramientas disponibles: buscar_productos, ver_producto, enviar_imagenes,
+  consultar_politicas, estado_pedido y responder. Servicio central de catálogo
+  y repositorios/estado/transporte inyectados; en evaluación todo vive en memoria.
+  Las categorías y los ejes de opciones proceden de datos, nunca de constantes.
+  No se agregan herramientas administrativas ni operaciones de carrito/pedido.
+- El gate del interceptor registra todos los intentos y valida argumentos antes
+  de ejecutar handlers. Ocho llamadas por turno incluyendo intentos inválidos
+  y cierre; la última queda reservada para responder. No hay efectos después
+  del cierre ni envíos/escrituras tras cancelación. Errores recuperables son datos.
+- Guardián mínimo: identidad confiable, handoff activo en silencio, hora de
+  Paraguay, categorías, contexto de lectura y 20 mensajes de sesión actual.
+  Ráfagas, audio, visión, detección completa de sesiones y límites horarios quedan
+  para entrega 3. El runner mantiene el historial, sin duplicarlo en el adaptador.
+- estado_pedido: identidad verificada y pedido propio devuelve estado/productos
+  por lista permitida de campos, sin dirección, facturación ni teléfonos. Sin
+  verificación, o con pedido de otro teléfono, exige número y teléfono de compra
+  coincidentes y muestra solo el estado. No modifica identidad ni phoneVerified.
+  Una falta de coincidencia devuelve la misma respuesta genérica. No se inventan
+  fechas ni se deduce antigüedad de números; pedidos ambiguos requieren el número.
+- responder actualiza entendido y su contador, sin aplicar todavía la escalada.
+  Falla técnica o falta de cierre deriva por código con mensaje fijo y estado.
+  El timeout interno es 50 s (runner: 60 s). Derivar como herramienta, índice y
+  alerta al admin corresponden a entrega 5; no se simulan como implementados.
+- Runner: --agent real usa el adaptador nuevo; --cases permite listas separadas
+  por comas, combinables con --case y sin duplicados. README documenta los 27
+  casos objetivo del plan, sin afirmar que hayan pasado. F-05 sigue bloqueado.
+- Agente real y juez llm usan Gemini, sin iniciar servicios productivos. Con
+  --agent real --judge stub el agente sigue llamando al modelo y los criterios
+  siguen sin evaluar. La red no se habilita para Firestore, WhatsApp o Cloudinary.
+- El resumen final separa modelUsage.agent/evaluator: invoke efectivos, fallos
+  y tokens informados por proveedor, por turno, repetición y corrida. Consumo
+  ausente o adaptador sin instrumentación se informa como incompleto/desconocido,
+  nunca se reconstruye a partir de herramientas o criterios. El juez conserva
+  el consumo ante JSON inválido y excluye invocaciones anteriores a la corrida.
+- Tests en memoria con modelos inyectados, datos inventados y sin APIs externas;
+  scripts test:agent:unit y actualización de test:eval:unit aprobados en el plan.
+  Se agregan a test:unit. El dueño ejecuta tests/evaluaciones/diff; el asistente
+  solo revisa código y sintaxis, sin afirmar resultados ni hacer commit/push.

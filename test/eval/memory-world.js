@@ -39,6 +39,7 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
   const uploads = repository([], "id");
   const events = [];
   const handlers = new Map();
+  let toolGate = null;
   let chatId = null;
   let active = { phase: "setup", turn: 0, signal: null };
   const catalog = createCatalogService({
@@ -81,6 +82,11 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
       handlers.set(name, { handler, real });
     },
     isRealTool: name => handlers.get(name)?.real === true,
+    setToolGate(gate) {
+      assertOpen();
+      if (typeof gate !== "function") throw new Error("Gate de herramientas inválido");
+      toolGate = gate;
+    },
     beginTurn(turn, signal) {
       assertOpen();
       active = { phase: "case", turn, signal };
@@ -94,12 +100,18 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
       const event = {
         id: "tool-" + (events.length + 1), type: "tool", phase: context.phase,
         turn: context.turn, name, args: structuredClone(args), status: "pending",
+        handlerInvoked: false,
       };
       events.push(event);
       try {
+        const denied = toolGate?.(name, args);
         const registered = handlers.get(name);
-        if (!registered) throw Object.assign(new Error("Herramienta no disponible: " + name), { code: "TOOL_UNAVAILABLE" });
-        const result = await registered.handler(structuredClone(args), { world, transport, ...context });
+        if (!denied && !registered) throw Object.assign(new Error("Herramienta no disponible: " + name), { code: "TOOL_UNAVAILABLE" });
+        let result = denied;
+        if (!denied) {
+          event.handlerInvoked = true;
+          result = await registered.handler(structuredClone(args), { world, transport, ...context });
+        }
         assertOpen();
         if (context.signal?.aborted) throw context.signal.reason;
         event.result = structuredClone(result ?? null);

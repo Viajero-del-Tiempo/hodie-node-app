@@ -12,6 +12,7 @@ export async function writeReport(report, outputRoot) {
     ...result.turns.map(turn => ({
       case: item.id, repetition: result.number, type: "turn", number: turn.number,
       incoming: turn.incoming, outgoing: turn.outgoing, handoffAfter: turn.handoffAfter, durationMs: turn.durationMs,
+      usage: turn.usage, agentDiagnostics: turn.agentDiagnostics,
     })),
   ]));
   await writeFile(join(directory, "trace.jsonl"), trace.map(event => JSON.stringify(event)).join("\n") + "\n", { flag: "wx" });
@@ -23,6 +24,13 @@ export async function writeReport(report, outputRoot) {
     "Criterios no evaluados: " + report.summary.criteriaNotEvaluated + ".",
     "Código de salida: " + report.summary.exitCode + ".",
     "Aprobación de producción: " + report.summary.productionApproved + ".", "",
+    "## Consumo del modelo", "",
+    ...Object.entries(report.summary.modelUsage).map(([name, usage]) =>
+      "- " + name + ": llamadas " + (usage.calls ?? "desconocidas")
+      + "; tokens informados (entrada/salida/total): " + usage.reportedTokens.input + "/" + usage.reportedTokens.output + "/" + usage.reportedTokens.total
+      + "; instrumentado: " + usage.instrumented + "; consumo completo: " + usage.usageComplete
+      + "; llamadas sin metadatos: " + usage.callsWithoutUsage),
+    "",
     "## Umbrales", "",
     ...Object.entries(report.summary.gates).map(([name, gate]) =>
       "- " + name + ": " + gate.passed + "/" + gate.total + "; cumple: " + gate.pass

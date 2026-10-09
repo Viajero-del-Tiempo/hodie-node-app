@@ -262,6 +262,7 @@ La seguridad no depende de que el modelo se porte bien: lo que el agente no debe
 - **Consulta de pedidos verificada.**
   - Con teléfono verificado (resuelto desde WhatsApp) y un pedido de ese teléfono: estado y productos.
   - Sin teléfono verificado: exige número de pedido y teléfono de compra, y que coincidan. Muestra solo el estado.
+  - Si el teléfono está verificado pero el pedido no es suyo, se aplica la misma vía reducida: número de pedido y teléfono de compra coincidentes, mostrando solo el estado. No se cambia la identidad verificada del chat.
   - Si no coinciden: respuesta genérica ("no encontramos un pedido con esos datos"), sin revelar cuál de los dos falló.
 - **Un comprobante nunca confirma un pago.** Solo lo registra y avisa al admin.
 - **Límites de uso.** Como máximo 8 llamadas a herramientas por turno; al superarlo, el turno se trata como falla técnica. Por chat, un límite de 40 turnos por hora (configurable): al superarlo, el bot deja de llamar al modelo para ese chat y alerta al admin. Esto acota costos y abusos.
@@ -311,8 +312,8 @@ La evaluación se construye primero, para que el agente se mida desde su primera
 1. **Runner de evaluación:** carga de fixtures en memoria, simulación de WhatsApp, verificación determinística, evaluador LLM e informe.
 2. **Agente de consulta:** guardián mínimo, agente, `responder` y las herramientas de lectura (`buscar_productos`, `ver_producto`, `enviar_imagenes`, `consultar_politicas`, `estado_pedido`). Se evalúan los casos de inicio, producto, políticas y consulta de pedidos.
 3. **Guardián completo:** ráfagas, audios, imágenes, sesiones, contexto del turno y límites de uso.
-4. **Carrito y pedidos:** herramientas de carrito, `datos_envio`, `cotizar` y `crear_pedido` con sus controles e idempotencia; TTL de carritos.
-5. **Comprobantes y derivación:** `registrar_comprobante`, `derivar`, escalada aplicada por código y alerta con contexto.
+4. **Carrito y pedidos:** herramientas de carrito, `datos_envio`, `cotizar` y `crear_pedido` con sus controles e idempotencia; TTL de carritos. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 4` y habilitar `quoteIdMostrado` con la validación de `lastQuote`.
+5. **Comprobantes y derivación:** `registrar_comprobante`, `derivar`, escalada aplicada por código y alerta con contexto. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 5` y habilitar `derivar` como cierre conversacional.
 6. **Evaluación completa:** todos los casos, hasta alcanzar los umbrales.
 
 Después viene la puesta en marcha conjunta con el catálogo (entrega 6 de `docs/SPEC-catalogo.md`), en la que también se eliminan el router, el BudgetAgent y el SupportAgent.

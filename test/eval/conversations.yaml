@@ -1074,7 +1074,7 @@ cases:
       - user: "Muchas gracias!"
     expect:
       must:
-        - Agradece y cierra con cordialidad.
+        - Responde con cordialidad y cierra la conversación (por ejemplo, con un «de nada»).
       must_not:
         - Abre una cotización nueva.
       handoff: "no"
