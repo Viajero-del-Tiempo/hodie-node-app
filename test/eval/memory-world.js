@@ -1,14 +1,11 @@
 import { performance } from "node:perf_hooks";
 import { createCatalogService } from "../../src/services/catalog.service.js";
 import { TOOL_NAMES } from "./tool-names.js";
+import { createVirtualClock } from "../helpers/virtual-clock.js";
+import { assertCheckpointState } from "../../src/agents/guardian/attachments.js";
 
 export function createClock(initialTime) {
-  if (!Number.isFinite(initialTime)) throw new Error("Reloj inicial inválido");
-  let time = initialTime;
-  return { now: () => time, advance: milliseconds => {
-    if (!Number.isFinite(milliseconds) || milliseconds < 0) throw new Error("Avance de reloj inválido");
-    time += milliseconds;
-  } };
+  return createVirtualClock(initialTime);
 }
 
 export function createMemoryWorld(fixtures, { clock, transport }) {
@@ -37,6 +34,8 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
   const carts = repository([], "id");
   const checkpoints = repository([], "id");
   const uploads = repository([], "id");
+  const handoffs = repository([], "id");
+  const guardianEvents = [];
   const events = [];
   const handlers = new Map();
   let toolGate = null;
@@ -51,7 +50,9 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
     },
   });
   const world = {
-    clock, now: clock.now, transport, orders, carts, checkpoints, uploads,
+    clock, now: clock.now, transport, orders, carts, checkpoints, uploads, handoffs,
+    recordGuardianEvent: event => guardianEvents.push({ ...structuredClone(event), time: clock.now() }),
+    getGuardianEvents: () => structuredClone(guardianEvents),
     // Solo operaciones de lectura del servicio central. No hay CRUD admin disponible.
     catalog: Object.fromEntries(["getCategories", "getProduct", "searchProducts", "listPolicies",
       "getProductForPricing", "getCategoryForPricing"].map(name => [name, catalog[name]])),
@@ -63,7 +64,7 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
       world.scenario = structuredClone(initial.scenario);
     },
     getState: () => checkpoints.get(chatId),
-    setState: state => checkpoints.set(chatId, state),
+    setState: state => checkpoints.set(chatId, assertCheckpointState(state)),
     getCart() {
       const cart = carts.get(chatId);
       if (cart && cart.expiresAt <= clock.now()) { carts.delete(chatId); return null; }

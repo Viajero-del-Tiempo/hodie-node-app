@@ -12,8 +12,9 @@ export async function writeReport(report, outputRoot) {
     ...result.turns.map(turn => ({
       case: item.id, repetition: result.number, type: "turn", number: turn.number,
       incoming: turn.incoming, outgoing: turn.outgoing, handoffAfter: turn.handoffAfter, durationMs: turn.durationMs,
-      usage: turn.usage, agentDiagnostics: turn.agentDiagnostics,
+      usage: turn.usage, agentDiagnostics: turn.agentDiagnostics, guardian: turn.guardian,
     })),
+    ...(result.guardianEvents ?? []).map(event => ({ case: item.id, repetition: result.number, type: "guardian", ...event })),
   ]));
   await writeFile(join(directory, "trace.jsonl"), trace.map(event => JSON.stringify(event)).join("\n") + "\n", { flag: "wx" });
   const lines = [

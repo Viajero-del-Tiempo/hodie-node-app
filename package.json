@@ -17,6 +17,7 @@
     "test:customer:unit": "node --test test/test_ruc_validation.js test/test_profile_validation.js test/test_order_customer_data.js test/test_order_billing_pdf.js",
     "test:customer:integration": "node scripts/test-catalog-emulator.js --customer-only",
     "test:eval": "node test/eval/run-eval.js",
+    "test:guardian:unit": "node --test test/test_guardian_filters.js test/test_guardian_bursts.js test/test_guardian_sessions.js test/test_guardian_limits.js test/test_guardian_media.js test/test_guardian_runtime.js test/test_guardian_whatsapp_adapter.js",
     "test:eval:unit": "node --test test/test_eval_loader.js test/test_eval_context.js test/test_eval_transport.js test/test_eval_checks.js test/test_eval_judge.js test/test_eval_runner.js test/test_eval_model_usage.js",
     "test:agent:unit": "node --test test/test_consultation_tools.js test/test_consultation_order_access.js test/test_consultation_agent.js test/test_consultation_runner.js test/test_eval_model_usage.js"
   },

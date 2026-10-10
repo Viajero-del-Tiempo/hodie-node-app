@@ -127,6 +127,8 @@ export function buildInitialState(context = {}, fixtures, { chatId, now }) {
     userPhoneNumber: context.telefonoCliente ?? null, phoneVerified: Object.hasOwn(context, "telefonoCliente"),
     pushname: null, sessionCutoff: oldMessages.length, lastActivityAt,
     consecutiveMisunderstandings: 0, humanHandoffRequired: false, humanHandoffReason: null, lastQuote: null,
+    guardianRateLimit: { admittedAt: [], blocked: false, episodeId: null }, guardianAlerts: [],
+    resumeRequestedAt: null, resumeAppliedAt: null,
   };
   let cart = null;
   if (context.carrito) {

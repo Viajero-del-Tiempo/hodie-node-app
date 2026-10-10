@@ -3,6 +3,13 @@ import { fileURLToPath } from "node:url";
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const memorySuites = [
+  "test/test_guardian_filters.js",
+  "test/test_guardian_bursts.js",
+  "test/test_guardian_sessions.js",
+  "test/test_guardian_limits.js",
+  "test/test_guardian_media.js",
+  "test/test_guardian_runtime.js",
+  "test/test_guardian_whatsapp_adapter.js",
   "test/test_consultation_tools.js",
   "test/test_consultation_order_access.js",
   "test/test_consultation_agent.js",

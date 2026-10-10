@@ -38,7 +38,7 @@ test("ciclo búsqueda/detalle/respuesta usa datos cambiantes de herramientas y c
     } finally { f.close(); }
   }
 });
-test("guardián recorta historial, conserva ráfaga en orden y no envía productos completos, datos ajenos ni bytes", async () => {
+test("contexto del servidor recorta historial, conserva ráfaga en orden y no envía productos completos, datos ajenos ni bytes", async () => {
   const fixtures = evalFixtures();
   fixtures.orders.push({ ...fixtures.orders[0], orderNumber: "other-order", userPhoneNumber: "595900000002" });
   const conversacion = Array.from({ length: 25 }, (_, i) => ({ cliente: "Anterior " + i }));

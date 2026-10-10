@@ -6,7 +6,8 @@ export function createResponder({ getState, setState, transport }) {
     const state = getState();
     state.consecutiveMisunderstandings = entendido ? 0 : (state.consecutiveMisunderstandings ?? 0) + 1;
     // La escalada y derivar como herramienta se implementan en la entrega 5.
-    setState(state);
+    await setState(state);
+    signal?.throwIfAborted();
     return { code: "OK", entendido };
   };
 }
@@ -17,7 +18,8 @@ export async function forceTechnicalHandoff({ getState, setState, transport }, r
   if (state.humanHandoffRequired) return;
   state.humanHandoffRequired = true;
   state.humanHandoffReason = reason;
-  setState(state);
+  await setState(state);
+  signal?.throwIfAborted();
   // Cierre mínimo por código: sin herramienta del modelo, índice ni alerta externa.
   await transport.sendText("No pude continuar con la consulta. Una persona del equipo te va a responder por este chat.");
 }

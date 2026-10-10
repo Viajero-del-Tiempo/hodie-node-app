@@ -706,3 +706,74 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   scripts test:agent:unit y actualización de test:eval:unit aprobados en el plan.
   Se agregan a test:unit. El dueño ejecuta tests/evaluaciones/diff; el asistente
   solo revisa código y sintaxis, sin afirmar resultados ni hacer commit/push.
+
+# DECISIONES DEL AGENTE — ENTREGA 3
+
+- Guardián completo en src/agents/guardian; consultation/guardian.js se renombra
+  a consultation/server-context.js. Este último solo construye el contexto del
+  servidor y la entrada del modelo. El prompt conserva intactos los bloques
+  TEMPORAL ENTREGA 4 y 5; agrega únicamente la regla permanente para audio que
+  no pudo transcribirse. Sin productos, empaques, categorías o precios en src/.
+- No se modifica src/config/whatsapp.js, el router, el grafo actual ni el
+  endpoint administrativo de reactivación. El router sigue atendiendo en
+  producción hasta la puesta en marcha conjunta con el catálogo. En esa puesta
+  en marcha se eliminan el filtro viejo, el router, BudgetAgent y SupportAgent.
+  El filtro nuevo tiene un test de paridad que lee el código del filtro actual
+  sin importar ni iniciar WhatsApp. No hay deploy ni migraciones en esta entrega.
+- Buffer en RAM por chat: 8 s de silencio y máximo 30 s desde el primer mensaje.
+  Un lote cerrado ya no incorpora mensajes posteriores. Se serializan los
+  lotes del mismo chat; el plazo de 60 s empieza al cierre, incluye espera de
+  ejecución y multimedia. Otros chats pueden continuar por su propio runtime.
+  El adaptador usa también 60 s como límite interno del agente; el guardián
+  controla el presupuesto total desde el cierre, sin reiniciarlo tras medios.
+  Apagado explícito/SIGINT/SIGTERM registra guardian_shutdown con la cantidad
+  de lotes pendientes descartados. SIGKILL no permite log de apagado. Un
+  reinicio abrupto pierde las ráfagas en RAM: no se supone reentrega de WhatsApp.
+- Sesión nueva solo con más de 6 h de inactividad, señal explícita del servidor
+  o reactivación administrativa. Corta historial, reinicia incomprensiones e
+  invalida lastQuote; conserva el carrito. Handoff nunca vence ni se reactiva
+  por tiempo. En handoff solo actualiza último mensaje/fecha/tipo en el puerto
+  de handoff_threads, sin resolver identidad, descargar o llamar modelos.
+- Límite de 40 lotes por ventana móvil de 60 min. La admisión se persiste antes
+  de descargar, transcribir o consultar al modelo. El lote 41 inicia un episodio:
+  registra una solicitud de alerta y emite una sola vez «Por ahora no puedo
+  seguir respondiendo mensajes en este chat.»; después guarda silencio. No
+  activa handoff. Se desbloquea automáticamente al volver a tener cupo y no
+  reinicia el límite por sesión ni al reconstruir el runtime.
+- guardianRateLimit guarda admittedAt/blocked/episodeId; guardianAlerts guarda
+  solicitudes y su estado de entrega. Son estado del servidor/checkpoint, no
+  argumentos del modelo ni herramientas. Solo whatsapp.js enviará y acusará
+  la entrega de alertas. El agente y el guardián nunca avisan al equipo.
+- Estado persistido contiene solo mensajes de texto y controles de sesión,
+  silencio y límite. El puerto state-store recibe un grafo/checkpointer
+  inyectado; no importa SDKs ni el grafo productivo. Pruebas usan almacenamiento
+  separado. No compartir colecciones actuales solo mediante namespace: el
+  saver actual filtra namespace después de limitar la consulta a 25 snapshots.
+  Conectar el grafo nuevo/checkpointer y adaptar resume-bot queda para puesta
+  en marcha; no se presentan como activos durante esta entrega.
+- Audio hasta 120 s; sin duración, respaldo comprobable de hasta 2 MB; sin
+  ambas comprobaciones, pedir texto. El guardián transcribe con createGeminiModel
+  sin herramientas; el texto entra literalmente como [audio transcripto]. Los
+  fallos son datos del contexto para pedir resumen escrito. No inventa audio.
+- Imagen hasta 5 MB, tres por turno; total audio+imágenes hasta 10 MB. Rangos
+  y relaciones se validan en config.js. Se comprueba tamaño informado antes
+  de descargar y tamaño real después. Documentos/videos/otros solo tipo/nombre.
+  Imágenes van como contenido multimodal del turno, con metadatos/attachmentId
+  en contexto; nunca como instrucciones. Bytes no se guardan en checkpoint ni
+  informe; IDs efímeros pueden figurar en la traza, nunca en checkpoint. Se
+  liberan los adjuntos también ante error o cancelación. No se
+  sube a Cloudinary: personalización y comprobantes siguen en entregas 4 y 5.
+- Runtime usa reloj/temporizadores inyectables. El runner entrega burst como
+  lote declarado en un instante virtual, sin inventar intervalos del caso;
+  las fronteras 8/30 s se prueban por separado. Los audios del YAML ya vienen
+  transcriptos: no prueban calidad de transcripción. Consumo total del agente
+  incluye transcripción y conserva su desglose por turno, separado del juez.
+- P-06 tiene imagen sintética en test/eval/media/p06-reference.png y manifiesto
+  guardian-manifest.json: caja rectangular oscura, sin marca, texto ni personas.
+  No es un producto real ni acredita datos del catálogo. No publicar fotos con
+  datos personales. F-05 sigue bloqueado por cotizar; C-03 aún exige el total
+  que corresponde a entrega 4. Derivación/escalada completa sigue en entrega 5.
+- Scripts test:guardian:unit y suites en test:unit aprobados en el plan. Nuevos
+  tests en memoria, con modelos inyectados, sin Firestore/WhatsApp ni red real.
+  El dueño ejecuta tests/evaluaciones/diff; el asistente no reconstruye salidas,
+  no hace commit/push ni modifica conversations.yaml.

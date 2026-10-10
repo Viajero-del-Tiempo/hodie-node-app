@@ -1,7 +1,7 @@
 import { normalizePurchasePhone } from "./order-access.js";
 
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key, structuredClone(value[key])]));
-export async function prepareConsultationTurn({ runtime, history, now, turn, signal }) {
+export async function prepareServerContext({ runtime, history, now, turn, signal }) {
   signal?.throwIfAborted();
   const state = runtime.getState();
   if (state.humanHandoffRequired) return { silent: true };
@@ -30,9 +30,15 @@ export async function prepareConsultationTurn({ runtime, history, now, turn, sig
       // Sin fecha no se presenta esta lista como ordenada por antigüedad.
       orders: orders.filter(order => normalizePurchasePhone(order.userPhoneNumber) === normalizePurchasePhone(state.userPhoneNumber))
         .slice(0, 2).map(order => pick(order, ["orderNumber", "status", "createdAt"])),
-      attachments: (turn.attachments ?? []).map(attachment => pick(attachment, ["type", "mode", "description", "filename"])),
+      attachments: (turn.attachments ?? []).map(attachment => ({ attachmentId: attachment.id,
+        ...pick(attachment, ["type", "mode", "description", "filename", "reason"]) })),
+      mediaIssues: (turn.mediaIssues ?? []).map(issue => pick(issue, ["attachmentId", "type", "code", "requestText"])),
     },
     history: (history ?? []).filter(message => ["user", "assistant"].includes(message.role) && typeof message.content === "string").slice(-20),
-    input: turn.messages.map(message => message.text).join("\n"),
+    input: turn.imageInputs?.length ? turn.messages.flatMap(message => {
+      const image = turn.imageInputs.find(item => item.id === message.attachmentId);
+      return [{ type: "text", text: message.text }, ...(image ? [{ type: "image_url",
+        image_url: { url: "data:" + image.mimeType + ";base64," + image.data.toString("base64") } }] : [])];
+    }) : turn.messages.map(message => message.text).join("\n"),
   };
 }

@@ -525,7 +525,7 @@ cases:
     expect:
       must:
         - Informa qué cajas hay realmente en el catálogo y en qué colores (la caja para termo de mate, en negro).
-        - Ofrece mostrar una foto o las medidas.
+        - Da las medidas de la caja, o se ofrece a darlas o a mostrar una foto.
       must_not:
         - Afirma que tiene la caja en azul noche.
       handoff: "no"

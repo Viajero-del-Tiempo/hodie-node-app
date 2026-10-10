@@ -209,11 +209,77 @@ consumo cero. El agente trivial y el juez stub hacen cero invocaciones reales.
 Se guarda también el consumo por turno y por repetición; las firmas/prompt privados
 del modelo no se serializan en esos contadores ni llegan al evaluador.
 
+## Guardián completo: entrega 3
+
+--agent real usa src/agents/guardian y consultation/server-context.js para
+construir el contexto. El receptor WhatsApp, router y grafo productivos quedan
+intactos. whatsapp-adapter.js es un puerto inactivo: no inicia un cliente ni
+registra listeners de mensajes. Su conexión y resume-bot quedan para puesta
+en marcha. state-store.js recibe un grafo/checkpointer explícitamente inyectado;
+los tests no abren Firestore y usan almacenamiento separado.
+El caller administra el historial: el runner agrega una sola vez los mensajes
+normalizados y enviados; el futuro receptor del grafo hará lo mismo. El guardián
+persiste sus controles de sesión/límite/silencio sin duplicar ese historial.
+
+    npm run test:guardian:unit
+    npm run test:agent:unit
+    npm run test:eval:unit
+    npm run test:unit
+
+Corrida de los 27 casos de la entrega 2 más C-03, P-06, S-10, S-11 y S-12
+(32 casos, tres repeticiones cada uno):
+
+    npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-01,C-02,C-04,P-01,P-02,P-03,P-04,P-05,POL-01,POL-02,POL-03,POL-04,POL-05,POL-06,POL-07,POL-08,O-01,O-05,H-02,CH-01,CH-02,SEC-01,SEC-02,SEC-03,SEC-04,SEC-05,SEC-06,C-03,P-06,S-10,S-11,S-12
+
+Esto es un comando de verificación, no una afirmación de resultados. C-03 aún
+exige un total para varias unidades: cotizar llega en entrega 4. No se modifica
+el caso ni se deja de medir ese criterio. F-05 sigue bloqueado. Comprobantes y
+derivación/escalada conversacional siguen en entrega 5. Una selección parcial
+no habilita producción y no cambia los umbrales.
+
+El reloj virtual controla los temporizadores de ráfaga. burst declara un lote
+sin intervalos en el YAML: sus mensajes se entregan en el mismo instante virtual
+y se avanza hasta el silencio, sin esperas reales. Las fronteras 8/30 s, lotes
+durante procesamiento, sesiones >6 h, silencio y límite 40/41 se prueban aparte.
+El límite se guarda antes de descargar o transcribir. Una sola respuesta fija
+por episodio: «Por ahora no puedo seguir respondiendo mensajes en este chat.»
+Luego silencio sin modelos hasta recuperar cupo. Registra una solicitud de
+alerta, nunca activa handoff ni envía la alerta: eso le corresponde a whatsapp.js.
+
+AGENT_BURST_SILENCE_MS/AGENT_BURST_MAX_MS configuran 8000/30000 por defecto;
+AGENT_SESSION_MS=21600000, AGENT_TURNS_PER_HOUR=40, ventana móvil fija de 60 min.
+AGENT_TURN_TIMEOUT_MS=60000 cuenta desde cierre, incluyendo medios y espera de
+cola. Límites de medios en config.js/.env.example: audio 120 s o respaldo de
+2 MB sin duración, imágenes 5 MB y máximo tres, total 10 MB. Duración/tamaño
+incomprobables o transcripción fallida piden texto. No se sube a Cloudinary.
+
+Bytes de adjuntos duran solo el turno; no se guardan en checkpoint ni reporte.
+Los IDs efímeros pueden figurar en la traza, nunca en checkpoint. El informe no
+acredita cobertura visual cuando el guardián rechaza una imagen. Las imágenes
+llegan al modelo como contenido multimodal de usuario,
+con metadatos de servidor, nunca como instrucciones. Audio del YAML ya trae
+transcripción; no verifica calidad del transcriptor real. Los unitarios usan
+audio/medios artificiales y modelos inyectados. Consumo de transcripción suma
+en modelUsage.agent y aparece también en guardian.transcriptionUsage por turno.
+
+La referencia P-06/2 es sintética: caja oscura con tapa, sin marcas ni personas.
+No representa un producto real y no acredita sus datos. No se necesita una foto
+real. Generador/explicación en test/eval/media/; el archivo debe ser PNG para
+Gemini. No publicar fotos de clientes ni otros datos personales en este repo.
+
+Buffer de ráfagas en RAM: SIGINT/SIGTERM/apagado explícito registra
+guardian_shutdown.discardedPendingBatches y cancela temporizadores/trabajos.
+Un reinicio abrupto pierde pendientes; SIGKILL no permite registrar el log.
+No se presupone reentrega de WhatsApp. Estado persistido de sesión/límite/handoff
+no se reinicia junto con el buffer. La reactivación se recibe como señal del
+servidor; un mensaje del cliente no puede activar esa señal.
+
 ## Adjuntos
 
 Los audios ya contienen transcripción: se antepone [audio transcripto].
-burst se entrega como un único turno; no simula tiempos que el archivo no define.
-La temporización real de ráfagas y transcripción se prueban en sus entregas.
+burst se entrega como un único turno; no simula intervalos que el archivo no define.
+La temporización del guardián se prueba con reloj inyectable; la calidad de la
+transcripción real requiere una comprobación independiente con audio artificial.
 
 Sin archivos, image llega como descripción marcada mode: described. No se inventa
 una foto ni se certifica comprensión visual. Para imágenes reales, el dueño puede

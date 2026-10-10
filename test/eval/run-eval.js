@@ -70,6 +70,7 @@ async function runRepetition(item, fixtures, options, number) {
       let failure = null;
       let usage = null;
       let agentDiagnostics = [];
+      let guardian = null;
       try {
         await withTimeout(async signal => {
           world.beginTurn(number, signal);
@@ -82,6 +83,10 @@ async function runRepetition(item, fixtures, options, number) {
           });
           usage = response?.usage ?? null;
           agentDiagnostics = response?.diagnostics ?? [];
+          guardian = response?.guardian ?? null;
+          for (const [index, message] of (response?.processedMessages ?? []).entries()) {
+            if (incoming[index]) incoming[index].content = message.text;
+          }
         }, options.timeoutMs);
       } catch (error) { failure = error; }
       finally { transport.endTurn(); }
@@ -99,13 +104,14 @@ async function runRepetition(item, fixtures, options, number) {
       world.setState(state);
       result.turns.push({
         number, incoming, outgoing, handoffBefore, handoffAfter: state.humanHandoffRequired,
-        durationMs: performance.now() - startedAt, usage, agentDiagnostics, snapshotAfter: world.snapshot(),
+        durationMs: performance.now() - startedAt, usage, agentDiagnostics, guardian, snapshotAfter: world.snapshot(),
       });
       if (failure) throw failure;
       clock.advance(1000);
     }
     result.after = world.snapshot();
     result.tools = world.getEvents();
+    result.guardianEvents = world.getGuardianEvents();
     result.checks = deterministicChecks(item.input.expect, {
       tools: result.tools, turns: result.turns, finalHandoff: world.getState().humanHandoffRequired,
     });
@@ -150,6 +156,7 @@ async function runRepetition(item, fixtures, options, number) {
   } finally {
     if (initialized) result.after = world.snapshot();
     result.tools = world.getEvents();
+    result.guardianEvents = world.getGuardianEvents();
     // Cerrar primero evita envíos/escrituras tardías tras cancelación.
     world.close();
     if (agent?.dispose) {
@@ -200,10 +207,22 @@ export async function runEvaluation(dataset, {
   metadata.agentModelInjected = cases.some(item => item.repetitions.some(result => result.agentModelInjected));
   metadata.judgeModelInjected = judge.metadata?.modelInjected === true;
   // Un caso con imágenes no ejecutado tampoco certifica cobertura visual.
-  metadata.mediaComplete = selected.every((item, index) => Array.isArray(item.input?.turns)
-    && item.input.turns.every((turn, turnIndex) => turn !== null && typeof turn === "object"
-      && (turn.attachment !== "image" || cases[index].repetitions.every(result =>
-        result.turns[turnIndex]?.incoming.some(message => message.attachment?.mode === "file")))));
+  metadata.mediaComplete = selected.every((item, index) => {
+    if (!Array.isArray(item.input?.turns)) return false;
+    return item.input.turns.every((turn, turnIndex) => {
+      if (turn === null || typeof turn !== "object") return false;
+      if (turn.attachment !== "image") return true;
+      return cases[index].repetitions.every(result => {
+        const frame = result.turns[turnIndex];
+        return frame?.incoming.some(message => {
+          if (message.attachment?.mode !== "file") return false;
+          if (!frame.guardian) return true;
+          return frame.guardian.outcome === "processed"
+            && frame.guardian.imageAttachmentIds?.includes(message.attachment.id);
+        });
+      });
+    });
+  });
   metadata.finishedAt = new Date().toISOString();
   const summary = aggregateResults(cases, metadata);
   summary.modelUsage = {

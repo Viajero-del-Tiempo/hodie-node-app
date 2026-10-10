@@ -23,6 +23,7 @@ export function createFakeWhatsApp({ mediaResolver = null } = {}) {
           if (media) {
             descriptor.mode = "file";
             descriptor.mimeType = media.mimeType;
+            descriptor.size = media.data.length;
             attachments.set(id, { ...descriptor, data: Buffer.from(media.data) });
           } else {
             descriptor.mode = "described";
