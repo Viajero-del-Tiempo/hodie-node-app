@@ -37,6 +37,8 @@
 #     lineas:
 #       - { producto: <id>, variante: <id>, cantidad: 1, texto: "Juan" | null,
 #           empaque: <type> | null }
+#                                    texto: null = sin personalización (ya decidido).
+#                                    empaque: null = sin empaque (ya decidido).
 #     envio: { destinatario, documento, ciudad, departamento, direccion, telefono }
 #     facturacion: { requiere: false } | { requiere: true, razonSocial, ruc }
 #   cotizacionMostrada: true         El runner calcula la cotización del carrito inicial
@@ -1275,4 +1277,106 @@ cases:
         - Indica que el envío es gratis dentro de Minga Guazú.
       must_not:
         - Pide la cédula del destinatario.
+      handoff: "no"
+
+  # ------------------------------------------------------------------
+  # Confirmación y creación del pedido (entrega 4B)
+  # ------------------------------------------------------------------
+  - id: K-01
+    category: confirmacion
+    context:
+      telefonoCliente: "595981000222"
+      carrito:
+        lineas:
+          - { producto: kit-mate, variante: km-negro, cantidad: 1, texto: null, empaque: caja }
+        envio: { destinatario: "Ana Duarte", ciudad: "Minga Guazú", departamento: "Alto Paraná", direccion: "Barrio San Miguel, casa 12", telefono: "0981123456" }
+        facturacion: { requiere: false }
+      cotizacionMostrada: true
+    turns:
+      - user: "Sí, confirmo"
+    expect:
+      tools_called: [crear_pedido]
+      must:
+        - Informa el número de pedido y el total.
+        - Indica que el pago es por transferencia por el total y que el equipo verifica el pago.
+      must_not:
+        - Afirma que el pago ya fue recibido o confirmado.
+        - Promete una fecha exacta de entrega.
+      handoff: "no"
+
+  - id: K-02
+    category: confirmacion
+    context:
+      carrito:
+        lineas:
+          - { producto: kit-mate, variante: km-negro, cantidad: 1, texto: null, empaque: caja }
+        envio: { destinatario: "Ana Duarte", ciudad: "Minga Guazú", departamento: "Alto Paraná", direccion: "Barrio San Miguel, casa 12", telefono: "0981123456" }
+        facturacion: { requiere: false }
+      cotizacionMostrada: true
+    turns:
+      - user: "Dale 👍"
+    expect:
+      tools_called: [crear_pedido]
+      must:
+        - Confirma que el pedido quedó registrado e informa su número.
+      handoff: "no"
+
+  - id: K-03
+    category: confirmacion
+    context:
+      carrito:
+        lineas:
+          - { producto: kit-mate, variante: km-negro, cantidad: 1, texto: null, empaque: caja }
+        envio: { destinatario: "Ana Duarte", ciudad: "Minga Guazú", departamento: "Alto Paraná", direccion: "Barrio San Miguel, casa 12", telefono: "0981123456" }
+        facturacion: { requiere: false }
+      cotizacionMostrada: true
+    turns:
+      - user: "Sí, pero mandalo a Ciudad del Este, barrio Boquerón"
+    expect:
+      tools_called: [datos_envio]
+      tools_not_called: [crear_pedido]
+      must:
+        - Actualiza la dirección de envío y aclara que fuera de Minga Guazú va por transportadora.
+        - Pide los datos que faltan para ese envío antes de mostrar un resumen nuevo.
+      must_not:
+        - Crea el pedido con la dirección anterior o afirma que el pedido quedó registrado.
+      handoff: "no"
+
+  - id: K-04
+    category: confirmacion
+    context:
+      carrito:
+        lineas:
+          - { producto: kit-mate, variante: km-negro, cantidad: 1, texto: null, empaque: caja }
+        envio: { destinatario: "Ana Duarte", ciudad: "Minga Guazú", departamento: "Alto Paraná", direccion: "Barrio San Miguel, casa 12", telefono: "0981123456" }
+        facturacion: { requiere: false }
+      cotizacionMostrada: true
+    turns:
+      - user: "¿Y cuánto tarda en estar listo?"
+    expect:
+      tools_not_called: [crear_pedido]
+      must:
+        - Responde con el plazo de producción de la política, sin prometer una fecha exacta.
+        - Vuelve a preguntar si confirma el pedido.
+      handoff: "no"
+
+  - id: K-05
+    category: confirmacion
+    context:
+      carrito:
+        lineas:
+          - { producto: kit-mate, variante: km-negro, cantidad: 1, texto: null, empaque: caja }
+        envio: { destinatario: "Ana Duarte", ciudad: "Minga Guazú", departamento: "Alto Paraná", direccion: "Barrio San Miguel, casa 12", telefono: "0981123456" }
+        facturacion: { requiere: false }
+      conversacion:
+        - agente: "Ya tengo todos los datos. ¿Te muestro el resumen del pedido?"
+    turns:
+      - user: "Sí"
+    expect:
+      tools_called: [cotizar]
+      tools_not_called: [crear_pedido]
+      must:
+        - Muestra el resumen del pedido y pide confirmación expresa antes de registrarlo.
+      must_not:
+        - Registra el pedido sin que el cliente haya visto el resumen.
       handoff: "no"
