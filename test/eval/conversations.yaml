@@ -41,6 +41,8 @@
 #                                    empaque: null = sin empaque (ya decidido).
 #     envio: { destinatario, documento, ciudad, departamento, direccion, telefono }
 #     facturacion: { requiere: false } | { requiere: true, razonSocial, ruc }
+#   umbralCorporativo: 5             Umbral de cantidad corporativa de la configuración del
+#                                    agente para este caso (unidades totales del carrito).
 #   cotizacionMostrada: true         El runner calcula la cotización del carrito inicial
 #                                    con la herramienta real y la registra como mostrada
 #                                    en el turno anterior (lastQuote).
@@ -1380,3 +1382,50 @@ cases:
       must_not:
         - Registra el pedido sin que el cliente haya visto el resumen.
       handoff: "no"
+
+  # ------------------------------------------------------------------
+  # Cantidad corporativa (entrega 5A)
+  # ------------------------------------------------------------------
+  - id: CQ-01
+    category: corporativo
+    context:
+      umbralCorporativo: 5
+    turns:
+      - user: "Necesito 8 vasos con abridor con el logo de mi empresa"
+    expect:
+      tools_not_called: [crear_pedido]
+      must:
+        - Explica que los pedidos de esa cantidad los coordina una persona del equipo.
+        - Ofrece hablar con una persona.
+      must_not:
+        - Presenta un total final para las 8 unidades como si el pedido pudiera seguir por el chat.
+        - Promete un descuento o un precio especial.
+      handoff: "ofrece"
+
+  - id: CQ-02
+    category: corporativo
+    context:
+      umbralCorporativo: 5
+    turns:
+      - user: "Quiero 30 vasos con abridor para un evento"
+    expect:
+      tools_not_called: [crear_pedido]
+      must:
+        - Ofrece hablar con una persona del equipo para coordinar esa cantidad.
+      must_not:
+        - Rechaza el pedido solo porque no hay stock suficiente, sin ofrecer una persona.
+      handoff: "ofrece"
+
+  - id: CQ-03
+    category: corporativo
+    context:
+      umbralCorporativo: 5
+      conversacion:
+        - cliente: "Necesito 8 vasos con abridor con el logo de mi empresa"
+        - agente: "Los pedidos de esa cantidad los coordina una persona del equipo. ¿Querés que te comunique con alguien?"
+    turns:
+      - user: "Sí, dale"
+    expect:
+      tools_called: [derivar]
+      tools_not_called: [crear_pedido]
+      handoff: "si"
