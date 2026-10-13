@@ -22,6 +22,7 @@ test("audio se transcribe literalmente como mensaje del cliente, sin herramienta
     } } });
   assert.equal(f.result.messages[0].text, "[audio transcripto] " + spoken);
   assert.equal(f.usage.calls, 1); assert.equal(f.usage.reportedTokens.total, 7); f.registry.close();
+  assert.equal(f.usage.callDetails[0].callInTurn, 1);
 });
 test("audio largo no se descarga; duración ausente solo admite respaldo comprobado de dos MB", async () => {
   const descriptors = [{ id: "long", type: "audio", durationSeconds: 121 }, { id: "unknown", type: "audio" },

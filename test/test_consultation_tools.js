@@ -8,7 +8,8 @@ import { TOOL_NAMES, checkToolSpecification } from "./eval/tool-names.js";
 import { deterministicChecks } from "./eval/checks.js";
 
 test("registro de consulta es subconjunto canónico y coincide con la especificación", async () => {
-  assert.deepEqual(CONSULTATION_TOOL_NAMES, ["buscar_productos", "ver_producto", "enviar_imagenes", "consultar_politicas", "estado_pedido", "responder"]);
+  assert.deepEqual(CONSULTATION_TOOL_NAMES, ["buscar_productos", "ver_producto", "enviar_imagenes", "consultar_politicas", "estado_pedido",
+    "carrito_ver", "carrito_agregar", "carrito_modificar", "carrito_quitar", "datos_envio", "datos_facturacion", "cotizar", "responder"]);
   assert.ok(CONSULTATION_TOOL_NAMES.every(name => TOOL_NAMES.includes(name)));
   assert.equal(checkToolSpecification(await readFile(new URL("../docs/SPEC-agente.md", import.meta.url), "utf8")).valid, true);
 });
@@ -37,6 +38,30 @@ test("detalle conserva atributos, IDs, empaques libres y sus precios sin inventa
     assert.deepEqual(result.product.packagingOptions, fixtures.products[0].packagingOptions);
     assert.equal(result.product.variants[0].id, "variant-a");
     assert.equal((await f.world.invokeTool("ver_producto", { productId: "missing" })).code, "PRODUCTO_NO_ENCONTRADO");
+  } finally { f.close(); }
+});
+test("listado entrega precio por producto y variantes para distinguir precio único de desde sin otra lectura", async () => {
+  const fixtures = evalFixtures();
+  const alpha = fixtures.products[0];
+  alpha.variants.push({ ...structuredClone(alpha.variants[0]), id: "variant-a2", sku: "TEST-A2",
+    options: { finish: "Opción Beta" } });
+  const beta = structuredClone(alpha);
+  beta.id = "product-b"; beta.name = "Producto Beta";
+  beta.variants = [
+    { ...structuredClone(alpha.variants[0]), id: "variant-b", sku: "TEST-B", price: 230 },
+    { ...structuredClone(alpha.variants[1]), id: "variant-b2", sku: "TEST-B2", price: 310 },
+  ];
+  fixtures.products.push(beta);
+  const f = await consultationFixture({ fixtures });
+  try {
+    const result = await f.world.invokeTool("buscar_productos", { consulta: "Productos" });
+    assert.equal(result.code, "OK"); assert.equal(result.products.length, 2);
+    const byId = new Map(result.products.map(product => [product.id, product]));
+    assert.equal(byId.get("product-a").priceFrom, 100);
+    assert.deepEqual(byId.get("product-a").variants.map(variant => variant.price), [100, 100]);
+    assert.equal(byId.get("product-b").priceFrom, 230);
+    assert.deepEqual(byId.get("product-b").variants.map(variant => variant.price), [230, 310]);
+    assert.deepEqual(f.world.getEvents().map(event => event.name), ["buscar_productos"]);
   } finally { f.close(); }
 });
 test("productos y categorías inactivos y variantes inactivas no se publican", async () => {
@@ -79,6 +104,18 @@ test("políticas se leen por temas libres y cambian con los fixtures", async () 
       [{ id: "tema_imprevisto", title: "tema_imprevisto", text: fixtures.policies.tema_imprevisto }]);
   } finally { f.close(); }
 });
+test("consultar_politicas conserva todas las condiciones y restricciones aunque superen cuatro oraciones", async () => {
+  const fixtures = evalFixtures();
+  const text = ["Condición ficticia Alfa.", "Condición ficticia Beta.", "Condición ficticia Gamma.",
+    "Condición ficticia Delta.", "Restricción ficticia Épsilon.", "Restricción ficticia Zeta."].join("\n");
+  fixtures.policies = { tema_libre: text };
+  const f = await consultationFixture({ fixtures });
+  try {
+    const result = await f.world.invokeTool("consultar_politicas", {});
+    assert.equal(result.code, "OK");
+    assert.deepEqual(result.policies, [{ id: "tema_libre", title: "tema_libre", text }]);
+  } finally { f.close(); }
+});
 test("argumentos inválidos quedan registrados sin ejecutar efectos ni borrar el carrito", async () => {
   const f = await consultationFixture({ context: { carrito: evalCart() } });
   try {
@@ -93,10 +130,10 @@ test("argumentos inválidos quedan registrados sin ejecutar efectos ni borrar el
       const result = await f.world.invokeTool(name, args);
       assert.equal(result.code, "ARGUMENTOS_INVALIDOS"); assert.equal(result.field, field);
     }
-    for (const name of ["derivar", "carrito_quitar", "crear_pedido", "__proto__", "modificar_precio"]) {
+    for (const name of ["derivar", "registrar_comprobante", "crear_pedido", "__proto__", "modificar_precio"]) {
       assert.equal((await f.world.invokeTool(name, {})).code, "HERRAMIENTA_NO_DISPONIBLE");
     }
-    assert.equal((await f.world.invokeTool("responder", { texto: "Respuesta", entendido: true, quoteIdMostrado: "inventado" })).code, "FUNCION_NO_DISPONIBLE");
+    assert.equal((await f.world.invokeTool("responder", { texto: "Respuesta", entendido: true, quoteIdMostrado: "inventado" })).code, "COTIZACION_INEXISTENTE");
     assert.deepEqual(f.world.snapshot(), before);
     assert.deepEqual(f.transport.getOutgoing(), []);
     assert.equal(f.world.getEvents().length, 11);
@@ -108,7 +145,8 @@ test("esquema del proveedor aprende ejes del catálogo y no anuncia funciones fu
   assert.equal(initial.find(tool => tool.name === "buscar_productos").parameters.properties.opciones, undefined);
   const dynamic = registry.definitions({ optionNames: ["ejeInventado"] })[0].functionDeclarations;
   assert.deepEqual(Object.keys(dynamic.find(tool => tool.name === "buscar_productos").parameters.properties.opciones.properties), ["ejeInventado"]);
-  assert.equal(dynamic.find(tool => tool.name === "responder").parameters.properties.quoteIdMostrado, undefined);
+  assert.equal(dynamic.find(tool => tool.name === "responder").parameters.properties.quoteIdMostrado.type, "string");
+  for (const future of ["crear_pedido", "derivar", "registrar_comprobante"]) assert.equal(dynamic.some(tool => tool.name === future), false);
   assert.deepEqual(registry.definitions({ onlyTerminal: true })[0].functionDeclarations.map(tool => tool.name), ["responder"]);
 });
 test("un intento bloqueado no acredita una herramienta requerida, pero sí detecta un intento prohibido", async () => {

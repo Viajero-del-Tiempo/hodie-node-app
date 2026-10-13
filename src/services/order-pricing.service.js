@@ -1,13 +1,15 @@
 export class OrderValidationError extends Error {
-  constructor(message, field, statusCode = 400) {
+  constructor(message, field, statusCode = 400, details = {}) {
     super(message);
     this.name = "OrderValidationError";
     this.field = field;
     this.statusCode = statusCode;
+    // Opt-in del agente: el contrato HTTP y los mensajes del checkout no cambian.
+    Object.defineProperty(this, "pricingDetails", { value: details });
   }
 }
 
-const fail = (message, field) => { throw new OrderValidationError(message, field); };
+const fail = (message, field, details = {}) => { throw new OrderValidationError(message, field, 400, details); };
 const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
 export function validateOrderIdentifier(value, field) {
@@ -23,7 +25,7 @@ function text(value, field, max = 500) {
 
 export function validateOrderQuantity(value) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
-    fail("Cantidad inválida: debe ser un entero de 1 a 100 unidades por ítem.", "quantity");
+    fail("Cantidad inválida: debe ser un entero de 1 a 100 unidades por ítem.", "quantity", { code: "CANTIDAD_INVALIDA" });
   }
   return value;
 }
@@ -46,6 +48,7 @@ export function sanitizeOrderItemInput(item) {
     customizationImageUrl: text(item.customizationImageUrl, "customizationImageUrl", 2048),
     customizationPending: item.customizationPending === true,
     customizationImagePending: item.customizationImagePending === true,
+    ...(item.customizationDeclined === true ? { customizationDeclined: true } : {}),
   };
 }
 
@@ -57,6 +60,7 @@ export function stockInsufficient(product, variant, requested) {
   return new OrderValidationError(
     `Stock insuficiente para '${product.name || product.id}', variante '${variantLabel(product, variant) || variant.id}' (SKU: ${variant.sku || variant.id}). Disponibles: ${variant.stock} unidades; solicitadas: ${requested}.`,
     "quantity",
+    400, { code: "SIN_STOCK", productId: product.id, variantId: variant.id, available: variant.stock, requested },
   );
 }
 
@@ -67,21 +71,25 @@ function money(value, field, min = 0) {
 
 function customizationSnapshot(item, product, legacy) {
   const config = product.customization ?? {};
+  if (item.customizationDeclined && (item.customization || item.customizationImageUrl)) {
+    fail("La personalización rechazada no puede incluir texto ni imagen.", "customizationDeclined", { code: "PERSONALIZACION_CONTRADICTORIA" });
+  }
   if (!legacy) {
-    if (item.customization && (config.allowed !== true || config.allowsText !== true)) fail("Este producto no admite personalización de texto.", "customization");
-    if (item.customizationImageUrl && (config.allowed !== true || config.allowsImage !== true)) fail("Este producto no admite personalización de imagen.", "customizationImageUrl");
+    if (item.customization && (config.allowed !== true || config.allowsText !== true)) fail("Este producto no admite personalización de texto.", "customization", { code: "NO_ADMITE_TEXTO" });
+    if (item.customizationImageUrl && (config.allowed !== true || config.allowsImage !== true)) fail("Este producto no admite personalización de imagen.", "customizationImageUrl", { code: "NO_ADMITE_IMAGEN" });
     if (item.customization && (!Number.isSafeInteger(config.maxChars) || [...item.customization].length > config.maxChars)) {
-      fail(`La personalización admite hasta ${config.maxChars} caracteres.`, "customization");
+      fail(`La personalización admite hasta ${config.maxChars} caracteres.`, "customization", { code: "TEXTO_DEMASIADO_LARGO", limit: config.maxChars });
     }
   }
   return {
     ...(item.customization ? { customization: item.customization } : {}),
     ...(item.instructions ? { instructions: item.instructions } : {}),
     ...(item.customizationImageUrl ? { customizationImageUrl: item.customizationImageUrl } : {}),
-    customizationPending: legacy
+    ...(item.customizationDeclined ? { customizationDeclined: true } : {}),
+    customizationPending: item.customizationDeclined ? false : legacy
       ? !item.customization || item.customizationPending
       : config.allowed === true && config.allowsText === true && !item.customization,
-    customizationImagePending: legacy
+    customizationImagePending: item.customizationDeclined ? false : legacy
       ? item.customizationImagePending
       : config.allowed === true && config.allowsImage === true && !item.customizationImageUrl,
   };
@@ -114,27 +122,28 @@ function currentPackaging(item, product) {
     return null; // Estándar sin costo, no se almacena en el catálogo.
   }
   const packaging = Array.isArray(product.packagingOptions) ? product.packagingOptions.find(option => option.type === item.packagingType) : null;
-  if (!packaging) fail("El empaque no está configurado para este producto.", "packagingType");
+  if (!packaging) fail("El empaque no está configurado para este producto.", "packagingType", { code: "EMPAQUE_INEXISTENTE", productId: product.id, packagingType: item.packagingType });
   return { type: packaging.type, name: packaging.name, price: money(packaging.price, "packagingOptions.price"), imageUrl: packaging.imageUrl || "" };
 }
 
 // No importa Firebase: lectura directa del servicio de catálogo inyectado.
-export function createOrderPricingService({ catalog }) {
-  return async function calculateOrderPricing(rawItems) {
+export function createOrderPricingService({ catalog, structuredErrors = false, includeLineSubtotals = false }) {
+  async function calculate(rawItems) {
     if (!Array.isArray(rawItems) || !rawItems.length) fail("El pedido debe contener al menos un ítem.", "items");
     const items = rawItems.map(sanitizeOrderItemInput);
     const products = new Map();
     const categories = new Map();
     const requestedVariants = new Map();
     const sanitizedItems = [];
+    const lineSubtotals = [];
     let subtotal = 0;
 
     for (const item of items) {
       const { productId } = item;
       if (!products.has(productId)) products.set(productId, await catalog.getProductForPricing(productId));
       const product = products.get(productId);
-      if (!product) fail(`El producto '${productId}' no existe en el catálogo.`, "productId");
-      if (product.active === false) fail(`El producto '${product.name || productId}' está inactivo.`, "productId");
+      if (!product) fail(`El producto '${productId}' no existe en el catálogo.`, "productId", { code: "PRODUCTO_INEXISTENTE", productId });
+      if (product.active === false) fail(`El producto '${product.name || productId}' está inactivo.`, "productId", { code: "PRODUCTO_INACTIVO", productId });
 
       const legacy = product.schemaVersion === undefined || product.schemaVersion === 1;
       if (!legacy && product.schemaVersion !== 2) fail("Modelo de producto no soportado.", "productId");
@@ -145,12 +154,14 @@ export function createOrderPricingService({ catalog }) {
         if (item.variantId !== undefined) fail("Este producto del modelo viejo no admite variantId.", "variantId");
         price = money(Number(product.price), "price");
       } else {
-        if (product.active !== true) fail("El producto está inactivo.", "productId");
+        if (product.active !== true) fail("El producto está inactivo.", "productId", { code: "PRODUCTO_INACTIVO", productId });
         if (!categories.has(product.categoryId)) categories.set(product.categoryId, await catalog.getCategoryForPricing(product.categoryId));
-        if (categories.get(product.categoryId)?.active !== true) fail("La categoría del producto está inactiva o no existe.", "categoryId");
-        if (!item.variantId) fail("Falta variantId; no se elige una variante automáticamente.", "variantId");
+        if (categories.get(product.categoryId)?.active !== true) fail("La categoría del producto está inactiva o no existe.", "categoryId", { code: "CATEGORIA_INACTIVA", categoryId: product.categoryId });
+        if (!item.variantId) fail("Falta variantId; no se elige una variante automáticamente.", "variantId", { code: "DATO_FALTANTE" });
         variant = Array.isArray(product.variants) ? product.variants.find(candidate => candidate.id === item.variantId) : null;
-        if (!variant || variant.active !== true) fail(`Variante '${item.variantId}' inexistente o inactiva.`, "variantId");
+        if (!variant || variant.active !== true) fail(`Variante '${item.variantId}' inexistente o inactiva.`, "variantId", {
+          code: variant ? "VARIANTE_INACTIVA" : "VARIANTE_INEXISTENTE", productId, variantId: item.variantId,
+        });
         price = money(variant.price, "variants.price", 1);
         if (!Number.isSafeInteger(variant.stock) || variant.stock < 0) fail("Stock inválido en la variante.", "variants.stock");
       }
@@ -164,6 +175,7 @@ export function createOrderPricingService({ catalog }) {
       }
       const selectedPackaging = legacy ? legacyPackaging(item, product) : currentPackaging(item, product);
       const lineTotal = (price + (selectedPackaging?.price ?? 0)) * quantity;
+      if (includeLineSubtotals) lineSubtotals.push(lineTotal);
       subtotal += lineTotal;
       if (!Number.isSafeInteger(subtotal)) fail("El total excede el rango numérico permitido.", "total");
       const sku = variant ? variant.sku : product.sku || "";
@@ -180,6 +192,16 @@ export function createOrderPricingService({ catalog }) {
       if (variant.stock < quantity) throw stockInsufficient(product, variant, quantity);
     }
     // Es una comprobación fresca, NO una reserva. Se vuelve a validar al pagar.
-    return { sanitizedItems, subtotal, shippingCost: 0, total: subtotal };
+    return { sanitizedItems, subtotal, shippingCost: 0, total: subtotal,
+      ...(includeLineSubtotals ? { lineSubtotals } : {}) };
+  }
+  return async function calculateOrderPricing(rawItems) {
+    try { return await calculate(rawItems); }
+    catch (error) {
+      if (structuredErrors && error instanceof OrderValidationError) {
+        Object.assign(error, { code: "ARGUMENTOS_INVALIDOS", ...error.pricingDetails });
+      }
+      throw error;
+    }
   };
 }

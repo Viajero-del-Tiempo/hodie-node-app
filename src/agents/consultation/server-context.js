@@ -14,6 +14,8 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
   signal?.throwIfAborted();
   const orders = verified ? await runtime.orders.listByPhone(normalizePurchasePhone(state.userPhoneNumber)) : [];
   signal?.throwIfAborted();
+  const profile = verified ? await runtime.getOwnProfile?.(normalizePurchasePhone(state.userPhoneNumber), { signal }) : null;
+  signal?.throwIfAborted();
   return {
     silent: false,
     context: {
@@ -23,10 +25,14 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
       identity: { phoneVerified: verified, userPhoneNumber: verified ? normalizePurchasePhone(state.userPhoneNumber) : null,
         contactName: state.pushname ?? null },
       consecutiveMisunderstandings: state.consecutiveMisunderstandings ?? 0,
-      cart: cart ? { lines: (cart.lines ?? []).map(line => ({ ...pick(line, ["productId", "variantId", "quantity", "packagingType"]),
-        customization: pick(line.customization, ["text", "imageUrl", "pending"]) })),
+      cart: cart ? { lines: (cart.lines ?? []).map(line => ({ ...pick(line, ["id", "productId", "variantId", "quantity", "packagingType"]),
+        packaging: pick(line.packaging, ["declined"]),
+        customization: pick(line.customization, ["text", "textDraft", "imageUrl", "pending", "declined"]) })),
         shipping: pick(cart.shipping, ["recipientName", "recipientDocument", "city", "department", "street", "phone"]),
         billing: pick(cart.billing, ["invoiceRequested", "legalName", "ruc", "rucValidation"]) } : null,
+      lastQuote: runtime.getState().lastQuote ? pick(runtime.getState().lastQuote, ["quoteId", "shownAt"]) : null,
+      billingProfiles: (profile?.billingProfiles ?? []).map(row => pick(row, ["id", "legalName", "ruc", "rucValidation", "isDefault"])),
+      defaultBillingProfileId: profile?.billingProfiles?.some(row => row.id === profile.defaultBillingProfileId) ? profile.defaultBillingProfileId : null,
       // Sin fecha no se presenta esta lista como ordenada por antigüedad.
       orders: orders.filter(order => normalizePurchasePhone(order.userPhoneNumber) === normalizePurchasePhone(state.userPhoneNumber))
         .slice(0, 2).map(order => pick(order, ["orderNumber", "status", "createdAt"])),

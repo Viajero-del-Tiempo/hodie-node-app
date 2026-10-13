@@ -5,6 +5,47 @@ import { readFile } from "node:fs/promises";
 import { consultationFixture, scriptedModel, reply } from "./helpers/consultation-fixtures.js";
 import { evalFixtures, evalCart } from "./helpers/eval-fixtures.js";
 import { deterministicChecks } from "./eval/checks.js";
+import { createConsultationAgent } from "../src/agents/consultation/agent.js";
+import { parseAgentThinkingBudget, resolveAgentModelConfig } from "../src/agents/consultation/model-config.js";
+
+test("presupuesto del agente valida números, usa 512 por defecto y prioriza override sin mutar entorno", () => {
+  assert.deepEqual(resolveAgentModelConfig({ env: {} }), { options: { thinkingBudget: 512 },
+    thinking: { mode: "budget", thinkingBudget: 512, source: "default" } });
+  for (const value of [0, 512, 1024]) {
+    assert.equal(parseAgentThinkingBudget(String(value)), value);
+    assert.equal(resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: String(value) } }).options.thinkingBudget, value);
+  }
+  for (const value of ["", " ", "1.5", "1e3", "abc", "-1", -1, 2.5, NaN, Infinity, true, null, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => parseAgentThinkingBudget(value), { code: "INVALID_AGENT_THINKING_BUDGET" });
+  }
+  const env = Object.freeze({ AGENT_THINKING_BUDGET: "2048" });
+  assert.deepEqual(resolveAgentModelConfig({ env, thinkingBudget: 0 }), { options: { thinkingBudget: 0 },
+    thinking: { mode: "budget", thinkingBudget: 0, source: "override" } });
+  assert.equal(env.AGENT_THINKING_BUDGET, "2048");
+  assert.equal(resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" }, thinkingBudget: 512 }).options.thinkingBudget, 512);
+  assert.throws(() => resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" } }), { code: "INVALID_AGENT_THINKING_BUDGET" });
+});
+test("factory del agente recibe exclusivamente su presupuesto y metadata describe lo enviado", async () => {
+  for (const [env, thinkingBudget, expected] of [[{}, undefined, { thinkingBudget: 512 }], [{ AGENT_THINKING_BUDGET: "512" }, undefined, { thinkingBudget: 512 }],
+    [{ AGENT_THINKING_BUDGET: "2048" }, 0, { thinkingBudget: 0 }]]) {
+    const requests = [];
+    const agent = await createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba de configuración.", modelEnv: env, thinkingBudget,
+      modelFactory: options => { requests.push(options); return { model: "test-budget-model" }; } });
+    assert.deepEqual(requests, [expected]); assert.equal(agent.metadata.model, "test-budget-model");
+    assert.equal(agent.metadata.thinking.thinkingBudget, expected.thinkingBudget);
+    assert.equal(agent.metadata.thinking.mode, "budget");
+    assert.equal(agent.metadata.thinking.source, thinkingBudget !== undefined ? "override" : env.AGENT_THINKING_BUDGET === undefined ? "default" : "env");
+    assert.equal(agent.metadata.modelInjected, true); assert.equal(agent.getModelUsage().calls, 0);
+  }
+  let called = false;
+  await assert.rejects(createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba", modelEnv: { AGENT_THINKING_BUDGET: "bad" },
+    modelFactory: () => { called = true; } }), { code: "INVALID_AGENT_THINKING_BUDGET" });
+  assert.equal(called, false);
+  const injected = await createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba", model: { model: "test-injected" },
+    modelEnv: {}, thinkingBudget: 512 });
+  assert.deepEqual(injected.metadata.thinking, { mode: "unknown", thinkingBudget: null, source: "injected_model" });
+  assert.equal(injected.metadata.requestedThinking.thinkingBudget, 512);
+});
 
 test("ciclo búsqueda/detalle/respuesta usa datos cambiantes de herramientas y conserva firmas del modelo", async () => {
   for (const price of [100, 234]) {
@@ -200,11 +241,45 @@ test("entendido mantiene el contador sin implementar todavía la escalada de cua
     assert.equal(f.world.getState().humanHandoffRequired, false);
   } finally { f.close(); }
 });
-test("prompt marca por separado las restricciones temporales de entregas 4 y 5", async () => {
+test("prompt habilita 4A, preserva seguridad y restricciones temporales de entrega 5", async () => {
   const prompt = await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8");
-  for (const delivery of [4, 5]) {
-    assert.ok(prompt.includes("<!-- TEMPORAL ENTREGA " + delivery + ":"));
-    assert.ok(prompt.includes("<!-- FIN TEMPORAL ENTREGA " + delivery + " -->"));
-  }
+  assert.equal(prompt.includes("TEMPORAL ENTREGA 4"), false);
+  assert.ok(prompt.includes("<!-- TEMPORAL ENTREGA 5:"));
+  assert.ok(prompt.includes("<!-- FIN TEMPORAL ENTREGA 5 -->"));
+  for (const rule of ["sin afirmar que es un producto de HoDie", "confirmarTexto", "Subtotal de productos", "confirmedRuc", "acknowledgeRucMismatch", "responder.quoteIdMostrado", "nunca hagas cuentas", "crear_pedido todavía no está disponible"]) assert.ok(prompt.includes(rule), rule);
   assert.equal(prompt.includes("Producto Alfa"), false);
+  for (const rule of ["Seguí pendientes del servidor en su orden", "nombres y precios", "packagingType:null",
+    "cotizar con lineas", "no prometas que se puede producir", "cliente posterga la compra",
+    "política vigente consultada y no insistas"]) assert.ok(prompt.includes(rule), rule);
+  assert.ok(prompt.includes("no llames a carrito_ver para releerlos"));
+  assert.ok(prompt.includes("pendientes empieza con informar_subtotal, llamá a cotizar"));
+});
+
+test("prompt procesa y responde los datos recibidos en el turno antes de usar pendientes para la próxima pregunta", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("Registrá primero los datos que el cliente aporta con su herramienta y respondé sobre ellos en ese mismo turno"));
+  assert.ok(prompt.includes("pendientes indica qué preguntar después, nunca impide procesar lo recibido"));
+  assert.ok(prompt.includes("Después de datos_envio, comunicá modalidad, costo y requisito de cédula de options en ese mismo turno"));
+  assert.ok(prompt.includes("shippingCost es el cargo del pedido; label explica el flete"));
+  assert.ok(prompt.includes("Pedí cédula solo si requiresRecipientDocument:true, sin estimar flete"));
+  assert.ok(prompt.includes("Seguí pendientes del servidor en su orden"));
+});
+test("prompt exige precios del resultado al listar y desde para precios que varían entre variantes", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("Al listar productos, incluí el precio de cada uno devuelto por buscar_productos"));
+  assert.ok(prompt.includes('si varía entre variantes, indicá "desde" con priceFrom'));
+  assert.equal(prompt.includes("Producto Beta"), false);
+});
+test("prompt explica políticas completas y ofrece una persona ante cualquier condición distinta sin prometer derivación", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("Consultá consultar_politicas para responder sobre condiciones del negocio"));
+  assert.ok(prompt.includes("Transmití todas las condiciones y restricciones de la política que explicás, sin resumirlas ni omitirlas, aunque requiera más de cuatro oraciones"));
+  assert.ok(prompt.includes("Ante pedidos de condiciones distintas de las políticas"));
+  for (const condition of ["descuentos", "rebajas", "regateo", "cambios de precio", "pago al recibir", "entregas personales", "anticipos u otras"]) {
+    assert.ok(prompt.includes(condition), condition);
+  }
+  assert.ok(prompt.includes("lo vigente consultado y ofrecé hablar con una persona del equipo sin afirmar derivación"));
+  assert.ok(prompt.includes("desde el chat no podés modificarlos e informá el precio vigente de las herramientas"));
+  assert.ok(prompt.includes("solo afirmá que son fijos si lo indica consultar_politicas"));
+  assert.equal(prompt.includes("Condición ficticia Alfa"), false);
 });

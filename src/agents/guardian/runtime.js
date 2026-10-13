@@ -8,10 +8,12 @@ import { createMediaPreparer, withSignal } from "./media.js";
 import { forceTechnicalHandoff } from "../consultation/terminal.js";
 import { modelUsageSince, sumModelUsage } from "../../utils/model-usage.util.js";
 import { normalizePurchasePhone } from "../consultation/order-access.js";
+import { randomUUID } from "node:crypto";
 
 export function createGuardianRuntime({ runtime, agent, config = createGuardianConfig(), clock = systemClock,
   audioModel = null, logger = value => console.info(JSON.stringify(value)), processEvents = null }) {
-  const media = createMediaPreparer({ config, model: audioModel, getAttachment: id => runtime.transport.getAttachment(id) });
+  const media = createMediaPreparer({ config, model: audioModel, getAttachment: id => runtime.transport.getAttachment(id),
+    setExecutionPhase: runtime.setExecutionPhase });
   const deduplicate = createMessageDeduplicator(config.windowMs);
   const controllers = new Set();
   const queues = new Map();
@@ -43,6 +45,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       processedMessages: processed.messages.map(message => ({ text: message.text, type: message.type,
         ...(message.attachmentId ? { attachmentId: message.attachmentId } : {}) })) });
     try {
+      runtime.setExecutionPhase?.("guardian_admission");
       signal.throwIfAborted();
       let state = runtime.getState();
       if (state.humanHandoffRequired) {
@@ -59,10 +62,12 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       const admission = admitBatch(state, closedAt, config);
       state = admission.state;
       state.lastActivityAt = turn.lastAt ?? closedAt;
+      if (admission.allowed && runtime.setTurnContext) state.turnSequence = (state.turnSequence ?? 0) + 1;
       await withSignal(() => save(state), signal); // Confirmar persistencia antes de medios/modelo.
       if (!admission.allowed) {
         let noticeIssued = false;
         if (admission.sendNotice) {
+          runtime.setExecutionPhase?.("rate_limit_notice");
           try { await withSignal(() => runtime.transport.sendText(RATE_LIMIT_NOTICE), signal); noticeIssued = true; }
           catch (error) {
             if (parentSignal?.aborted || closed) signal.throwIfAborted();
@@ -76,6 +81,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         return finish("limited", { noticeIssued, noticeAttempted: admission.sendNotice });
       }
       if (runtime.resolveIdentity) {
+        runtime.setExecutionPhase?.("identity");
         const identity = await withSignal(() => runtime.resolveIdentity({ signal }), signal);
         const phone = identity.phoneVerified === true ? normalizePurchasePhone(identity.userPhoneNumber) : null;
         state = runtime.getState();
@@ -84,8 +90,13 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         state.pushname = typeof identity.pushname === "string" ? identity.pushname : null;
         await withSignal(() => save(state), signal);
       }
+      runtime.setExecutionPhase?.("media_preparation");
       processed = await withSignal(() => media.prepare(turn, { signal, registry }), signal);
+      runtime.setTurnContext?.({ id: turn.batchId ?? randomUUID(), sequence: runtime.getState().turnSequence,
+        messages: processed.messages.map(message => ({ text: message.text, type: message.type })), closedAt });
+      runtime.setTurnAttachments?.(registry);
       for (const issue of processed.mediaIssues) event({ code: issue.code, turn: turn.turn, mediaType: issue.type });
+      runtime.setExecutionPhase?.("agent_adapter");
       const response = await withSignal(() => agent.runTurn({ turn: processed, history: sessionHistory(runtime.getState()),
         now: closedAt, signal }), signal);
       signal.throwIfAborted();
@@ -96,7 +107,8 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       if (parentSignal?.aborted) throw parentSignal.reason;
       if (closed) throw error;
       controller.abort(error);
-      diagnostics.push({ code: error.code ?? "GUARDIAN_ERROR", message: "Falla técnica al preparar el turno." });
+      diagnostics.push({ code: error.code ?? "GUARDIAN_ERROR", message: "Falla técnica al preparar el turno.",
+        ...(runtime.getExecutionPhase ? { interruptedPhase: runtime.getExecutionPhase() } : {}) });
       await forceTechnicalHandoff(runtime, "Falla técnica: " + (error.code ?? "GUARDIAN_ERROR"), { signal: parentSignal });
       return finish("technical_error");
     } finally {
@@ -105,6 +117,8 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       controllers.delete(controller);
       parentSignal?.removeEventListener("abort", abort);
       registry.close();
+      runtime.setTurnAttachments?.(null);
+      runtime.setTurnContext?.(null);
       if (processed !== turn) processed.imageInputs.length = 0;
     }
   }
@@ -118,7 +132,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
   }
   const bursts = createBurstBuffer({ config, clock, logger, onBatch: batch => {
     return enqueue({ closedAt: batch.closedAt, onStart: () => { batch.status = "processing"; }, turn: {
-      turn: batch.messages[0].turn ?? 0, firstAt: batch.firstAt, lastAt: batch.lastAt,
+      turn: batch.messages[0].turn ?? 0, batchId: batch.id, firstAt: batch.firstAt, lastAt: batch.lastAt,
       messages: batch.messages.map(message => ({ text: message.body ?? "", type: message.type || "chat", attachmentId: message.attachment?.id })),
       attachments: batch.messages.flatMap(message => message.attachment ? [message.attachment] : []),
     } }).finally(() => { batch.status = "finished"; });
@@ -147,6 +161,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       return bursts.push(message);
     },
     async runDeclaredTurn({ turn, scenario = {}, signal }) {
+      runtime.setExecutionPhase?.("burst_buffer");
       signal?.throwIfAborted();
       if (typeof clock.advanceAsync !== "function") throw new Error("Las ráfagas declaradas requieren reloj virtual del runner");
       // El archivo no define intervalos: burst declara un lote. Todos sus
@@ -164,7 +179,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         await clock.advanceAsync(config.silenceMs);
         await Promise.all(promises);
         signal?.throwIfAborted();
-        return await enqueue({ turn: { ...turn, firstAt: captured.firstAt, lastAt: captured.lastAt },
+        return await enqueue({ turn: { ...turn, batchId: captured.id, firstAt: captured.firstAt, lastAt: captured.lastAt },
           scenario, signal, closedAt: captured.closedAt });
       } finally { buffer.close(); }
     },

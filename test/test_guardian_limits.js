@@ -4,6 +4,10 @@ import { admitBatch, acknowledgeGuardianAlert, RATE_LIMIT_NOTICE } from "../src/
 import { createGuardianConfig } from "../src/agents/guardian/config.js";
 import { guardianFixture } from "./helpers/guardian-fixtures.js";
 
+test("aviso de límite invita a reintentar sin sonar a bloqueo permanente ni prometer un plazo", () => {
+  assert.equal(RATE_LIMIT_NOTICE, "Estoy recibiendo muchos mensajes seguidos y tengo que hacer una pausa. Escribime de nuevo en un rato y seguimos.");
+});
+
 test("ventana móvil admite cuarenta lotes, bloquea el 41 y crea una alerta por episodio sin handoff", () => {
   const config = createGuardianConfig(); let state = { messages: [], humanHandoffRequired: false };
   for (let i = 0; i < 40; i++) { const admitted = admitBatch(state, i, config); assert.equal(admitted.allowed, true); state = admitted.state; }

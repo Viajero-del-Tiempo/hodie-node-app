@@ -35,12 +35,15 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
   const checkpoints = repository([], "id");
   const uploads = repository([], "id");
   const handoffs = repository([], "id");
+  const quotes = repository([], "quoteId");
+  const profiles = repository([], "phoneNumber");
   const guardianEvents = [];
   const events = [];
   const handlers = new Map();
   let toolGate = null;
   let chatId = null;
   let active = { phase: "setup", turn: 0, signal: null };
+  let executionPhase = { phase: "setup" };
   const catalog = createCatalogService({
     now: clock.now,
     repository: {
@@ -50,9 +53,11 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
     },
   });
   const world = {
-    clock, now: clock.now, transport, orders, carts, checkpoints, uploads, handoffs,
+    clock, now: clock.now, transport, orders, carts, checkpoints, uploads, handoffs, quotes, profiles,
     recordGuardianEvent: event => guardianEvents.push({ ...structuredClone(event), time: clock.now() }),
     getGuardianEvents: () => structuredClone(guardianEvents),
+    setExecutionPhase: (phase, details = {}) => { executionPhase = { phase, ...details }; },
+    getExecutionPhase: () => structuredClone(executionPhase),
     // Solo operaciones de lectura del servicio central. No hay CRUD admin disponible.
     catalog: Object.fromEntries(["getCategories", "getProduct", "searchProducts", "listPolicies",
       "getProductForPricing", "getCategoryForPricing"].map(name => [name, catalog[name]])),
@@ -71,6 +76,25 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
       return cart;
     },
     setCart: cart => { if (cart === null) carts.delete(chatId); else carts.set(chatId, cart); },
+    cartRepository: {
+      get(id) { if (id !== chatId) throw new Error("Carrito de otro chat"); return world.getCart(); },
+      set(id, cart, { expectedRevision, signal } = {}) {
+        if (id !== chatId) throw new Error("Carrito de otro chat"); signal?.throwIfAborted();
+        const current = world.getCart();
+        if ((current ? current.revision ?? 0 : null) !== expectedRevision) throw Object.assign(new Error("El carrito cambió; volvé a consultarlo."), { code: "CARRITO_CAMBIO", field: "cart", statusCode: 400 });
+        world.setCart(cart);
+      },
+    },
+    quoteRepository: { get: id => quotes.get(id), set: (id, quote) => quotes.set(id, quote) },
+    async uploadCustomizationImage({ base64, mimetype }, { signal } = {}) {
+      assertOpen(); signal?.throwIfAborted();
+      const id = "upload-" + (uploads.list().length + 1);
+      const imageUrl = "https://example.test/" + id + ".png";
+      // Solo metadatos; los bytes sintéticos se consumen dentro de este turno.
+      uploads.set(id, { id, imageUrl, mimeType: mimetype, size: Buffer.byteLength(base64, "base64"), time: clock.now() });
+      return imageUrl;
+    },
+    async getOwnProfile(phone) { return profiles.get(phone); },
     getHistory() {
       const state = world.getState();
       return state.messages.slice(state.sessionCutoff).slice(-20).map(message => ({
@@ -91,6 +115,7 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
     beginTurn(turn, signal) {
       assertOpen();
       active = { phase: "case", turn, signal };
+      executionPhase = { phase: "agent_adapter" };
       transport.beginTurn(turn);
     },
     async invokeTool(name, args = {}, options = {}) {
@@ -103,6 +128,7 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
         turn: context.turn, name, args: structuredClone(args), status: "pending",
         handlerInvoked: false,
       };
+      Object.defineProperty(event, "startedAt", { value: startedAt });
       events.push(event);
       try {
         const denied = toolGate?.(name, args);
@@ -126,7 +152,8 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
         event.durationMs = performance.now() - startedAt;
       }
     },
-    getEvents: () => structuredClone(events),
+    getEvents: () => structuredClone(events.map(event => ({ ...event,
+      ...(event.status === "pending" ? { durationMs: performance.now() - event.startedAt, incomplete: true } : { incomplete: false }) }))),
     snapshot() {
       return {
         catalog: { categories: categories.list(), products: products.list() },

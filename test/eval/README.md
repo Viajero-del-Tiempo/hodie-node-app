@@ -1,4 +1,4 @@
-# Runner de evaluación · entregas 1 y 2
+# Runner de evaluación · entregas 1 a 4A
 
 El dueño escribe conversations.yaml. El runner lo lee; nunca lo modifica.
 Se implementa exclusivamente su formato v2, documentado en el encabezado.
@@ -40,9 +40,9 @@ GEMINI_API_KEY y usa el modelo configurado por la fábrica del proyecto.
 El juez recibe evidencia pública por criterio, sin prompt privado del agente.
 Las conversaciones y resultados de herramientas se tratan como datos.
 
-Una corrida completa del archivo actual programa 56 × 3 conversaciones. F-05
-queda bloqueado mientras falte la herramienta real cotizar; no se sustituye por
-calculateOrderPricing ni por una cotización inventada. Los demás casos continúan.
+Una corrida completa del archivo actual programa 56 × 3 conversaciones. El agente
+real implementa cotizar y prepara F-05 con esa herramienta; el trivial sigue
+bloqueándolo porque no tiene cotizar real. No se inventa una cotización.
 Los fallos de comportamiento del agente trivial son esperables.
 
 Filtros repetibles: --case ID, --cases ID,ID y --category nombre. --case y
@@ -53,7 +53,8 @@ Otros parámetros:
 --file ruta, --output directorio, --now fecha-ISO, --timeout-ms 60000,
 --judge-timeout-ms 60000 y --media manifiesto.json.
 El reloj inicial es el mismo en las tres repeticiones; avanza un segundo por
-turno. Se conserva la antigüedad relativa de carrito e historial.
+turno del runner, más el silencio de ráfaga del guardián real. Se conserva la
+antigüedad relativa de carrito e historial; no hay esperas reales por ráfaga.
 
 ## Contexto inicial
 
@@ -176,9 +177,9 @@ no disponibles. La derivación técnica es un cierre por código, sin otra llama
 a herramienta ni al modelo.
 dispose recibe { signal }; el mundo/transporte ya están cerrados al disponer.
 
-Todos los turnos terminan con responder o derivar, salvo silencio por handoff
-activo o derivación forzada por código. No se implementan todavía el guardián
-completo, la transcripción ni la integración productiva.
+Todos los turnos terminan con responder o derivar, salvo silencio por handoff,
+límite o derivación forzada por código. Guardián y transcripción están en entrega
+3; la integración productiva sigue pendiente.
 
 getModelUsage() es una extensión opcional del contrato: devuelve las estadísticas
 del contador compartido. Agente y juez reales están instrumentados. Para un
@@ -209,6 +210,92 @@ consumo cero. El agente trivial y el juez stub hacen cero invocaciones reales.
 Se guarda también el consumo por turno y por repetición; las firmas/prompt privados
 del modelo no se serializan en esos contadores ni llegan al evaluador.
 
+### Latencia y entrada fija (corrección 4A)
+
+modelUsage.*.callDetails registra cada invoke con ID, componente, turno,
+estado, durationMs y tokens informados (null cuando no disponibles). Incluye
+reintentos del juez y transcripciones, separados. trace.jsonl añade model_call;
+las herramientas mantienen durationMs. summary.latency informa p50/p95/máximo
+por agente/evaluador/transcripción, por herramienta y por turno, con número
+de muestras. Percentil por rango más próximo: ceil(n*p). Una operación en curso
+al cortar guarda el tiempo observado e incomplete:true; no se atribuye una
+duración completa. Sin muestras se informa null. Los turnos miden tiempo de
+pared del procesamiento del runner; no incluyen los 8 s virtuales de ráfaga.
+
+Cada TURN_TIMEOUT conserva interruptedPhase tanto en diagnóstico como en
+turn.timeout: model (modelCall), tool (tool), server_context, preparación,
+descarga/transcripción de medios, etc. Los timeouts propios del agente/guardián
+también indican la fase. No se cambian límites ni umbrales con esta medición.
+
+Por llamada del agente, fixedInput mide caracteres y **estima** tokens como
+ceil(caracteres/4) para systemPrompt, toolSchemas (los esquemas realmente
+anunciados, incluidos cambios de ejes/cierre) y serverContext. summary.fixedInput
+agrega total y media por bloque. No es el tokenizador de Gemini ni una
+descomposición exacta de reportedTokens.input: el proveedor solo informa ese
+total. Quedan fuera historial, cliente, resultados de herramientas, multimedia
+y formato interno del proveedor. No hay consultas adicionales de conteo que
+alteren latencia o consumo. Los informes guardan solo cantidades, sin el texto
+del sistema ni los esquemas privados; el juez tampoco los recibe.
+
+### Pensamiento del agente y comparación de presupuestos (4A, parte 2)
+
+AGENT_THINKING_BUDGET es una variable exclusiva del modelo del agente. Sin
+variable ni flag, el cliente envía thinkingBudget:512 (default aprobado tras el
+experimento de Arnaldo; sus datos están en CONTEXT.md). Acepta enteros no negativos seguros (cero incluido), y
+rechaza vacío, decimales, negativos o texto. Los límites admitidos por cada modelo
+los valida Gemini; no se agrega un máximo global inventado ni un fallback que
+oculte un rechazo. Se utiliza el campo thinkingBudget de
+[ThinkingConfig](https://ai.google.dev/api/generate-content#ThinkingConfig), sin
+traducirlo a thinkingLevel ni cambiar el modelo elegido por GEMINI_MODEL.
+
+--agent-thinking-budget N tiene prioridad sobre la variable; no escribe .env.
+El contrato del adaptador recibe thinkingBudget opcional. metadata.agentConfigurations
+y cada repetitions[].agentConfiguration registran modelo, thinking.mode,
+thinking.thinkingBudget y thinking.source (default/env/override). El default
+actual se registra como mode:budget, thinkingBudget:512, source:default. Los
+informes antiguos con provider_default y presupuesto null indican que no se
+envió presupuesto. Un modelo suministrado directamente queda unknown con
+requestedThinking aparte, sin afirmar que se aplicó el presupuesto. Un factory
+inyectado para tests también se marca como modelo de prueba, inelegible para
+producción. El juez y las transcripciones conservan su configuración actual.
+
+callDetails.callInTurn reinicia al empezar un turno. summary.latency.byCallInTurn
+agrupa p50/p95/máximo de la primera, segunda, tercera, etc. invocación de consulta,
+y separa transcripciones con su propia numeración. Incluye fallos y tiempo
+observado de operaciones cortadas; no es una nueva política de timeout.
+turn.modelCalls y summary.modelCallsPerTurn registran agent (consulta más audio),
+consultation y transcription: p50/p95/máximo de llamadas por turno, incluyendo
+ceros conocidos. Unknown permanece null y se informa unknownSamples; el juez no
+entra en esa distribución. Las mediciones y configuración aparecen en JSON,
+trazas y Markdown, y el resumen de consola incluye configuración y distribuciones.
+
+datos_envio y datos_facturacion devuelven carrito actualizado, lines enriquecidas,
+fields y pendientes ordenados; las propuestas/errores fiscales conservan code,
+field y suggestedRuc. No exponen las confirmaciones privadas del checkpoint.
+El prompt indica no llamar carrito_ver después de modificar carrito/envío/facturación.
+
+El test de datos de envío necesitaba elegir el empaque antes de esperar una
+cotización confirmable: ahora prepara packagingType:null explícito. Se conservan
+todas sus aserciones. Pruebas de configuración/flag/metadata, ordinal por turno,
+percentiles y respuestas completas están dentro de scripts existentes:
+
+    npm run test:agent:purchase:unit
+    npm run test:agent:unit
+    npm run test:eval:unit
+    npm run test:guardian:unit
+
+Para comparar los cinco casos afectados, manteniendo selección, reloj, imágenes,
+modelo, juez y los 60 s del turno, y cambiando solo el presupuesto:
+
+    npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-03,Q-02,Q-03,Q-04,M-05 --now 2026-10-12T15:00:00Z --agent-thinking-budget 512 --output test/eval/results/thinking-512
+    npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-03,Q-02,Q-03,Q-04,M-05 --now 2026-10-12T15:00:00Z --agent-thinking-budget 1024 --output test/eval/results/thinking-1024
+
+Cada caso sigue ejecutándose tres veces. Los dos directorios quedan dentro de
+results ignorado por Git. Comparar metadata.agentConfigurations,
+summary.modelCallsPerTurn, summary.latency.byCallInTurn, latencia total y diagnósticos
+de timeout; estos comandos no afirman mejora ni cambian checks/umbrales. No se
+agregan timeouts por llamada ni reintentos nuevos. No se ejecutaron acá.
+
 ## Guardián completo: entrega 3
 
 --agent real usa src/agents/guardian y consultation/server-context.js para
@@ -231,9 +318,9 @@ Corrida de los 27 casos de la entrega 2 más C-03, P-06, S-10, S-11 y S-12
 
     npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-01,C-02,C-04,P-01,P-02,P-03,P-04,P-05,POL-01,POL-02,POL-03,POL-04,POL-05,POL-06,POL-07,POL-08,O-01,O-05,H-02,CH-01,CH-02,SEC-01,SEC-02,SEC-03,SEC-04,SEC-05,SEC-06,C-03,P-06,S-10,S-11,S-12
 
-Esto es un comando de verificación, no una afirmación de resultados. C-03 aún
-exige un total para varias unidades: cotizar llega en entrega 4. No se modifica
-el caso ni se deja de medir ese criterio. F-05 sigue bloqueado. Comprobantes y
+Esto es un comando de verificación, no una afirmación de resultados. Desde 4A,
+C-03 puede consultar el subtotal con cotizar y F-05 usa cotización real inicial.
+No se modifican casos ni se deja de medir criterios. Comprobantes y
 derivación/escalada conversacional siguen en entrega 5. Una selección parcial
 no habilita producción y no cambia los umbrales.
 
@@ -242,7 +329,8 @@ sin intervalos en el YAML: sus mensajes se entregan en el mismo instante virtual
 y se avanza hasta el silencio, sin esperas reales. Las fronteras 8/30 s, lotes
 durante procesamiento, sesiones >6 h, silencio y límite 40/41 se prueban aparte.
 El límite se guarda antes de descargar o transcribir. Una sola respuesta fija
-por episodio: «Por ahora no puedo seguir respondiendo mensajes en este chat.»
+por episodio: «Estoy recibiendo muchos mensajes seguidos y tengo que hacer una
+pausa. Escribime de nuevo en un rato y seguimos.»
 Luego silencio sin modelos hasta recuperar cupo. Registra una solicitud de
 alerta, nunca activa handoff ni envía la alerta: eso le corresponde a whatsapp.js.
 
@@ -251,7 +339,9 @@ AGENT_SESSION_MS=21600000, AGENT_TURNS_PER_HOUR=40, ventana móvil fija de 60 mi
 AGENT_TURN_TIMEOUT_MS=60000 cuenta desde cierre, incluyendo medios y espera de
 cola. Límites de medios en config.js/.env.example: audio 120 s o respaldo de
 2 MB sin duración, imágenes 5 MB y máximo tres, total 10 MB. Duración/tamaño
-incomprobables o transcripción fallida piden texto. No se sube a Cloudinary.
+incomprobables o transcripción fallida piden texto. Preparar medios no sube
+imágenes automáticamente; una herramienta de carrito puede subir una referencia
+de personalización por el puerto de memoria de 4A.
 
 Bytes de adjuntos duran solo el turno; no se guardan en checkpoint ni reporte.
 Los IDs efímeros pueden figurar en la traza, nunca en checkpoint. El informe no
@@ -292,6 +382,105 @@ No quedan en el checkpoint ni en los informes. Documentos y archivos aportan sol
 tipo/nombre. sendText y sendImage capturan los envíos sin contactar WhatsApp.
 Una corrida con imágenes descriptivas o sin ejecutar todos los turnos de imagen
 no es elegible para producción.
+
+## Entrega 4A: carrito y cotización
+
+El adaptador registra carrito_ver/agregar/modificar/quitar, datos_envio,
+datos_facturacion y cotizar reales. Reutiliza el pricing, envío y validador fiscal
+del servidor, con catálogo fresco inyectado. El carrito guarda IDs, cantidades,
+personalización y borradores de datos, sin precios. TTL de tres días sin cambios;
+leer/cotizar no renueva. Nunca se escriben pedidos ni se reservan existencias.
+
+cotizar({lineas:[{productId,variantId,quantity,packagingType?}]}) calcula solo
+importes informativos sin leer/modificar el carrito ni lastQuote. Devuelve
+items[].subtotal y productsTotal con el pricing compartido (incluidos empaques),
+confirmable:false y sin quoteId/total final. Sin lineas mantiene el flujo de
+carrito; los subtotales del cálculo informativo se adjuntan en responder solo
+en el mismo turno, revalidando precio/stock.
+
+En carrito_agregar/modificar, packagingType omitido conserva la decisión o la
+deja pendiente; null explícito elige sin empaque (packaging.declined:true);
+un tipo del catálogo elige ese empaque. En context.carrito.lineas, empaque:null
+es una elección ya guardada; omitir la clave es pendiente. Los carritos viejos
+sin marca no infieren una elección. carrito_ver/agregar/modificar/quitar traen
+pendientes: todas las personalizaciones, luego empaques (solo con opciones del
+producto y con sus nombres/precios), envío y facturación. Un empaque pendiente
+impide emitir quoteId. Las reglas del prompt piden seguir esa secuencia.
+
+Una modificación real con carrito_agregar/modificar que deje una línea completa
+(personalización y empaque decididos) agrega informar_subtotal primero en
+pendientes. El checkpoint lo liga al carrito y al contenido de sus líneas, sin
+guardar precios. Cotizar exitosamente, con o sin lineas y aunque el carrito
+todavía dé DATO_FALTANTE, lo limpia; su resultado ya no incluye ese pendiente.
+No se limpia con una cotización fallida. Volver a cambiar una línea completa lo
+reactiva; repetir el mismo dato no lo reactiva ni renueva TTL. Envío/facturación
+conservan el pendiente existente, sin generar otro. Vencer el carrito lo elimina.
+El prompt pide cotizar/comunicar el subtotal antes de seguir con otros pendientes.
+La cotización informativa sigue sin modificar el carrito ni lastQuote; solo
+reconoce este pendiente privado si existía antes de calcular.
+
+La corrección agrega tests informativos/sin efectos, stock agregado, esquema
+de lineas, estados/orden de empaque, contrato web opt-in y medición/privacidad/
+fases de timeout a las suites ya incluidas en los scripts siguientes; no se
+agregan scripts ni dependencias.
+
+Incompleto: cotizar devuelve DATO_FALTANTE, confirmable:false, subtotal y campos
+faltantes, sin total final ni quoteId. responder agrega el Subtotal de productos
+del servidor si fue calculado en ese turno. Completo: quoteId ligado al chat,
+huella de carrito y de pricing. responder(quoteIdMostrado) valida frescura,
+agrega el resumen del servidor y registra lastQuote después del envío exitoso.
+Cambios/TTL invalidan lastQuote. cotizacionMostrada hace este cálculo en setup y
+registra la cotización como mostrada en el turno cero, sin llamar al modelo.
+
+Texto propuesto queda como textDraft hasta aceptación posterior de lo repetido
+literalmente por responder. sinPersonalizacion guarda declined, distinto de
+pendiente. Envío/facturación entran como borradores sin confirmar cada campo.
+Solo RUC base o DV discrepante requieren el protocolo explícito: el modelo no
+puede confirmar por el cliente ni completar un número solo cambiando el argumento.
+El teléfono escrito no se vuelve verificado; perfiles fiscales solo del dueño.
+
+La subida de personalización usa world.uploadCustomizationImage: URL y metadatos
+en memoria; no Cloudinary ni bytes persistidos. Q-03/4 usa q03-reference.png,
+dibujo sintético de vaca sin datos personales. El manifiesto conserva P-06/2.
+
+Queda 4B: confirmación final posterior, crear_pedido, transacción de pedido y
+contador, relación quoteId→pedido, idempotencia, PDF y alerta de falla, emulador.
+No existen handlers de esas operaciones. CANTIDAD_CORPORATIVA espera entrega 5.
+TEMPORAL ENTREGA 5 queda intacto. El aviso de límite invita a reintentar y las
+imágenes del cliente son referencias, nunca evidencia de un producto del negocio.
+
+Regresión de contratos compartidos, para ejecutar antes y después del cambio
+(sobre el commit base y luego la versión 4A, respectivamente):
+
+    node --test test/test_order_variant_pricing.js test/test_order_variant_stock.js
+    npm run test:customer:unit
+    npm run test:catalog:unit
+    npm run test:integration:emulator
+
+El último script levanta su emulador con guardias; no usar test:integration de
+producción para esta entrega. Después del cambio, agregar:
+
+    npm run test:agent:purchase:unit
+    npm run test:agent:unit
+    npm run test:guardian:unit
+    npm run test:eval:unit
+
+test_agent_checkout_contract fija snapshots, mensajes/campos/status anteriores,
+pendientes sin declined y subida firmada por defecto. Las otras suites nuevas
+verifican líneas/stock/TTL, datos y confirmaciones, huellas/resumen/lastQuote y
+conexión real con runner (modelos inyectados y tres repeticiones). Los tests
+antiguos que declaraban carrito/cotizar indisponibles se actualizan porque el
+alcance cambió; se mantienen rechazos, controles de efectos y creación pendiente.
+
+Objetivos 4A (20 casos, tres repeticiones):
+
+    npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases P-07,C-03,Q-01,Q-02,Q-03,Q-04,Q-05,M-01,M-02,M-03,M-04,M-05,M-06,F-01,F-02,F-03,F-04,F-05,E-01,E-02
+
+Regresión de entregas 2 y 3: usar el comando de 32 casos de la sección Guardián
+completo. La unión de ambas selecciones tiene 51 casos (C-03 coincide). No se
+modifican el YAML, checks ni umbrales. Pendientes de entrega 5:
+O-02/O-03/O-04 (comprobante y reclamos), H-01/H-03 (derivación y escalada).
+Ninguna de estas selecciones parciales habilita producción.
 
 ## Herramientas y umbrales
 
@@ -336,3 +525,59 @@ Cada corrida crea results/fecha-UTC-identificador/:
 
 Los informes se excluyen de Git. El dueño ejecuta los tests/evaluaciones y
 revisa una muestra de decisiones del juez para calibrarlo.
+
+## Archivos de la entrega 4A
+
+Servicios y puertos:
+
+- src/services/cloudinary.service.js
+- src/services/order-pricing.service.js
+- src/services/cart.repository.js
+- src/services/cart.service.js
+- src/services/order-quote.repository.js
+- src/services/order-quote.service.js
+- src/services/purchase-data.service.js
+
+Agente, contexto y guardián:
+
+- src/agents/consultation/eval-adapter.js
+- src/agents/consultation/server-context.js
+- src/agents/consultation/terminal.js
+- src/agents/consultation/tool-registry.js
+- src/agents/guardian/rate-limit.js
+- src/agents/guardian/runtime.js
+- src/agents/guardian/session.js
+- src/agents/prompts/agente.md
+- src/agents/consultation/cart-tools.js
+- src/agents/consultation/confirmations.js
+- src/agents/consultation/purchase-tools.js
+- src/agents/consultation/quote-summary.js
+
+Runner, fixtures y suites:
+
+- test/eval/README.md
+- test/eval/initial-state.js
+- test/eval/media/README.md
+- test/eval/media/guardian-manifest.json
+- test/eval/memory-world.js
+- test/run-unit.js
+- test/test_consultation_agent.js
+- test/test_consultation_runner.js
+- test/test_consultation_tools.js
+- test/test_guardian_limits.js
+- test/eval/media/generate-personalization.js
+- test/eval/media/q03-reference.png
+- test/helpers/purchase-fixtures.js
+- test/test_agent_cart.js
+- test/test_agent_checkout_contract.js
+- test/test_agent_customer_data.js
+- test/test_agent_purchase_runner.js
+- test/test_agent_quotes.js
+
+Documentación:
+
+- docs/CONTEXT.md
+- docs/SPEC-agente.md
+- docs/SPEC-catalogo.md
+
+Scripts: package.json.

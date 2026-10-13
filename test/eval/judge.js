@@ -104,7 +104,7 @@ export function createStubJudge() {
 
 export async function createLLMJudge({ model = null, timeoutMs = 60000 } = {}) {
   const modelInjected = model !== null;
-  const tracker = createModelUsageTracker();
+  const tracker = createModelUsageTracker({ component: "evaluator" });
   const prompt = await readFile(new URL("./judge-prompt.md", import.meta.url), "utf8");
   if (!model) {
     const { createGeminiModel } = await import("../../src/config/llm.js");

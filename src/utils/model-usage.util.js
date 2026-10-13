@@ -1,7 +1,19 @@
-// Cuenta invoke(), no criterios ni herramientas. Tokens: solo metadatos del proveedor.
+import { randomUUID } from "node:crypto";
+
+// Tokens de consumo: exclusivamente metadatos del proveedor. La descomposición
+// fija es una estimación separada, sin red ni almacenamiento del prompt privado.
+export function estimateFixedInput({ systemPrompt, toolSchemas, serverContext }) {
+  const measure = text => ({ characters: text.length, estimatedTokens: Math.ceil(text.length / 4) });
+  const components = { systemPrompt: measure(systemPrompt), toolSchemas: measure(JSON.stringify(toolSchemas)),
+    serverContext: measure(serverContext) };
+  return { method: "characters_div_4", estimated: true, ...components,
+    estimatedTokensTotal: Object.values(components).reduce((sum, item) => sum + item.estimatedTokens, 0) };
+}
+
+// Cuenta invoke(), no criterios ni herramientas. Tiempos con reloj monotónico.
 export function emptyModelUsage() {
   return { instrumented: true, calls: 0, observedCalls: 0, successfulCalls: 0, failedCalls: 0,
-    pendingCalls: 0, reportedTokens: { input: 0, output: 0, total: 0 }, callsWithoutUsage: 0, usageComplete: true };
+    pendingCalls: 0, reportedTokens: { input: 0, output: 0, total: 0 }, callsWithoutUsage: 0, usageComplete: true, callDetails: [] };
 }
 export function unknownModelUsage() {
   return { ...emptyModelUsage(), instrumented: false, calls: null, usageComplete: false };
@@ -29,6 +41,7 @@ export function sumModelUsage(values) {
     for (const field of ["observedCalls", "successfulCalls", "failedCalls", "pendingCalls", "callsWithoutUsage"]) result[field] += item[field] ?? 0;
     for (const field of ["input", "output", "total"]) result.reportedTokens[field] += item.reportedTokens?.[field] ?? 0;
     result.usageComplete &&= item.usageComplete === true;
+    result.callDetails.push(...structuredClone(item.callDetails ?? []));
   }
   result.calls = result.instrumented ? result.observedCalls : null;
   return result;
@@ -42,14 +55,19 @@ export function modelUsageSince(before, after) {
   }
   for (const field of ["input", "output", "total"]) result.reportedTokens[field] = after.reportedTokens[field] - before.reportedTokens[field];
   result.usageComplete = result.callsWithoutUsage === 0;
+  const seen = new Set((before.callDetails ?? []).map(call => call.id));
+  result.callDetails = structuredClone((after.callDetails ?? []).filter(call => !seen.has(call.id)));
   return result;
 }
 
-export function createModelUsageTracker() {
+export function createModelUsageTracker({ now = () => performance.now(), component = "model" } = {}) {
   const calls = [];
+  const trackerId = randomUUID();
   return {
-    async invoke(action) {
-      const entry = { status: "pending", usage: null };
+    async invoke(action, metadata = {}) {
+      const entry = { id: trackerId + ":" + (calls.length + 1), status: "pending", usage: null, startedAt: now(),
+        component, turn: metadata.turn ?? null, callInTurn: metadata.callInTurn ?? null,
+        fixedInput: metadata.fixedInput ? structuredClone(metadata.fixedInput) : null };
       calls.push(entry);
       try {
         const response = await action();
@@ -57,6 +75,7 @@ export function createModelUsageTracker() {
         entry.status = "success";
         return response;
       } catch (error) { entry.status = "failed"; throw error; }
+      finally { entry.durationMs = Math.max(0, now() - entry.startedAt); }
     },
     snapshot() {
       const result = emptyModelUsage();
@@ -71,6 +90,10 @@ export function createModelUsageTracker() {
         if (valid(output)) result.reportedTokens.output += output;
         if (valid(total)) result.reportedTokens.total += total;
         if (!valid(input) || !valid(output) || !valid(total)) result.callsWithoutUsage++;
+        result.callDetails.push({ id: entry.id, component: entry.component, turn: entry.turn, callInTurn: entry.callInTurn, status: entry.status,
+          durationMs: entry.durationMs ?? Math.max(0, now() - entry.startedAt), incomplete: entry.status === "pending",
+          reportedTokens: { input: valid(input) ? input : null, output: valid(output) ? output : null, total: valid(total) ? total : null },
+          ...(entry.fixedInput ? { fixedInput: structuredClone(entry.fixedInput) } : {}) });
       }
       result.usageComplete = result.callsWithoutUsage === 0;
       return result;

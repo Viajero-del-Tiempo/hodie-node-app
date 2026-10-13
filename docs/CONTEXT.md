@@ -736,8 +736,9 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   de handoff_threads, sin resolver identidad, descargar o llamar modelos.
 - Límite de 40 lotes por ventana móvil de 60 min. La admisión se persiste antes
   de descargar, transcribir o consultar al modelo. El lote 41 inicia un episodio:
-  registra una solicitud de alerta y emite una sola vez «Por ahora no puedo
-  seguir respondiendo mensajes en este chat.»; después guarda silencio. No
+  registra una solicitud de alerta y emite una sola vez «Estoy recibiendo muchos
+  mensajes seguidos y tengo que hacer una pausa. Escribime de nuevo en un rato
+  y seguimos.»; después guarda silencio. No
   activa handoff. Se desbloquea automáticamente al volver a tener cupo y no
   reinicia el límite por sesión ni al reconstruir el runtime.
 - guardianRateLimit guarda admittedAt/blocked/episodeId; guardianAlerts guarda
@@ -771,9 +772,175 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
 - P-06 tiene imagen sintética en test/eval/media/p06-reference.png y manifiesto
   guardian-manifest.json: caja rectangular oscura, sin marca, texto ni personas.
   No es un producto real ni acredita datos del catálogo. No publicar fotos con
-  datos personales. F-05 sigue bloqueado por cotizar; C-03 aún exige el total
-  que corresponde a entrega 4. Derivación/escalada completa sigue en entrega 5.
+  datos personales. Al cerrar la entrega 3, F-05 seguía bloqueado por cotizar
+  y C-03 requería precios de la entrega 4. La sección 4A actualiza ese alcance.
+  Derivación/escalada completa sigue en entrega 5.
 - Scripts test:guardian:unit y suites en test:unit aprobados en el plan. Nuevos
   tests en memoria, con modelos inyectados, sin Firestore/WhatsApp ni red real.
   El dueño ejecuta tests/evaluaciones/diff; el asistente no reconstruye salidas,
   no hace commit/push ni modifica conversations.yaml.
+
+## Agente nuevo: entrega 4A (implementación, pendiente de verificación del dueño)
+
+- Solo carrito, envío/facturación, cotización y presentación. No crear_pedido,
+  confirmación final, relación cotización→pedido, contador ni entrega PDF: son
+  4B. El router, whatsapp.js, BudgetAgent y grafo productivos siguen intactos.
+  Sin deploy hasta la puesta en marcha conjunta del catálogo y agente.
+- cart.service trabaja con repositorio/reloj inyectados; carts separado del
+  checkpoint, sin precios. Estado del chat guarda lastQuote y confirmaciones
+  pendientes, nunca bytes ni attachmentId. IDs estables de línea y revisión
+  del carrito; identidad producto+variante+empaque+texto como en la web. Una
+  operación inválida conserva el borrador. La revisión evita pisar otro cambio.
+  Los puertos cart.repository y order-quote.repository no inicializan Firebase
+  ni se conectan a producción. La transacción del primero es solo sobre carts,
+  nunca pedidos/contador. El runner sustituye ambos por memoria aislada por caso.
+- TTL de tres días desde un cambio real; ver, cotizar o escribir el mismo dato
+  no lo renueva. Sesión nueva conserva carrito no vencido. Vencimiento y cambios
+  invalidan lastQuote. **Puesta en marcha pendiente:** configurar política TTL
+  de Firestore para carts.expiresAt. El chequeo de vencimiento funciona también
+  antes de que la limpieza física de Firestore ocurra.
+- Pricing único: createOrderPricingService del checkout con structuredErrors
+  opt-in. Mensajes, status y campos de errores web anteriores quedan iguales;
+  no se cambian fórmulas, reserva ni descuento al pagar. customizationDeclined solo
+  se habilita como customization.declined en el carrito y customizationDeclined
+  en la entrada/foto de pricing. Si falta ese campo, el checkout actual conserva
+  sus pendientes. Rechazo explícito limpia texto/imagen, distinto de pendiente.
+- Texto entra como textDraft literal; responder lo repite y registra que se
+  mostró. confirmarTexto exige aceptación del mensaje del cliente en un lote
+  posterior. Se aceptan afirmaciones breves completas o repetición literal;
+  mensajes mixtos con cambios piden otra confirmación. No se interpreta un
+  «sí» del modelo, del historial o del mismo lote como aceptación del cliente.
+- Envío y facturación son borradores sin confirmación por campo. Servicios de
+  shipping/billing/RUC existentes se reutilizan sin modificarlos. Cédula solo
+  para transportadora; se conserva el borrador al cambiar de ciudad pero se
+  omite de la foto local. Teléfono escrito normalizado sigue sin verificación;
+  identidad verificada viene únicamente del servidor. Perfiles fiscales solo
+  del teléfono verificado propio, sin selector de usuario en las herramientas.
+- RUC sin guion queda literal y genera propuesta DV, sin completarlo hasta
+  aceptación posterior. DV discrepante ofrece corregir/continuar con aceptación
+  explícita. Pasar la propuesta como ruc en lugar de confirmedRuc no saltea el
+  protocolo; un RUC completo nuevo debe ser literal del mensaje, del perfil
+  propio o propuesta aceptada. Cambiar RUC/razón social invalida esa aceptación.
+- Cotizar incompleto devuelve DATO_FALTANTE, confirmable:false y Subtotal de
+  productos, sin total final ni quoteId. Completo emite ID del servidor ligado
+  al chat y huellas de carrito (líneas/envío/facturación/revisión) y pricing.
+  responder(quoteIdMostrado) recalcula precios/stock y agrega el resumen del
+  servidor; solo tras envío exitoso registra lastQuote con ID, huellas, hora,
+  secuencia y lote. Cotizar no significa mostrado ni reserva stock.
+- Imagen de personalización: valida línea completa antes de subir y acepta
+  solo adjunto admitido del turno actual. Puerto de subida firmada con señal;
+  el runner devuelve URL y guarda metadatos en memoria, sin red ni credenciales.
+  Una imagen es referencia y requiere revisión del equipo para producción.
+  Q-03/4 tiene dibujo sintético de vaca en q03-reference.png, sin texto/personas.
+  **Pendiente:** limpieza de imágenes huérfanas en Cloudinary tras cambios,
+  rechazo, eliminación, vencimiento de carrito o subida seguida de cancelación.
+- Se quitó TEMPORAL ENTREGA 4, dejando intacto TEMPORAL ENTREGA 5. El prompt
+  habilita 4A y declara crear_pedido todavía indisponible. CANTIDAD_CORPORATIVA
+  espera entrega 5/derivar; no se agregan umbrales comerciales al código.
+- Runner usa cotizar real para cotizacionMostrada y marca turno previo: F-05
+  deja de estar bloqueado por herramienta ausente. Objetivos 4A: P-07, C-03,
+  Q-01..Q-05, M-01..M-06, F-01..F-05, E-01 y E-02; no es una afirmación de que
+  pasen. Quedan O-02/O-03/O-04/H-01/H-03 para comprobantes/derivación/escalada.
+- test:agent:purchase:unit y las nuevas suites de test:unit usan memoria y
+  modelos inyectados. test_agent_checkout_contract fija el contrato previo:
+  snapshots, pendientes sin declined, mensajes/campos/status y subida firmada.
+  Antes y después deben correrse test_order_variant_pricing.js,
+  test:customer:unit, test:catalog:unit y test:integration:emulator; comandos y
+  selecciones de regresión de entregas 2/3 en test/eval/README.md. El dueño corre
+  tests/evaluaciones/diff; no se reconstruye ninguna salida.
+
+## Corrección de 4A tras la primera evaluación real
+
+- cotizar acepta lineas opcionales para consultar importes sin armar carrito:
+  productId, variantId, quantity y packagingType opcional. Reutiliza pricing y
+  stock agregado del servidor. Devuelve items[].subtotal y productsTotal,
+  confirmable:false y ningún quoteId/total final; no altera carrito, TTL,
+  repositorio de cotizaciones ni lastQuote. responder añade el cálculo fresco
+  solo en ese turno. Sin lineas conserva la cotización del carrito.
+- Los subtotales por línea del pricing son opt-in (includeLineSubtotals), sin
+  cambios al resultado, fórmulas o mensajes del checkout web por defecto.
+- packagingType omitido deja empaque sin decidir; null explícito guarda
+  packaging.declined:true. Elegir un tipo real lo desmarca. Leer un carrito
+  anterior sin esa marca no convierte null en una decisión. En el contexto
+  estructurado del runner, empaque:null expresa sin empaque; omitir la clave
+  expresa pendiente. No se cambia conversations.yaml ni su esquema.
+- carrito_ver/agregar/modificar/quitar devuelven pendientes del servidor:
+  todas las personalizaciones, luego los empaques por línea (solo con opciones
+  en el producto), envío y facturación. Empaque pendiente impide emitir una
+  cotización confirmable. Las opciones incluyen nombre y precio del catálogo.
+- Prompt: seguir pendientes, ofrecer empaques con precios, diseño/dibujo del
+  cliente sujeto a revisión humana antes de confirmar y cierre cordial sin
+  insistencia si posterga, conservando carrito según la política consultada.
+  TEMPORAL ENTREGA 5 sigue intacto; no se implementa creación de pedidos.
+- Medición descriptiva, sin cambiar límites/checks/umbrales: latencia por
+  invoke del agente/transcriptor/evaluador y herramienta; p50/p95/máximo por
+  grupo y turno. Un timeout guarda interruptedPhase (modelo, herramienta y
+  nombre, contexto, medios, etc.). Se conserva tiempo observado de operaciones
+  interrumpidas, marcado incompleto; ausencia de muestras es null, no cero.
+- Tokens de consumo siguen siendo los informados por Gemini. fixedInput separa
+  sistema, esquemas efectivamente anunciados en esa llamada y contexto inicial
+  del servidor como **estimación local caracteres/4**, con caracteres medidos.
+  No se presentan como tokens exactos ni facturados: Gemini no devuelve ese
+  desglose. No agrega llamadas de conteo ni guarda texto privado del prompt;
+  historial/resultados/multimedia no pertenecen a esos bloques fijos.
+- Tests nuevos se agregan a suites existentes, sin tocar package.json ni
+  dependencias. Comandos en test/eval/README.md; los ejecuta el dueño.
+
+## Corrección de 4A, parte 2: preparación del test y medición de latencia
+
+- La aserción confirmable:true del test de datos de envío suponía un empaque
+  resuelto, pero preparaba la línea omitiéndolo. Con la distinción nueva queda
+  pendiente y la cotización correctamente no es confirmable. Se corrige solo
+  la preparación con packagingType:null explícito; se conservan confirmable:true,
+  cédula omitida en dirección local, borrador preservado y controles de identidad.
+- AGENT_THINKING_BUDGET configura exclusivamente el modelo del agente nuevo.
+  Ausente: no se pasa thinkingBudget y se conserva el default del proveedor.
+  Presente: entero no negativo seguro, incluyendo cero; rechaza vacío, decimales,
+  negativos y no numéricos. No se inventa un rango máximo común entre modelos:
+  los valores admitidos por el modelo elegido los valida Gemini. Se reutiliza
+  createGeminiModel, sin cambiar su default ni el juez o la transcripción.
+- --agent-thinking-budget N pasa override al adaptador; tiene prioridad sobre
+  la variable y no escribe .env. Metadata por repetición y corrida registra modelo,
+  presupuesto enviado, modo y origen. Con un modelo directamente inyectado no se
+  presenta una opción solicitada como efectivamente aplicada a ese doble.
+- CallDetails agrega callInTurn, que reinicia en cada turno y se numera por
+  componente (consulta/transcripción). El informe incluye latencias por posición
+  y distribución p50/p95/máximo de llamadas por turno. Incluye turnos silenciosos
+  con cero conocido y llamadas interrumpidas; un adaptador sin esa medición deja
+  datos desconocidos, no ceros inventados. El evaluador se mantiene separado.
+- Envío y facturación también devuelven líneas enriquecidas y pendientes
+  generales del carrito, con opciones reales y diagnóstico fiscal conservado.
+  Prompt: usar el resultado de la modificación, sin carrito_ver redundante.
+- No cambia el límite de 60 s, no se agrega plazo por llamada ni reintentos.
+  YAML, checks, umbrales y TEMPORAL ENTREGA 5 siguen intactos. No se conecta al
+  flujo productivo. Tests en las suites existentes, sin nuevas dependencias;
+  comandos y comparación reproducible en test/eval/README.md. Los corre el dueño.
+
+## Decisión posterior al experimento de pensamiento: default 512 y subtotal pendiente
+
+- Datos reportados por Arnaldo (5 casos × 3 repeticiones): sin fijar → 5/5,
+  turno p95 35 s; 512 → 4/5, turno p95 11 s, 34% menos tokens. La única falla
+  con 512 (y con 0) fue Q-02: después de elegir empaque omitía cotizar/informar
+  el subtotal y seguía con envío. Son resultados informados por el dueño;
+  el asistente no ejecutó el experimento ni afirma resultados de la corrección.
+- Por decisión de Arnaldo, el agente nuevo ahora envía thinkingBudget:512 por
+  defecto. Esto reemplaza el default sin fijar de la sección anterior. Siguen
+  teniendo prioridad AGENT_THINKING_BUDGET y --agent-thinking-budget, con la
+  validación existente. No cambia la configuración del juez ni del audio.
+- Una modificación real por carrito_agregar/modificar que deje una línea con
+  personalización y empaque resueltos registra subtotalPending en el checkpoint:
+  ID del carrito, huella de líneas y revisión del cambio. No guarda precios ni
+  modifica el TTL. Leerlo devuelve informar_subtotal primero en pendientes,
+  antes de personalización/empaque de otras líneas y de envío/facturación.
+- Cotizar exitosamente (del carrito, aunque dé DATO_FALTANTE, o informativa)
+  limpia ese pendiente. No se requiere otro paso de confirmación. Un fallo de
+  pricing no lo limpia; tampoco una lectura, envío/facturación o cambio sin
+  efecto. Otro cambio real completo lo reactiva. Vencimiento/incompatibilidad
+  con el contenido actual lo descarta. Una cotización en curso no limpia el
+  pendiente de una modificación posterior. Se mantienen huellas/lastQuote y
+  el carácter informativo sin alterar líneas de cotizar(lineas).
+- Prompt: si pendientes empieza con informar_subtotal, cotizar y comunicar el
+  subtotal antes de seguir. No se agregan precios, fórmulas ni frases del caso
+  al código. Sin cambios a YAML, checks, umbrales, TEMPORAL ENTREGA 5 o 60 s.
+- Tests en test_agent_cart y test_consultation_agent, incluidos en los scripts
+  existentes; el dueño corre las suites y la nueva evaluación.

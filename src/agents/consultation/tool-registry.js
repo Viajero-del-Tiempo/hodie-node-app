@@ -1,5 +1,13 @@
 const string = description => ({ type: "string", description });
 const object = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
+const lineChanges = {
+  variantId: string("ID de variante del mismo producto."), quantity: { type: "integer", minimum: 1 },
+  packagingType: { ...string("Tipo del empaque del catálogo; null solo si el cliente eligió sin empaque. Omitilo si no decidió."), nullable: true },
+  texto: { ...string("Texto literal propuesto por el cliente; null para quitarlo."), nullable: true },
+  confirmarTexto: string("Repetí exactamente el texto que el cliente confirmó después de verlo."),
+  sinPersonalizacion: { type: "boolean", description: "true solo si el cliente eligió explícitamente sin personalización." },
+  attachmentId: string("Imagen admitida del turno actual para personalización."),
+};
 export const CONSULTATION_SCHEMAS = Object.freeze({
   buscar_productos: object({ consulta: string("Términos de búsqueda."), categoriaId: string("ID de categoría obtenido del contexto o catálogo."),
     opciones: { type: "object", additionalProperties: { type: "string" }, description: "Ejes y valores obtenidos del catálogo." },
@@ -9,23 +17,45 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
   enviar_imagenes: object({ productId: string("ID obtenido del catálogo."), variantId: string("ID de variante del producto; opcional.") }, ["productId"]),
   consultar_politicas: object({}),
   estado_pedido: object({ orderNumber: string("Número de pedido indicado por el cliente."), phone: string("Teléfono de compra indicado por el cliente; no verifica la identidad.") }),
+  carrito_ver: object({}),
+  carrito_agregar: object({ productId: string("Producto del catálogo."), ...lineChanges }, ["productId", "variantId", "quantity"]),
+  carrito_modificar: object({ linea: string("ID estable devuelto por carrito_ver."), cambios: object(lineChanges) }, ["linea", "cambios"]),
+  carrito_quitar: object({ linea: string("ID estable de la línea." ) }, ["linea"]),
+  datos_envio: object(Object.fromEntries(["recipientName", "recipientDocument", "city", "department", "street", "phone"].map(key => [key, string("Dato indicado por el cliente: " + key)]))),
+  datos_facturacion: object({ invoiceRequested: { type: "boolean" }, legalName: string("Razón social indicada por el cliente."),
+    ruc: string("RUC literal; no agregues ni cambies dígitos."), confirmedRuc: string("Propuesta exacta confirmada por el cliente en un turno posterior."),
+    acknowledgeRucMismatch: { type: "boolean", description: "Aceptación explícita posterior del RUC con discrepancia; el servidor verifica la evidencia." },
+    billingProfileId: string("Registro fiscal del perfil verificado del cliente actual.") }, ["invoiceRequested"]),
+  cotizar: object({ lineas: { type: "array", minItems: 1,
+    description: "Cálculo informativo sin armar ni modificar el carrito, nunca confirmable. Omití lineas para cotizar el carrito actual.",
+    items: object({ productId: string("ID del producto del catálogo."), variantId: string("ID de su variante."),
+      quantity: { type: "integer", minimum: 1 }, packagingType: { ...string("Tipo real del empaque; opcional."), nullable: true } },
+    ["productId", "variantId", "quantity"]) } }),
   responder: object({ texto: string("Respuesta final al cliente."), entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
-    quoteIdMostrado: string("Identificador de cotización; todavía no disponible.") }, ["texto", "entendido"]),
+    quoteIdMostrado: string("ID devuelto por cotizar para que el servidor agregue y registre el resumen completo." ) }, ["texto", "entendido"]),
 });
 export const CONSULTATION_TOOL_NAMES = Object.freeze(Object.keys(CONSULTATION_SCHEMAS));
 const descriptions = {
-  buscar_productos: "Busca productos y variantes, con precios, stock, available y matchedTerms. Máximo cinco productos.",
+  buscar_productos: "Busca productos y variantes, con priceFrom, variants[].price, stock, available y matchedTerms. Máximo cinco productos.",
   ver_producto: "Obtiene el producto público completo: atributos, variantes, personalización, imágenes y empaques propios.",
   enviar_imagenes: "Envía hasta tres imágenes existentes del producto o variante. No crea imágenes ni acepta URLs del modelo.",
   consultar_politicas: "Obtiene todas las políticas vigentes; sus temas son libres.",
   estado_pedido: "Consulta un pedido. Identidad verificada y dueño: estado y productos. Si no, exige número y teléfono coincidentes y muestra solo el estado.",
-  responder: "Envía la única respuesta de texto y termina el turno. No habilita cotizaciones todavía.",
+  carrito_ver: "Lee carrito, IDs y pendientes en orden: personalización, empaque, envío, facturación. No renueva su vencimiento.",
+  carrito_agregar: "Agrega o suma una línea; valida stock agregado y personalización. El texto se guarda primero como borrador por confirmar.",
+  carrito_modificar: "Modifica una línea sin perder otros datos. confirmarTexto solo acepta evidencia posterior del cliente.",
+  carrito_quitar: "Quita una línea por su ID estable.",
+  datos_envio: "Guarda borrador y devuelve carrito, pendientes y options: shippingMethod, shippingCost (cargo del pedido), requiresRecipientDocument y label (flete). Comunicá esos datos en este turno; pendientes guía la próxima pregunta. El teléfono escrito nunca verifica la identidad.",
+  datos_facturacion: "Guarda decisión fiscal y borrador. Valida RUC y confirmaciones; solo permite elegir registros del perfil verificado propio.",
+  cotizar: "Calcula con pricing del servidor. Con lineas: subtotales por línea y productsTotal informativos, sin carrito ni quoteId. Sin lineas: cotiza el carrito; DATO_FALTANTE da subtotal no confirmable; completo da quoteId y huellas.",
+  responder: "Envía un único mensaje y cierra. quoteIdMostrado agrega el resumen del servidor y registra lastQuote solo después del envío.",
 };
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 const invalid = (field, message) => ({ code: "ARGUMENTOS_INVALIDOS", field, message });
 
 function validate(schema, value, path = "") {
+  if (schema.nullable && value === null) return null;
   if (schema.type === "object") {
     if (!isObject(value)) return invalid(path || "arguments", "Debe ser un objeto.");
     for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) return invalid(path ? path + "." + key : key, "Falta este campo.");
@@ -35,6 +65,12 @@ function validate(schema, value, path = "") {
       const child = Object.hasOwn(schema.properties ?? {}, key) ? schema.properties[key] : schema.additionalProperties;
       if (!child) return invalid(field, "Campo desconocido.");
       const error = validate(child, item, field);
+      if (error) return error;
+    }
+  } else if (schema.type === "array") {
+    if (!Array.isArray(value) || value.length < (schema.minItems ?? 0)) return invalid(path, "Debe ser un arreglo no vacío.");
+    for (const [index, item] of value.entries()) {
+      const error = validate(schema.items, item, path + "[" + index + "]");
       if (error) return error;
     }
   } else if (schema.type === "string") {
@@ -52,12 +88,18 @@ export function createToolRegistry(handlers) {
     if (!Object.hasOwn(CONSULTATION_SCHEMAS, name)) return { code: "HERRAMIENTA_NO_DISPONIBLE", message: "Esta herramienta no está disponible." };
     const error = validate(CONSULTATION_SCHEMAS[name], args);
     if (error) return error;
-    for (const field of ["productId", "variantId", "categoriaId", "orderNumber"]) {
+    for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado"]) {
       if (args[field] !== undefined && (args[field] !== args[field].trim() || args[field].includes("/")
           || [".", ".."].includes(args[field]) || args[field].length > 200)) return invalid(field, "Identificador inválido.");
     }
-    // TEMPORAL ENTREGA 4: retirar al registrar cotizar/lastQuote.
-    if (name === "responder" && args.quoteIdMostrado !== undefined) return { code: "FUNCION_NO_DISPONIBLE", field: "quoteIdMostrado" };
+    if (name === "carrito_modificar" && !Object.keys(args.cambios).length) return invalid("cambios", "Indicá qué dato querés modificar.");
+    for (const [index, line] of (args.lineas ?? []).entries()) {
+      for (const key of ["productId", "variantId"]) {
+        if (line[key] !== line[key].trim() || line[key].includes("/") || [".", ".."].includes(line[key]) || line[key].length > 200) {
+          return invalid("lineas[" + index + "]." + key, "Identificador inválido.");
+        }
+      }
+    }
     return null;
   }
   return {
@@ -81,7 +123,6 @@ export function createToolRegistry(handlers) {
       const names = onlyTerminal ? ["responder"] : CONSULTATION_TOOL_NAMES;
       const declarations = names.map(name => {
         const schema = structuredClone(CONSULTATION_SCHEMAS[name]);
-        if (name === "responder") delete schema.properties.quoteIdMostrado;
         if (name === "buscar_productos") {
           if (!optionNames.length) delete schema.properties.opciones;
           else schema.properties.opciones = object(Object.fromEntries(optionNames.map(axis => [axis, string("Valor del eje obtenido del catálogo.")])));
@@ -89,6 +130,9 @@ export function createToolRegistry(handlers) {
         function providerSchema(item) {
           const clean = { type: item.type };
           if (item.description) clean.description = item.description;
+          if (item.nullable) clean.nullable = true;
+          if (item.items) clean.items = providerSchema(item.items);
+          if (item.minItems !== undefined) clean.minItems = item.minItems;
           if (item.properties) clean.properties = Object.fromEntries(Object.entries(item.properties).map(([key, value]) => [key, providerSchema(value)]));
           if (item.required?.length) clean.required = item.required;
           return clean;

@@ -74,14 +74,17 @@ Las imágenes y audios del turno no se guardan en el estado.
 
 ```js
 {
+  id, revision,                           // generación del carrito y revisión del servidor
   lines: [
     {
-      productId, variantId, quantity,
+      id, productId, variantId, quantity,  // ID estable de línea
       packagingType: "caja" | null,        // null = empaque estándar sin costo
       customization: {
         text: "Analia" | null,
         imageUrl: "https://..." | null,    // subida firmada a Cloudinary
-        pending: false                     // true si el producto admite texto y falta definirlo
+        textDraft: null,                   // propuesta literal todavía no confirmada
+        declined: false,                   // rechazo explícito, distinto de pendiente
+        pending: false                     // true si falta definir/confirmar texto
       }
     }
   ],
@@ -104,6 +107,10 @@ Las imágenes y audios del turno no se guardan en el estado.
 - **Identidad de línea**, igual que en la web: producto + variante + empaque + texto. Dos textos distintos son dos líneas.
 - **Vencimiento:** 3 días sin cambios. Se aplica con una política de TTL de Firestore sobre `expiresAt`. El carrito vencido simplemente deja de existir; el agente no lo menciona salvo que el cliente pregunte.
 - **La cédula del destinatario** solo se pide para envíos por transportadora.
+- Envío y facturación entran como borradores, sin confirmaciones por dato. Solo
+  se confirman expresamente el texto literal de personalización, el protocolo
+  de RUC y, desde 4B, el resumen final. Rechazar la personalización limpia texto
+  e imagen y no deja pendientes; el checkout web conserva su comportamiento.
 - **Facturación:** antes de cotizar, preguntar "¿Necesitás factura?". Si no necesita,
   guardar `invoiceRequested: false`. Si necesita, pedir razón social y RUC; se
   pueden elegir datos guardados del perfil. Un número base sin guion propone el
@@ -121,25 +128,25 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | `buscar_productos` | `consulta`, `categoriaId?`, `opciones?`, `soloDisponibles?` (false), `limite?` (5) | Resultados de `searchProducts`: producto, categoría, `priceFrom`, variantes con precio y `available`, `matchedTerms` |
 | `ver_producto` | `productId` | Producto completo: atributos, variantes, personalización y empaques |
 | `enviar_imagenes` | `productId`, `variantId?` | Envía por WhatsApp hasta 3 imágenes del producto o la variante. Devuelve cuántas envió |
-| `carrito_ver` | — | Líneas actuales, datos de envío/facturación y qué falta para cotizar |
-| `carrito_agregar` | `productId`, `variantId`, `quantity`, `packagingType?`, `texto?`, `attachmentId?` | Valida variante activa, stock (sumando líneas), cantidad, empaque y límites de personalización. Si hay `attachmentId`, sube la imagen a Cloudinary |
-| `carrito_modificar` | `linea`, cambios | Mismas validaciones que agregar |
+| `carrito_ver` | — | Líneas actuales, datos y pendientes ordenados: personalización, empaque, envío, facturación |
+| `carrito_agregar` | `productId`, `variantId`, `quantity`, `packagingType?`, `texto?`, `sinPersonalizacion?`, `attachmentId?` | Valida variante activa, stock (sumando líneas), cantidad, empaque y límites de personalización. Texto como borrador literal; rechazo explícito distinto de pendiente. Si hay `attachmentId`, sube la imagen con firma, solo del turno actual |
+| `carrito_modificar` | `linea`, `cambios` (`variantId?`, `quantity?`, `packagingType?`, `texto?`, `confirmarTexto?`, `sinPersonalizacion?`, `attachmentId?`) | Mismas validaciones que agregar. ID estable; confirmarTexto debe repetir lo mostrado y tener evidencia de aceptación del cliente en un lote posterior |
 | `carrito_quitar` | `linea` | Quita la línea |
 | `datos_envio` | `recipientName?`, `recipientDocument?`, `city?`, `department?`, `street?`, `phone?` | Guarda los datos, normaliza el teléfono y devuelve el tipo de envío y los datos faltantes |
 | `datos_facturacion` | `invoiceRequested`, `legalName?`, `ruc?`, `confirmedRuc?`, `acknowledgeRucMismatch?`, `billingProfileId?` | Guarda la decisión y valida datos; devuelve campos faltantes, propuesta de RUC o aviso de DV. Las confirmaciones deben corresponder a lo que aceptó el cliente; el LLM no las infiere. Solo accede al perfil del cliente actual |
-| `cotizar` | — | Totales calculados con la función de precios del servidor, tipo de envío, decisión/datos de facturación, datos faltantes, `quoteId` y huella del carrito |
+| `cotizar` | lineas? (productId, variantId, quantity, packagingType?) | Con lineas: cálculo informativo con el pricing compartido, subtotal por línea y productsTotal; no modifica carrito, nunca confirmable ni quoteId. Sin lineas: carrito actual, modalidad y facturación; incompleto DATO_FALTANTE con subtotal sin total final ni quoteId; completo totales, quoteId y huellas |
 | `crear_pedido` | `quoteId` | Ver Creación segura de pedidos |
 | `estado_pedido` | `orderNumber?`, `phone?` | Aplica las reglas de verificación (ver Seguridad) |
 | `registrar_comprobante` | `attachmentId`, `orderNumber?` | Asocia la imagen al pedido pendiente del cliente y alerta al admin. Nunca cambia el estado del pedido |
 | `consultar_politicas` | — | Todas las políticas vigentes de la colección `policies` |
 | `derivar` | `motivo` | Marca el handoff y termina el turno (ver Derivación) |
-| `responder` | `texto`, `entendido`, `quoteIdMostrado?` | Envía la respuesta y termina el turno |
+| `responder` | `texto`, `entendido`, `quoteIdMostrado?` | Un único envío y cierre; el servidor agrega el resumen de cotización y registra lastQuote después del envío exitoso. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
 
 ### Reglas comunes
 
 - **Todo turno termina** con `responder` o con `derivar`. Un turno que termina sin ninguna de las dos se trata como falla técnica.
 - **Los errores son datos, no excepciones.** Cada herramienta devuelve códigos que el agente explica con sus palabras: `SIN_STOCK` (con el stock disponible), `VARIANTE_INACTIVA`, `EMPAQUE_INEXISTENTE`, `TEXTO_DEMASIADO_LARGO` (con el límite), `NO_ADMITE_IMAGEN`, `CANTIDAD_CORPORATIVA` (más de 100 unidades), `DATO_FALTANTE`.
-- **`CANTIDAD_CORPORATIVA` obliga a derivar**, con el motivo "pedido corporativo de N unidades de \<producto>".
+- **`CANTIDAD_CORPORATIVA` corresponde a la entrega 5**, con `derivar`; no se implementa en 4A ni agrega umbrales al agente. Entonces obliga a derivar con el motivo "pedido corporativo de N unidades de \<producto>".
 - **`entendido`** en `responder` indica si el agente pudo interpretar el mensaje del cliente; alimenta la escalada de 4 intentos.
 - **El agente nunca muestra más de 5 productos** en un mismo mensaje.
 
@@ -147,9 +154,9 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 
 El modelo no puede crear un pedido por error: `crear_pedido` solo funciona si el cliente vio un resumen y respondió después, y si nada cambió desde entonces. Esas condiciones las verifica el código, no el modelo.
 
-1. **Cotizar.** `cotizar` exige una decisión sobre factura y sus datos si corresponde, calcula los totales con la función de precios del servidor y devuelve un `quoteId`, derivado de las líneas, los datos de envío, facturación y los precios. El resumen muestra consumidor final o razón social/RUC; cualquier cambio fiscal requiere una cotización nueva.
-2. **Mostrar.** El agente envía el resumen con `responder` y pasa `quoteIdMostrado`. Solo entonces el código registra `lastQuote`: el `quoteId`, la huella del carrito y la hora.
-3. **Confirmar.** En un turno posterior, si el cliente confirma, el agente llama a `crear_pedido(quoteId)`. El servidor rechaza la llamada si:
+1. **Cotizar (4A).** Con datos completos y las confirmaciones de texto/RUC necesarias, calcula los totales con la función de precios del servidor y devuelve un `quoteId`, ligado al chat y a las huellas de líneas, envío, facturación y precios. Si faltan datos, devuelve `DATO_FALTANTE`, `confirmable:false` y un **Subtotal de productos** informativo, sin `quoteId` ni total final. No reserva stock. El resumen muestra consumidor final o razón social/RUC; cualquier cambio fiscal requiere una cotización nueva.
+2. **Mostrar (4A).** El agente pasa `quoteIdMostrado` a `responder`; el servidor vuelve a validar y agrega su propio resumen al único mensaje. Después del envío exitoso registra `lastQuote`: ID, ambas huellas, hora, secuencia y lote del turno. Cambiar el carrito lo invalida, al igual que vencer el TTL o detectar precios/stock obsoletos. El modelo no puede inventar ni copiar IDs de otro chat.
+3. **Confirmar (4B, pendiente).** En un turno posterior, si el cliente confirma, el agente llama a `crear_pedido(quoteId)`. El servidor rechaza la llamada si:
    - el `quoteId` no es el de `lastQuote`, o se mostró en el mismo turno;
    - el carrito cambió desde que se mostró (`CARRITO_CAMBIO`);
    - recalculado ahora, el total no coincide con el mostrado (`PRECIO_CAMBIO`);
@@ -312,7 +319,9 @@ La evaluación se construye primero, para que el agente se mida desde su primera
 1. **Runner de evaluación:** carga de fixtures en memoria, simulación de WhatsApp, verificación determinística, evaluador LLM e informe.
 2. **Agente de consulta:** guardián mínimo, agente, `responder` y las herramientas de lectura (`buscar_productos`, `ver_producto`, `enviar_imagenes`, `consultar_politicas`, `estado_pedido`). Se evalúan los casos de inicio, producto, políticas y consulta de pedidos.
 3. **Guardián completo:** ráfagas, audios, imágenes, sesiones, contexto del turno y límites de uso.
-4. **Carrito y pedidos:** herramientas de carrito, `datos_envio`, `cotizar` y `crear_pedido` con sus controles e idempotencia; TTL de carritos. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 4` y habilitar `quoteIdMostrado` con la validación de `lastQuote`.
+4. **Carrito y pedidos, dividida en dos rondas:**
+   - **4A:** carrito_ver/agregar/modificar/quitar, datos_envio, datos_facturacion, cotizar, subtotal incompleto, quoteId y huellas, resumen del servidor con responder(quoteIdMostrado), lastQuote e invalidación, TTL de tres días, subida de imagen por puerto, customization.declined y errores estructurados opt-in del pricing. Runner con cotizacionMostrada real (F-05). Quitar TEMPORAL ENTREGA 4; conservar TEMPORAL ENTREGA 5. Incluir aviso neutro del límite e imágenes del cliente como referencias. Sin crear pedidos ni lógica corporativa.
+   - **4B, pendiente:** confirmación final posterior, crear_pedido, persistencia transaccional de pedido/contador, relación quoteId→pedido e idempotencia, PDF independiente con alerta de falla y pruebas en emulador. No se implementa en 4A.
 5. **Comprobantes y derivación:** `registrar_comprobante`, `derivar`, escalada aplicada por código y alerta con contexto. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 5` y habilitar `derivar` como cierre conversacional.
 6. **Evaluación completa:** todos los casos, hasta alcanzar los umbrales.
 

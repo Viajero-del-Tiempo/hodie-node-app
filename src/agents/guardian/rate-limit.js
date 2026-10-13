@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-export const RATE_LIMIT_NOTICE = "Por ahora no puedo seguir respondiendo mensajes en este chat.";
+export const RATE_LIMIT_NOTICE = "Estoy recibiendo muchos mensajes seguidos y tengo que hacer una pausa. Escribime de nuevo en un rato y seguimos.";
 export function admitBatch(state, now, config) {
   const next = structuredClone(state);
   const previous = next.guardianRateLimit ?? { admittedAt: [], blocked: false, episodeId: null };

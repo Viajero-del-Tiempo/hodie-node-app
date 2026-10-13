@@ -12,7 +12,8 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024; // 10 MB
  * @returns {Promise<string>} URL segura de la imagen alojada en Cloudinary
  */
 export function createSignedImageUploader({ config = CLOUDINARY_CONFIG, fetchImpl = fetch, now = Date.now, newId = crypto.randomUUID } = {}) {
-  return async ({ base64, mimetype }, { folder = config.folder, prefix = "custom" } = {}) => {
+  return async ({ base64, mimetype }, { folder = config.folder, prefix = "custom", signal } = {}) => {
+    signal?.throwIfAborted();
     if (!base64 || typeof base64 !== "string") {
       throw new Error("Contenido de imagen en base64 requerido para la subida.");
     }
@@ -66,9 +67,11 @@ export function createSignedImageUploader({ config = CLOUDINARY_CONFIG, fetchImp
     const response = await fetchImpl(uploadEndpoint, {
       method: "POST",
       body: formData,
+      ...(signal ? { signal } : {}),
     });
 
     const data = await response.json();
+    signal?.throwIfAborted();
 
     if (!response.ok || !data.secure_url) {
       const message = data.error?.message || `Fallo en respuesta Cloudinary (HTTP ${response.status})`;
@@ -83,7 +86,7 @@ export function createSignedImageUploader({ config = CLOUDINARY_CONFIG, fetchImp
 
 const signedUpload = createSignedImageUploader();
 // Se conserva el contrato y la carpeta de las imágenes de personalización.
-export const uploadCustomizationImageToCloudinary = image => signedUpload(image);
+export const uploadCustomizationImageToCloudinary = (image, options) => signedUpload(image, options);
 export const uploadCatalogImageToCloudinary = image => signedUpload(image, {
   folder: CLOUDINARY_CONFIG.catalogFolder, prefix: "catalog",
 });

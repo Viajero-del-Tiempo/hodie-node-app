@@ -1,4 +1,5 @@
-export const CART_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+import { CART_TTL_MS } from "../../src/services/cart.service.js";
+export { CART_TTL_MS };
 const HOUR_MS = 60 * 60 * 1000;
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -140,6 +141,9 @@ export function buildInitialState(context = {}, fixtures, { chatId, now }) {
         return {
           productId: line.producto, variantId: line.variante, quantity: line.cantidad,
           packagingType: line.empaque ?? null,
+          // empaque:null del contexto estructurado es una elección guardada.
+          // Omitir la clave representa una decisión todavía pendiente.
+          packaging: { declined: Object.hasOwn(line, "empaque") && line.empaque === null },
           customization: {
             text: line.texto ?? null, imageUrl: null,
             pending: product.customization?.allowed === true && product.customization?.allowsText === true && !line.texto,
@@ -193,12 +197,19 @@ export async function prepareShownQuote(context, world, signal) {
     throw error;
   }
   const state = world.getState();
-  state.lastQuote = {
+  if (world.recordShownQuote) await world.recordShownQuote(quote, { sequence: 0, id: "setup" }, { signal });
+  else state.lastQuote = {
     quoteId: quote.quoteId, cartFingerprint: quote.cartFingerprint, shownAt: world.now() - 1, shownTurn: 0,
   };
   state.messages.push({
     role: "assistant",
     content: typeof quote.summary === "string" ? quote.summary : "Cotización mostrada: " + JSON.stringify(quote),
   });
-  world.setState(state);
+  // El protocolo real puede haber actualizado lastQuote; no sobrescribirlo
+  // con la copia anterior mientras se agrega el resumen de turno cero.
+  const shown = world.getState();
+  if (!world.recordShownQuote) shown.lastQuote = state.lastQuote;
+  shown.lastActivityAt = shown.lastQuote.shownAt;
+  shown.messages = state.messages;
+  world.setState(shown);
 }

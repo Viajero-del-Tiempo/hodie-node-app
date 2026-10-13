@@ -12,6 +12,8 @@ import { deterministicChecks, aggregateResults } from "./checks.js";
 import { createStubJudge, createLLMJudge } from "./judge.js";
 import { checkToolSpecification } from "./tool-names.js";
 import { writeReport } from "./report.js";
+import { evaluationMetrics, turnModelCalls } from "./metrics.js";
+import { parseAgentThinkingBudget, resolveAgentModelConfig } from "../../src/agents/consultation/model-config.js";
 import { enableMemoryOnly } from "./production-guard.js";
 import { emptyModelUsage, readModelUsage, sumModelUsage, modelUsageSince } from "../../src/utils/model-usage.util.js";
 
@@ -19,6 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const errorDiagnostic = (error, location = {}) => ({
   code: error.code ?? "EVALUATION_ERROR", message: error.message,
   ...(typeof error.rawExcerpt === "string" ? { rawExcerpt: error.rawExcerpt.slice(0, 300) } : {}),
+  ...(error.interruptedPhase ? { interruptedPhase: error.interruptedPhase } : {}),
   ...location,
 });
 
@@ -44,9 +47,14 @@ async function runRepetition(item, fixtures, options, number) {
     world.initialize(initial);
     initialized = true;
     factoryStarted = true;
-    agent = assertAgent(await withTimeout(signal => options.createAgent({ world, transport, signal }), options.timeoutMs, "AGENT_SETUP_TIMEOUT"));
+    agent = assertAgent(await withTimeout(signal => options.createAgent({ world, transport, signal,
+      ...(options.agentThinkingBudget !== undefined ? { thinkingBudget: options.agentThinkingBudget } : {}) }), options.timeoutMs, "AGENT_SETUP_TIMEOUT"));
     result.agentKind = agent.kind;
     result.agentModelInjected = agent.metadata?.modelInjected === true;
+    result.agentConfiguration = { model: agent.metadata?.model ?? null,
+      thinking: agent.metadata?.thinking ?? { mode: agent.kind === "trivial" ? "not_applicable" : "unknown",
+        thinkingBudget: null, source: "adapter" },
+      ...(agent.metadata?.requestedThinking ? { requestedThinking: structuredClone(agent.metadata.requestedThinking) } : {}) };
     try {
       await withTimeout(signal => prepareShownQuote(item.input.context, world, signal), options.timeoutMs, "QUOTE_SETUP_TIMEOUT");
     } catch (error) {
@@ -88,7 +96,10 @@ async function runRepetition(item, fixtures, options, number) {
             if (incoming[index]) incoming[index].content = message.text;
           }
         }, options.timeoutMs);
-      } catch (error) { failure = error; }
+      } catch (error) {
+        failure = error;
+        if (error.code === "TURN_TIMEOUT") error.interruptedPhase = world.getExecutionPhase();
+      }
       finally { transport.endTurn(); }
       const outgoing = transport.getOutgoing().filter(message => message.turn === number);
       const sent = outgoing.map(message => ({
@@ -102,9 +113,12 @@ async function runRepetition(item, fixtures, options, number) {
       state.messages.push(...[...incoming, ...sent].map(message => ({ role: message.role, content: message.content })));
       state.lastActivityAt = clock.now();
       world.setState(state);
+      const timeoutDiagnostic = failure?.code === "TURN_TIMEOUT" ? failure
+        : agentDiagnostics.find(diagnostic => ["AGENT_TIMEOUT", "GUARDIAN_TIMEOUT", "TURN_TIMEOUT"].includes(diagnostic.code));
       result.turns.push({
         number, incoming, outgoing, handoffBefore, handoffAfter: state.humanHandoffRequired,
         durationMs: performance.now() - startedAt, usage, agentDiagnostics, guardian, snapshotAfter: world.snapshot(),
+        ...(timeoutDiagnostic ? { timeout: { code: timeoutDiagnostic.code, interruptedPhase: timeoutDiagnostic.interruptedPhase } } : {}),
       });
       if (failure) throw failure;
       clock.advance(1000);
@@ -164,6 +178,7 @@ async function runRepetition(item, fixtures, options, number) {
       catch (error) { result.status = "error"; result.diagnostics.push(errorDiagnostic(error)); }
     }
     result.modelUsage.agent = factoryStarted ? readModelUsage(agent, { knownZero: agent?.kind === "trivial" }) : emptyModelUsage();
+    for (const turn of result.turns) turn.modelCalls = turnModelCalls(result.modelUsage.agent, turn);
     result.modelUsage.evaluator = modelUsageSince(evaluatorBefore, readModelUsage(options.judge, { knownZero: options.judge.kind === "stub" }));
   }
 }
@@ -171,8 +186,10 @@ async function runRepetition(item, fixtures, options, number) {
 export async function runEvaluation(dataset, {
   createAgent, judge, timeoutMs = 60000, now = Date.now(), caseIds = [], categories = [],
   mediaResolver = null, onRepetition = () => {},
+  agentThinkingBudget,
 } = {}) {
   enableMemoryOnly();
+  agentThinkingBudget = parseAgentThinkingBudget(agentThinkingBudget, "agentThinkingBudget");
   if (dataset.errors.length || dataset.warnings.length) {
     throw Object.assign(new Error("El archivo no es válido"), { code: "INVALID_FILE", diagnostics: [...dataset.errors, ...dataset.warnings] });
   }
@@ -188,9 +205,9 @@ export async function runEvaluation(dataset, {
     fileVersion: dataset.version, repetitions: 3, fullSuite: selected.length === dataset.cases.length,
     totalInFile: dataset.cases.length, categories: dataset.categories,
     node: process.version, agentKind: null, judgeKind: judge.kind, judge: judge.metadata ?? { kind: judge.kind },
-    mediaComplete: true,
+    mediaComplete: true, agentThinkingBudgetOverride: agentThinkingBudget ?? null,
   };
-  const options = { createAgent, judge, timeoutMs, now, mediaResolver, filename: dataset.filename };
+  const options = { createAgent, judge, timeoutMs, now, mediaResolver, agentThinkingBudget, filename: dataset.filename };
   const judgeUsageBefore = readModelUsage(judge, { knownZero: judge.kind === "stub" });
   const cases = [];
   for (const item of selected) {
@@ -206,6 +223,8 @@ export async function runEvaluation(dataset, {
   metadata.agentKind = kinds.length === 1 ? kinds[0] : kinds.length ? "mixed" : "unknown";
   metadata.agentModelInjected = cases.some(item => item.repetitions.some(result => result.agentModelInjected));
   metadata.judgeModelInjected = judge.metadata?.modelInjected === true;
+  metadata.agentConfigurations = [...new Map(cases.flatMap(item => item.repetitions)
+    .filter(run => run.agentConfiguration).map(run => [JSON.stringify(run.agentConfiguration), run.agentConfiguration])).values()];
   // Un caso con imágenes no ejecutado tampoco certifica cobertura visual.
   metadata.mediaComplete = selected.every((item, index) => {
     if (!Array.isArray(item.input?.turns)) return false;
@@ -229,6 +248,7 @@ export async function runEvaluation(dataset, {
     agent: sumModelUsage(cases.flatMap(item => item.repetitions.map(result => result.modelUsage.agent))),
     evaluator: modelUsageSince(judgeUsageBefore, readModelUsage(judge, { knownZero: judge.kind === "stub" })),
   };
+  Object.assign(summary, evaluationMetrics(cases));
   return { metadata, summary, cases };
 }
 
@@ -279,12 +299,14 @@ export async function main(args = process.argv.slice(2)) {
       output: { type: "string", default: resolve(HERE, "results") }, media: { type: "string" },
       now: { type: "string" }, "timeout-ms": { type: "string", default: "60000" },
       "judge-timeout-ms": { type: "string", default: "60000" },
+      "agent-thinking-budget": { type: "string" },
     }, strict: true, allowPositionals: false,
   });
   if (values.help) {
-    console.log("npm run test:eval -- [--validate] [--agent trivial|real|ruta] [--judge stub|llm] [--case ID] [--cases ID,ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
+    console.log("npm run test:eval -- [--validate] [--agent trivial|real|ruta] [--agent-thinking-budget N] [--judge stub|llm] [--case ID] [--cases ID,ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
     return 0;
   }
+  const agentThinkingBudget = parseAgentThinkingBudget(values["agent-thinking-budget"], "--agent-thinking-budget");
   enableMemoryOnly();
   const dataset = await loadCases(resolve(values.file));
   const spec = checkToolSpecification(await readFile(resolve(HERE, "../../docs/SPEC-agente.md"), "utf8"));
@@ -313,17 +335,19 @@ export async function main(args = process.argv.slice(2)) {
     const dotenv = await import("dotenv");
     dotenv.config({ quiet: true });
   }
+  if (values.agent !== "trivial") resolveAgentModelConfig({ thinkingBudget: agentThinkingBudget });
   const adapter = await loadAgent(values.agent);
   const judge = values.judge === "stub" ? createStubJudge() : await createLLMJudge({ timeoutMs: judgeTimeoutMs });
   const report = await runEvaluation(dataset, {
-    createAgent: adapter.factory, judge, timeoutMs, now,
+    createAgent: adapter.factory, judge, timeoutMs, now, agentThinkingBudget,
     caseIds, categories: values.category ?? [],
     mediaResolver: await loadMediaResolver(values.media, dataset),
     onRepetition: result => console.log(JSON.stringify(result)),
   });
   report.metadata.agentModule = adapter.module;
   const directory = await writeReport(report, values.output);
-  console.log(JSON.stringify({ directory, ...report.summary }, null, 2));
+  const modelUsage = Object.fromEntries(Object.entries(report.summary.modelUsage).map(([owner, { callDetails: _details, ...counts }]) => [owner, counts]));
+  console.log(JSON.stringify({ directory, agentConfigurations: report.metadata.agentConfigurations, ...report.summary, modelUsage }, null, 2));
   return report.summary.exitCode;
 }
 

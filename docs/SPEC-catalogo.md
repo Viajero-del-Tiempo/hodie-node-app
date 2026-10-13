@@ -99,6 +99,7 @@ Cada ítem de `orders` guarda una foto de la variante al momento de la compra, p
   sku, price, quantity,
   selectedPackaging: { type, name, price } | null,
   customization, customizationImageUrl, customizationPending
+  customizationDeclined?   // true solo ante rechazo explícito; ausente en checkout actual
 }
 ```
 
