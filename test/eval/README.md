@@ -581,3 +581,235 @@ Documentación:
 - docs/SPEC-catalogo.md
 
 Scripts: package.json.
+
+
+## Entrega 4B: pedidos y recuperación de PDF
+
+Implementada para revisión del dueño. No se ejecutaron tests ni evaluaciones al
+preparar esta entrega. El transporte real, el router y WhatsApp siguen intactos.
+
+Confirmación: el servidor agrega la pregunta final después de mostrar una
+cotización completa. Acepta afirmaciones completas en un lote posterior,
+incluidos agregados neutros configurables; rechaza preguntas, cambios y un sí
+a otra pregunta. Tras una consulta sin cambios, agrega solo la pregunta corta.
+El mensaje de pedido y pago sale textual del servidor, sin datos bancarios en
+las respuestas de herramientas que recibe el modelo.
+
+La creación es transaccional e idempotente. El PDF se procesa por un trabajo
+persistido fuera del turno: se recuperan automáticamente los trabajos cuyo
+envío no comenzó; un envío incierto requiere alerta y reenvío por una persona.
+En el runner, banco, persistencia, PDF y WhatsApp son puertos en memoria. Los
+trabajos falsos se drenan después del turno, con duración separada. No usa
+Firestore de producción ni genera un PDF con la cuenta bancaria real.
+
+El encabezado del YAML manda: texto:null es rechazo explícito de personalización
+y empaque:null es sin empaque. K-01/K-02 prueban confirmación e idempotencia,
+K-03 una aceptación con cambios, K-04 una consulta antes de confirmar y K-05
+un sí a mostrar el resumen que todavía no autoriza registrar el pedido.
+El runner no cambia ni corrige esos casos.
+
+Configuración exclusiva del agente nuevo:
+
+- AGENT_ORDER_AFFIRMATIONS y AGENT_ORDER_NEUTRAL_ADDITIONS: arreglos JSON de
+  frases completas; se validan al construir el agente.
+- AGENT_MODEL_CALL_TIMEOUT_MS: entero entre 1000 y 60000, default 20000.
+  El flag --agent-model-call-timeout-ms tiene prioridad y no cambia .env.
+- Un único reintento compartido entre timeout y errores transitorios del proveedor
+  (HTTP 429, 5xx y cortes/reinicios de red). El timeout exige plazo + 5000 ms;
+  los transitorios esperan 500 ms cancelables y exigen además ese tiempo.
+  Con el default, 25 s y 25,5 s respectivamente; se revalida el margen tras esperar.
+  Otros 4xx de validación/autenticación, argumentos y errores desconocidos no
+  se reintentan. maxRetries:0 del SDK evita reintentos ocultos.
+- Se mantienen thinkingBudget:512 y el límite total de 60 s con multimedia.
+  El informe muestra configuración (incluida transientRetryDelayMs), cada intento,
+  reintentos y timeouts. report.json/trace.jsonl guardan errorClass en cada intento
+  fallido, HTTP y networkCode si existen; summary.modelAttempts.agent.byErrorClass
+  cuenta las clases. No guarda mensajes crudos ni URLs del SDK; tokens sin
+  metadatos quedan desconocidos, sin inventar consumo.
+
+### Suites para Arnaldo
+
+Desde la raíz de hodie-node-app. Las suites del checkout compartido deben
+correrse antes y después de aplicar 4B; no usar test:integration, que habilita
+Firestore de producción.
+
+```bash
+node --test test/test_order_variant_pricing.js test/test_order_variant_stock.js
+npm run test:customer:unit
+npm run test:catalog:unit
+npm run test:agent:purchase:unit
+npm run test:agent:unit
+npm run test:guardian:unit
+npm run test:eval:unit
+```
+
+La prueba de contrato de compra verifica pricing, mensajes, snapshot y contador
+compartidos; la del PDF verifica la configuración inyectada sin cambiar defaults.
+Las suites nuevas cubren afirmaciones/agregados, pregunta corta, evidencia del
+lote, concurrencia, rollback, recuperación tras commit, mensaje bancario exclusivo
+del servidor, stock agregado, envíos PDF inciertos y timeout/reintento con reloj
+inyectado. No esperan 20 s reales.
+
+Emulador: dejar corriendo el entorno local en una terminal.
+
+```bash
+npm run catalog:local
+```
+
+En otra terminal, ejecutar contra ese emulador:
+
+```bash
+npm run test:agent:orders:emulator
+npm run test:integration:emulator
+```
+
+El script comprueba proyecto/host antes de conectar. Las pruebas 4B usan datos
+aislados y un contador propio. Incluyen cinco confirmaciones simultáneas del mismo
+quoteId, cotizaciones distintas que comparten contador, concurrencia con el
+contador del checkout web, rollback después de preparar escrituras y lectura del
+pedido por las rutas reales de admin y Mis pedidos. Verifican también el acceso
+denegado a otro cliente y la recuperación de trabajos PDF. No envían WhatsApp real.
+
+### Evaluaciones para Arnaldo
+
+Casos objetivo 4B y F-05; tres repeticiones por caso, juez real:
+
+```bash
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases K-01,K-02,K-03,K-04,K-05,F-05
+```
+
+Regresión 4A:
+
+```bash
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases P-07,C-03,Q-01,Q-02,Q-03,Q-04,Q-05,M-01,M-02,M-03,M-04,M-05,M-06,F-01,F-02,F-03,F-04,F-05,E-01,E-02
+```
+
+Regresión de consulta y guardián (C-03 está en la corrida 4A):
+
+```bash
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-01,C-02,C-04,P-01,P-02,P-03,P-04,P-05,POL-01,POL-02,POL-03,POL-04,POL-05,POL-06,POL-07,POL-08,O-01,O-05,H-02,CH-01,CH-02,SEC-01,SEC-02,SEC-03,SEC-04,SEC-05,SEC-06,P-06,S-10,S-11,S-12
+```
+
+Para fijar explícitamente el plazo aprobado, añadir
+--agent-model-call-timeout-ms 20000 a cualquiera de las corridas. El juez stub
+sigue siendo diagnóstico y no aprueba criterios must/must_not ni umbrales.
+
+### Archivos tocados en 4B
+
+Rutas relativas a hodie-node-app:
+
+```text
+docs/CONTEXT.md
+docs/SPEC-agente.md
+firestore.indexes.json
+package.json
+scripts/test-catalog-emulator.js
+src/agents/consultation/agent.js
+src/agents/consultation/confirmations.js
+src/agents/consultation/eval-adapter.js
+src/agents/consultation/model-invoker.js
+src/agents/consultation/order-confirmation.config.js
+src/agents/consultation/purchase-tools.js
+src/agents/consultation/server-context.js
+src/agents/consultation/technical-failure.js
+src/agents/consultation/terminal.js
+src/agents/consultation/tool-registry.js
+src/agents/guardian/media.js
+src/agents/guardian/runtime.js
+src/agents/guardian/session.js
+src/agents/prompts/agente.md
+src/config/llm.js
+src/services/cart.service.js
+src/services/catalog.service.js
+src/services/order-confirmation.repository.js
+src/services/order-confirmation.service.js
+src/services/order-payment.service.js
+src/services/order-pdf-job.service.js
+src/services/order-persistence.service.js
+src/services/order-quote.service.js
+src/services/pdf.service.js
+src/utils/model-usage.util.js
+test/eval/README.md
+test/eval/fake-whatsapp.js
+test/eval/initial-state.js
+test/eval/memory-world.js
+test/eval/metrics.js
+test/eval/report.js
+test/eval/run-eval.js
+test/fixtures/agent-bank.json
+test/helpers/consultation-fixtures.js
+test/helpers/customer-firestore.js
+test/helpers/guardian-fixtures.js
+test/helpers/order-confirmation-memory.js
+test/helpers/purchase-fixtures.js
+test/run-unit.js
+test/test_agent_cart.js
+test/test_agent_checkout_contract.js
+test/test_agent_model_invoker.js
+test/test_agent_order_confirmation.js
+test/test_agent_order_creation.js
+test/test_agent_order_pdf_jobs.js
+test/test_agent_order_transactions.js
+test/test_agent_purchase_runner.js
+test/test_agent_quotes.js
+test/test_consultation_agent.js
+test/test_consultation_runner.js
+test/test_consultation_tools.js
+test/test_eval_context.js
+test/test_eval_model_usage.js
+test/test_guardian_runtime.js
+test/test_order_billing_pdf.js
+```
+
+### Corrección 4B: fallas técnicas
+
+La primera falla no recuperada cierra con el aviso fijo y conserva el bot activo.
+La segunda consecutiva activa handoff y registra una única solicitud de alerta
+pendiente para whatsapp.js. Un cierre válido reinicia la racha técnica, aunque
+entendido sea false; la racha y el ID del último lote viven en el checkpoint.
+No se mezclan con incomprensiones. Tras un commit prevalece la recuperación del
+pago/PDF, y el aviso técnico no reemplaza el mensaje del pedido.
+
+El runner conserva consumos y trazas, y marca esas repeticiones como error
+técnico sin evaluar calidad. Clase de error y HTTP se registran si están
+disponibles, sin mensajes crudos del SDK ni el prompt del agente.
+
+Tests para el dueño:
+
+```bash
+npm run test:agent:unit
+npm run test:guardian:unit
+npm run test:agent:purchase:unit
+npm run test:eval:unit
+```
+
+Incluyen aviso aislado, segunda falla/alerta única, silencio posterior, reinicio
+tras un cierre válido, restauración de estado, registro único por lote, reintento
+exitoso sin aviso técnico y recuperación del pago ante fallas posteriores al
+commit. Las expectativas de derivación inmediata se reemplazan por los controles
+de la política aprobada. No se modifican YAML, checks, umbrales ni pensamiento.
+
+La ampliación a transitorios agrega 503→éxito, 429→reintento, 400→sin reintento,
+falta de margen, cortes de red con causa o envoltura del SDK, revalidación después
+de esperar, máximo compartido con timeout y cancelación durante la espera.
+Dos intentos fallidos cuentan un solo turno técnico; el segundo turno deriva una
+vez. El informe se verifica con intentos 503/429 agotados y sin mensajes privados.
+La prueba anterior de fallo no recuperable usa ahora 400: un 503 debe reintentarse;
+se conservan sus controles de consumo, error técnico, aviso fijo y ausencia de
+evaluación de calidad. Todo el tiempo de reintento se simula con reloj inyectado.
+
+Archivos de esta ampliación: src/agents/consultation/model-invoker.js y agent.js,
+src/utils/model-usage.util.js; test/eval/metrics.js, report.js y run-eval.js;
+test/test_agent_model_invoker.js, test/test_eval_model_usage.js,
+test/test_consultation_agent.js y test/test_consultation_runner.js (metadata);
+docs/CONTEXT.md, docs/SPEC-agente.md y este README.
+
+Para revisar el caso diagnosticado y el que realmente tuvo el reintento:
+
+```bash
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases C-02,POL-08
+```
+
+Las selecciones de regresión 4A, consulta/guardián y 4B son las anteriores.
+El asistente no ejecutó estas pruebas ni esta evaluación.
+

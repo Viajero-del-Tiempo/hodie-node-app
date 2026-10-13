@@ -166,7 +166,10 @@ test("empaque pendiente no emite quoteId aunque envío y facturación estén com
     f.world.setCart(old); // Formato anterior con null ambiguo: no inferir elección.
     const pending = await f.call("carrito_ver");
     assert.equal(pending.lines[0].packaging.declined, false);
-    assert.deepEqual(pending.pendientes.map(item => item.tipo), ["personalizacion", "empaque"]);
+    // texto:null del contexto ya decidió sin personalización. Solo el empaque
+    // se volvió ambiguo al quitar su marcador de decisión guardada.
+    assert.deepEqual(pending.pendientes.map(item => item.tipo), ["empaque"]);
+    assert.equal(pending.lines[0].customization.declined, true);
     const incomplete = await f.call("cotizar"); assert.equal(incomplete.code, "DATO_FALTANTE");
     assert.equal(incomplete.confirmable, false); assert.equal(incomplete.quoteId, undefined);
     assert.equal(f.world.quotes.list().length, 0);

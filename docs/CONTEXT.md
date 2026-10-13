@@ -72,7 +72,7 @@ en el código. Leé todo antes de actuar.
 - La compra web exige login con OTP por WhatsApp.
 - Cantidad de 1 a 100; más de 100 = pedido corporativo → handoff.
 - Política de derivación: solo si el cliente pide una persona, hay un
-  reclamo, pedido corporativo, falla técnica, o 4 intentos seguidos sin
+  reclamo, pedido corporativo, dos fallas técnicas consecutivas del agente nuevo, o 4 intentos seguidos sin
   entenderlo (1: reformular; 2 y 3: menú contextual o repregunta de dato + ofrecer asesor;
   4: derivar manteniendo quoteContext). Si un producto está sin stock en cotización,
   ofrecer alternativas similares disponibles (stock > 0) y ofrecer asesor, sin
@@ -688,7 +688,8 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   Una falta de coincidencia devuelve la misma respuesta genérica. No se inventan
   fechas ni se deduce antigüedad de números; pedidos ambiguos requieren el número.
 - responder actualiza entendido y su contador, sin aplicar todavía la escalada.
-  Falla técnica o falta de cierre deriva por código con mensaje fijo y estado.
+  La política original de derivación técnica inmediata quedó reemplazada por
+  la política de dos fallas consecutivas del agente nuevo, documentada al final.
   El timeout interno es 50 s (runner: 60 s). Derivar como herramienta, índice y
   alerta al admin corresponden a entrega 5; no se simulan como implementados.
 - Runner: --agent real usa el adaptador nuevo; --cases permite listas separadas
@@ -944,3 +945,132 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   al código. Sin cambios a YAML, checks, umbrales, TEMPORAL ENTREGA 5 o 60 s.
 - Tests en test_agent_cart y test_consultation_agent, incluidos en los scripts
   existentes; el dueño corre las suites y la nueva evaluación.
+
+## Agente, entrega 4B: pedidos y PDF durable (pendiente de verificación del dueño)
+
+- `crear_pedido(quoteId)` requiere la cotización vigente mostrada y una afirmación
+  en un lote posterior a la pregunta final. El servidor valida el mensaje completo,
+  incluidas las ráfagas. Preguntas, cambios y afirmaciones que responden a otra
+  pregunta no autorizan la compra. Las listas JSON `AGENT_ORDER_AFFIRMATIONS` y
+  `AGENT_ORDER_NEUTRAL_ADDITIONS` son configurables y validadas; por defecto admiten
+  afirmaciones naturales y agregados neutros como "gracias" o "el pedido".
+- Una consulta sobre una cotización vigente sin cambios se responde y rearma
+  solo con la pregunta corta de confirmación. Un cambio requiere cotizar y
+  mostrar el resumen nuevo. Cualquier otra pregunta desactiva la autorización
+  anterior. El modelo no puede sustituir la evidencia del cliente.
+- `order-confirmation.repository` recibe una conexión explícita; no inicializa
+  Firebase. La transacción lee carrito, cotización, confirmación, productos,
+  categorías y contador antes de escribir pedido, relación quoteId→orderId,
+  contador y trabajo PDF, y borrar carrito/confirmación. Recalcula precios y stock
+  con el pricing compartido. No descuenta stock. Solicitudes simultáneas o
+  repetidas del mismo quoteId devuelven el mismo pedido; repetir un quoteId viejo
+  no borra un carrito nuevo. La relación durable permite recuperar un commit
+  aunque falle la respuesta o el proceso reinicie.
+- Snapshot y formato de número se extraen de `order-persistence` para reutilizar
+  las mismas funciones. El contador sigue siendo `counters/orderNumber`, también
+  para el checkout web, que conserva su flujo, validaciones y mensajes.
+  Solo las pruebas inyectan un contador aislado. Identidad y normalización de
+  teléfono compartidas: el teléfono verificado procede del transporte, nunca
+  del modelo. Los pedidos WhatsApp verificados se leen mediante los endpoints
+  existentes de admin y Mis pedidos; un teléfono escrito a mano queda sin verificar.
+- El mensaje de pedido lo arma `order-payment.service` con la configuración
+  bancaria existente: número, total, instrucciones y verificación manual.
+  `responder` lo envía textualmente, en lugar del texto del modelo. El resultado
+  público de `crear_pedido` no incluye datos bancarios. Fixtures bancarios ficticios
+  en `test/fixtures/agent-bank.json`; el PDF admite inyección de esa configuración
+  en pruebas y conserva los valores por defecto en el checkout actual.
+- `order_pdf_jobs` persiste estado, fase, lease y entrega del mensaje/PDF.
+  `order_alerts` guarda solicitudes idempotentes de alerta; nunca las envía el
+  agente ni el trabajador. El PDF usa el procesador existente fuera del plazo
+  del turno. Trabajos sin envío iniciado se recuperan automáticamente; si un
+  reinicio deja un envío iniciado sin confirmación, queda para revisión y reenvío
+  por una persona. Las fallas conservan `pdfDelivered:false`; no se repite la compra.
+- El trabajador tiene inicio/parada explícitos y sigue desconectado del arranque
+  productivo. En la puesta en marcha conjunta hay que iniciarlo con el transporte
+  real y conectar el despacho de `order_alerts` exclusivamente a `whatsapp.js`.
+  Desplegar los índices de `order_pdf_jobs` de `firestore.indexes.json` con
+  `firebase deploy --only firestore:indexes` en esa puesta en marcha. El router,
+  WhatsApp y los agentes productivos actuales no se modifican en 4B.
+- Llamadas del agente nuevo: 20 s por defecto, configurable mediante
+  `AGENT_MODEL_CALL_TIMEOUT_MS` o `--agent-model-call-timeout-ms` (entero de 1000
+  a 60000). Un único reintento compartido entre timeout, HTTP 429/5xx y cortes
+  transitorios de red. El timeout reintenta si quedan al menos el plazo de llamada
+  más 5 s (25 s con el default). Los errores transitorios del proveedor esperan
+  500 ms cancelables y requieren además ese tiempo (25,5 s); el margen se vuelve
+  a comprobar después de esperar. Otros 4xx y errores de argumentos/autenticación
+  no se reintentan. `maxRetries:0` del SDK solo para el agente nuevo.
+  El informe cuenta cada intento y registra `errorClass`, HTTP y código de red
+  cuando existen, sin mensajes crudos del SDK; los tokens sin metadatos se dejan
+  desconocidos. Se conserva thinkingBudget:512 y el límite de 60 s por turno,
+  incluyendo multimedia; un reloj monotónico limita el tiempo real también
+  cuando el runner usa un reloj virtual para las ráfagas.
+- En el runner, `texto:null` y `empaque:null` son decisiones explícitas sin
+  personalización/empaque, tal como documenta el encabezado del YAML. K-01 a K-05
+  usan herramientas reales con persistencia y transporte en memoria; los trabajos
+  PDF falsos se drenan después del turno. Las pruebas del emulador cubren
+  concurrencia, rollback, contador compartido y contratos de lectura web/WhatsApp.
+  Comandos y archivos en `test/eval/README.md`. Los resultados los obtiene el dueño.
+- No se edita conversations.yaml, checks ni umbrales, ni TEMPORAL ENTREGA 5.
+  Siguen pendientes la política TTL de Firestore para carts y la limpieza de
+  imágenes huérfanas en Cloudinary, junto con la conexión productiva final.
+
+## Corrección 4B: política de fallas técnicas consecutivas
+
+- Decisión de Arnaldo: la primera falla técnica del turno cierra por código con
+  "Perdón, tuve un inconveniente para responderte. ¿Me lo escribís de nuevo?".
+  No activa handoff, no cuenta como incomprensión ni solicita alerta. El bot
+  continúa atendiendo. La segunda falla consecutiva activa handoff y conserva
+  el mensaje actual de derivación, con una única solicitud pendiente en
+  `guardianAlerts` (`TECHNICAL_FAILURE`, `delivered:false`). La envía solamente
+  `whatsapp.js` al conectar el agente nuevo en la puesta en marcha conjunta.
+- `consecutiveTechnicalFailures` y `lastTechnicalFailure` se guardan en el
+  checkpoint, separados de `consecutiveMisunderstandings`. Un cierre exitoso
+  reinicia la racha técnica, también con entendido:false. No se reinicia solo
+  por una sesión nueva y sobrevive a restaurar el runtime. El ID del lote evita
+  duplicarla si falla el envío y el guardián recoge el mismo error. El índice
+  de handoff se actualiza por un puerto del servidor; no se conecta al router
+  ni al WhatsApp productivo actual.
+- El aviso invalida la autorización de compra y las confirmaciones mostradas
+  de texto/RUC, sin borrar borradores ni carrito. Un sí a la petición de
+  reescribir no permite usar una confirmación anterior.
+- Un commit de crear_pedido mantiene la recuperación de 4B: nunca se reemplaza
+  su pago por el aviso ni se provoca una derivación técnica de esa compra.
+  Enviar exitosamente el mensaje recuperado reinicia la racha; si la entrega
+  queda incierta, continúa el trabajo durable y la revisión humana prevista.
+- El runner marca `error` cualquier cierre técnico, incluyendo errores del
+  proveedor y falta de cierre válido. Conserva los consumos y la conversación,
+  y no evalúa calidad en esa repetición. Código, fase, clase de error y HTTP
+  quedan en report/trace; no se registran mensajes crudos del SDK ni prompts.
+- Diagnóstico del archivo provisto por el dueño:
+  `2026-10-13T11-07-16-310Z-c39772b4`: C-02/2 muestra una única llamada fallida
+  de 658,8 ms, AGENT_ERROR, sin reintento. No guarda el motivo original del SDK.
+  El timeout de 19.999,5 ms y el único reintento corresponden a POL-08/3,
+  cuyo segundo intento se completó en 10.186,6 ms. Son datos leídos del informe
+  existente, no una evaluación ejecutada por el asistente.
+- Tests: aviso aislado, segunda falla y alerta única, silencio posterior,
+  reinicio con un cierre válido, restauración del estado, registro único por
+  lote, timeout sin efectos tardíos, compra confirmada con pago conservado e
+  invalidación de autorizaciones anteriores. Los ejecuta el dueño. Se mantienen
+  YAML, checks, umbrales, pensamiento 512, plazo total de 60 s y el reintento
+  aprobado de 20 s. TEMPORAL ENTREGA 5 queda intacto.
+
+### Reintento de errores transitorios del proveedor
+
+- Decisión posterior de Arnaldo: el único reintento por llamada también cubre
+  HTTP 429, HTTP 5xx y errores transitorios de red, con 500 ms de espera incluidos
+  en el tiempo restante. No aumenta el plazo de 60 s ni el pensamiento 512.
+  No se inicia un segundo intento si faltan espera, plazo completo y 5 s de margen;
+  cancelar el turno elimina la espera y prohíbe nuevas llamadas o envíos.
+- La clasificación usa HTTP y códigos de red de la cadena `cause`. El SDK
+  instalado descarta esa cadena en algunos errores de fetch; solo sus firmas
+  conocidas de transporte sirven de respaldo. Los errores de solicitud y los
+  desconocidos no se reintentan. No se guardan mensajes crudos ni URLs del SDK.
+- `report.json` y `trace.jsonl` registran la clase de cada intento fallido
+  (`MODEL_TIMEOUT`, `RATE_LIMIT`, `PROVIDER_5XX`, `NETWORK`, `HTTP_4XX`,
+  `INVALID_REQUEST`, `TURN_TIMEOUT`, `CANCELLED` u `OTHER`). El resumen agrega
+  conteos por clase; cada intento cuenta como llamada, con tokens desconocidos
+  si el proveedor no los informó.
+- Agotar ambos intentos cuenta una sola falla técnica del turno: aviso fijo
+  la primera vez y derivación ante el segundo turno consecutivo. Un reintento
+  exitoso cierra normalmente y reinicia la racha. La recuperación tras un commit
+  sigue teniendo prioridad. Los tests los ejecuta el dueño.

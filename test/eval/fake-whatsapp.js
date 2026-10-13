@@ -56,6 +56,12 @@ export function createFakeWhatsApp({ mediaResolver = null } = {}) {
       if (typeof source !== "string" || !source) throw new Error("Falta la fuente de la imagen");
       outgoing.push({ id: "send-" + (outgoing.length + 1), turn: currentTurn, type: "image", source, caption });
     },
+    async sendPdf(_recipient, _path, order) {
+      assertOpen();
+      outgoing.push({ id: "send-" + (outgoing.length + 1), turn: currentTurn, type: "document",
+        source: "memory://orders/" + order.id + ".pdf", caption: "Resumen del pedido #" + order.orderNumber });
+      return true;
+    },
     getOutgoing: () => structuredClone(outgoing),
     close() { attachments.clear(); closed = true; },
   };

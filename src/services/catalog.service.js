@@ -97,8 +97,8 @@ export function createCatalogService({ repository, now = Date.now, cacheTtlMs = 
     async getProductForPricing(id, options = {}) {
       return clone(await repository.getProduct(id, options));
     },
-    async getCategoryForPricing(id) {
-      return clone(await repository.getCategory(id));
+    async getCategoryForPricing(id, options = {}) {
+      return clone(await repository.getCategory(id, options));
     },
     setProductVariants: (transaction, id, variants) => repository.setProductVariants(transaction, id, variants),
     async getCategories() {

@@ -7,8 +7,11 @@ import { normalizePurchasePhone } from "./order-access.js";
 import { acceptsPending, acceptsRucMismatch, wasProvided, pendingTextFor } from "./confirmations.js";
 import { renderQuoteSummary } from "./quote-summary.js";
 import { inspectCartProgress, subtotalVersion } from "./cart-progress.js";
+import { createOrderConfirmationService } from "../../services/order-confirmation.service.js";
+import { createOrderConfirmationConfig } from "./order-confirmation.config.js";
+import { acceptsOrderConfirmation } from "./confirmations.js";
 
-export function createPurchaseTools(runtime) {
+export function createPurchaseTools(runtime, { confirmationConfig = createOrderConfirmationConfig() } = {}) {
   const chatId = runtime.getState().whatsappChatId;
   // Estado efímero del turno: no se guarda en el carrito ni en el checkpoint.
   let turnDataBlocks = null;
@@ -28,11 +31,12 @@ export function createPurchaseTools(runtime) {
       signal?.throwIfAborted();
       turnDataBlocks = null;
       const state = runtime.getState();
-      if (state.lastQuote || state.pendingTextConfirmation || state.pendingRucConfirmation || state.subtotalPending) {
+      if (state.lastQuote || state.pendingOrderConfirmation || state.pendingTextConfirmation || state.pendingRucConfirmation || state.subtotalPending) {
         state.lastQuote = null; state.pendingTextConfirmation = null; state.pendingRucConfirmation = null;
-        state.subtotalPending = null;
+        state.subtotalPending = null; state.pendingOrderConfirmation = null;
         await runtime.setState(state);
       }
+      await runtime.orderRepository.clearConfirmation(chatId, { signal });
     },
     async onChange({ cart, previous, operation, signal }) {
       signal?.throwIfAborted();
@@ -46,13 +50,14 @@ export function createPurchaseTools(runtime) {
           && fingerprint(line) !== fingerprint(previous?.lines.find(old => old.id === line.id) ?? null));
         if (completeChangedLine) subtotalPending = subtotalVersion(cart);
       }
-      const state = runtime.getState(); state.lastQuote = null;
+      const state = runtime.getState(); state.lastQuote = null; state.pendingOrderConfirmation = null;
       if (linesChanged) state.subtotalPending = subtotalPending ?? null;
       const pendingText = pendingTextFor(cart);
       if (state.pendingTextConfirmation?.cartId !== cart.id || state.pendingTextConfirmation?.lineId !== pendingText?.lineId || state.pendingTextConfirmation?.value !== pendingText?.value) state.pendingTextConfirmation = null;
       if (state.pendingRucConfirmation?.cartId !== cart.id || state.pendingRucConfirmation?.input !== cart.billing.ruc || state.pendingRucConfirmation?.legalName !== cart.billing.legalName) state.pendingRucConfirmation = null;
       await runtime.setState(state);
       signal?.throwIfAborted();
+      await runtime.orderRepository.clearConfirmation(chatId, { signal });
       const changedBlocks = [["shipping", "envio"], ["billing", "facturacion"]]
         .filter(([key]) => previous ? fingerprint(cart[key]) !== fingerprint(previous[key])
           : Object.values(cart[key]).some(value => value !== null && value !== undefined))
@@ -67,7 +72,12 @@ export function createPurchaseTools(runtime) {
     },
   });
   const quotes = createOrderQuoteService({ carts, repository: runtime.quoteRepository, chatId, calculatePricing, inspectData,
-    getState: runtime.getState, setState: runtime.setState, renderSummary: renderQuoteSummary, now: runtime.now, getTurn: runtime.getTurnContext });
+    getState: runtime.getState, setState: runtime.setState, renderSummary: renderQuoteSummary, now: runtime.now,
+    getTurn: runtime.getTurnContext, confirmationRepository: runtime.orderRepository });
+  const orders = createOrderConfirmationService({ repository: runtime.orderRepository, chatId, now: runtime.now,
+    getTurn: runtime.getTurnContext, getState: runtime.getState, setState: runtime.setState,
+    normalizePhone: normalizePurchasePhone, acceptsConfirmation: (pending, turn) => acceptsOrderConfirmation(pending, turn, confirmationConfig),
+    inspectProgress: inspectCartProgress, renderSummary: renderQuoteSummary, bankConfig: runtime.bankConfig });
   const data = createPurchaseDataService({ carts, normalizePhone: normalizePurchasePhone,
     async getProfile(context) {
       if (!verifiedPhone()) return null;
@@ -108,8 +118,9 @@ export function createPurchaseTools(runtime) {
         pendientes: progress.pendientes, options: progress.options };
     },
     cotizar: (args, context) => quotes.quote(context, args),
+    crear_pedido: ({ quoteId }, context) => orders.create(quoteId, context),
   };
-  return { carts, quotes,
+  return { carts, quotes, orders,
     handlers: Object.fromEntries(Object.entries(handlers).map(([name, handler]) => [name, async (args, context = {}) => {
       try { return await handler(args, context); } catch (error) { context.signal?.throwIfAborted(); return purchaseError(error); }
     }])),

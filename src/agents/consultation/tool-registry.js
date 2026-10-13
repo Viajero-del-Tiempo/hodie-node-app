@@ -31,6 +31,7 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
     items: object({ productId: string("ID del producto del catálogo."), variantId: string("ID de su variante."),
       quantity: { type: "integer", minimum: 1 }, packagingType: { ...string("Tipo real del empaque; opcional."), nullable: true } },
     ["productId", "variantId", "quantity"]) } }),
+  crear_pedido: object({ quoteId: string("Cotización vigente mostrada. Solo funciona con confirmación del cliente en un lote posterior; el servidor la verifica.") }, ["quoteId"]),
   responder: object({ texto: string("Respuesta final al cliente."), entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
     quoteIdMostrado: string("ID devuelto por cotizar para que el servidor agregue y registre el resumen completo." ) }, ["texto", "entendido"]),
 });
@@ -48,6 +49,7 @@ const descriptions = {
   datos_envio: "Guarda borrador y devuelve carrito, pendientes y options: shippingMethod, shippingCost (cargo del pedido), requiresRecipientDocument y label (flete). Comunicá esos datos en este turno; pendientes guía la próxima pregunta. El teléfono escrito nunca verifica la identidad.",
   datos_facturacion: "Guarda decisión fiscal y borrador. Valida RUC y confirmaciones; solo permite elegir registros del perfil verificado propio.",
   cotizar: "Calcula con pricing del servidor. Con lineas: subtotales por línea y productsTotal informativos, sin carrito ni quoteId. Sin lineas: cotiza el carrito; DATO_FALTANTE da subtotal no confirmable; completo da quoteId y huellas.",
+  crear_pedido: "Registra idempotentemente el pedido tras confirmación posterior. Verifica carrito, precios y stock en transacción. El servidor agrega el mensaje de pedido y pago al responder; nunca copies ni reformules datos bancarios.",
   responder: "Envía un único mensaje y cierra. quoteIdMostrado agrega el resumen del servidor y registra lastQuote solo después del envío.",
 };
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -88,7 +90,7 @@ export function createToolRegistry(handlers) {
     if (!Object.hasOwn(CONSULTATION_SCHEMAS, name)) return { code: "HERRAMIENTA_NO_DISPONIBLE", message: "Esta herramienta no está disponible." };
     const error = validate(CONSULTATION_SCHEMAS[name], args);
     if (error) return error;
-    for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado"]) {
+    for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado", "quoteId"]) {
       if (args[field] !== undefined && (args[field] !== args[field].trim() || args[field].includes("/")
           || [".", ".."].includes(args[field]) || args[field].length > 200)) return invalid(field, "Identificador inválido.");
     }

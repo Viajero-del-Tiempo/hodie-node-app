@@ -2,7 +2,7 @@ import { assertLocalEnvironment } from "../../scripts/local-catalog.config.js";
 import { randomUUID } from "node:crypto";
 import { createTestScope, openCatalogTestFirestore } from "./catalog-firestore.js";
 
-export async function openCustomerTestApi() {
+export async function openCustomerTestApi({ includeAdminOrders = false } = {}) {
   // Estas suites NO admiten producción, aunque esté ALLOW_PROD_FIRESTORE_TESTS.
   assertLocalEnvironment(process.env);
   const context = await openCatalogTestFirestore();
@@ -48,6 +48,7 @@ export async function openCustomerTestApi() {
     app.use(express.json());
     app.use("/users", createUserRouter({ profile: createUserController(profiles), orders: createCustomerOrderController({ orders }) }));
     app.use("/orders", createOrderRouter(createSendOrderController({ processOrder, profiles: checkoutProfiles, notifyStatus: async () => {} })));
+    if (includeAdminOrders) app.use("/admin", (await import("../../src/routes/admin.order.routes.js")).router);
     // Endpoint de control para probar los middlewares reales y la identidad.
     app.get("/test/identity", requireAuth, loadActiveUser, (req, res) => res.json({ uid: req.user.uid }));
     server = await new Promise((resolve, reject) => {

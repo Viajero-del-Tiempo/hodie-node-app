@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { consultationFixture } from "./helpers/consultation-fixtures.js";
+import { consultationFixture, scriptedModel, reply } from "./helpers/consultation-fixtures.js";
 import { evalFixtures, evalCart } from "./helpers/eval-fixtures.js";
 import { CONSULTATION_TOOL_NAMES, createToolRegistry } from "../src/agents/consultation/tool-registry.js";
 import { TOOL_NAMES, checkToolSpecification } from "./eval/tool-names.js";
@@ -9,7 +9,7 @@ import { deterministicChecks } from "./eval/checks.js";
 
 test("registro de consulta es subconjunto canónico y coincide con la especificación", async () => {
   assert.deepEqual(CONSULTATION_TOOL_NAMES, ["buscar_productos", "ver_producto", "enviar_imagenes", "consultar_politicas", "estado_pedido",
-    "carrito_ver", "carrito_agregar", "carrito_modificar", "carrito_quitar", "datos_envio", "datos_facturacion", "cotizar", "responder"]);
+    "carrito_ver", "carrito_agregar", "carrito_modificar", "carrito_quitar", "datos_envio", "datos_facturacion", "cotizar", "crear_pedido", "responder"]);
   assert.ok(CONSULTATION_TOOL_NAMES.every(name => TOOL_NAMES.includes(name)));
   assert.equal(checkToolSpecification(await readFile(new URL("../docs/SPEC-agente.md", import.meta.url), "utf8")).valid, true);
 });
@@ -126,11 +126,12 @@ test("argumentos inválidos quedan registrados sin ejecutar efectos ni borrar el
       ["enviar_imagenes", { productId: "product-a", source: "https://example.test/inventada.png" }, "source"],
       ["estado_pedido", { phoneVerified: true }, "phoneVerified"],
       ["responder", { texto: "Respuesta" }, "entendido"],
+      ["crear_pedido", {}, "quoteId"],
     ]) {
       const result = await f.world.invokeTool(name, args);
       assert.equal(result.code, "ARGUMENTOS_INVALIDOS"); assert.equal(result.field, field);
     }
-    for (const name of ["derivar", "registrar_comprobante", "crear_pedido", "__proto__", "modificar_precio"]) {
+    for (const name of ["derivar", "registrar_comprobante", "__proto__", "modificar_precio"]) {
       assert.equal((await f.world.invokeTool(name, {})).code, "HERRAMIENTA_NO_DISPONIBLE");
     }
     assert.equal((await f.world.invokeTool("responder", { texto: "Respuesta", entendido: true, quoteIdMostrado: "inventado" })).code, "COTIZACION_INEXISTENTE");
@@ -146,8 +147,28 @@ test("esquema del proveedor aprende ejes del catálogo y no anuncia funciones fu
   const dynamic = registry.definitions({ optionNames: ["ejeInventado"] })[0].functionDeclarations;
   assert.deepEqual(Object.keys(dynamic.find(tool => tool.name === "buscar_productos").parameters.properties.opciones.properties), ["ejeInventado"]);
   assert.equal(dynamic.find(tool => tool.name === "responder").parameters.properties.quoteIdMostrado.type, "string");
-  for (const future of ["crear_pedido", "derivar", "registrar_comprobante"]) assert.equal(dynamic.some(tool => tool.name === future), false);
+  assert.deepEqual(dynamic.find(tool => tool.name === "crear_pedido").parameters.required, ["quoteId"]);
+  assert.deepEqual(Object.keys(dynamic.find(tool => tool.name === "crear_pedido").parameters.properties), ["quoteId"]);
+  for (const future of ["derivar", "registrar_comprobante"]) assert.equal(dynamic.some(tool => tool.name === future), false);
   assert.deepEqual(registry.definitions({ onlyTerminal: true })[0].functionDeclarations.map(tool => tool.name), ["responder"]);
+});
+test("responder sin estado de cotización ni confirmación funciona antes y durante un turno", async () => {
+  for (const withTurn of [false, true]) {
+    const f = await consultationFixture({ model: scriptedModel([reply("responder", { texto: "Respuesta de prueba.", entendido: true })]) });
+    try {
+      const state = f.world.getState();
+      for (const field of ["lastQuote", "pendingOrderConfirmation", "pendingOrderReceipt", "pendingTextConfirmation", "pendingRucConfirmation"]) delete state[field];
+      f.world.setState(state);
+      const before = f.world.snapshot();
+      if (withTurn) await f.run();
+      else assert.equal((await f.world.invokeTool("responder", { texto: "Respuesta de prueba.", entendido: true })).code, "OK");
+      assert.equal(f.transport.getOutgoing().length, 1);
+      assert.equal(f.transport.getOutgoing()[0].text, "Respuesta de prueba.");
+      assert.deepEqual(f.world.snapshot(), before);
+      assert.equal(f.world.getEvents().at(-1).result.code, "OK");
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+    } finally { await f.agent.dispose(); f.close(); }
+  }
 });
 test("un intento bloqueado no acredita una herramienta requerida, pero sí detecta un intento prohibido", async () => {
   const f = await consultationFixture();

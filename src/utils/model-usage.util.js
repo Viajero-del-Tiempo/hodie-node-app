@@ -1,5 +1,48 @@
 import { randomUUID } from "node:crypto";
 
+const NETWORK_CODES = new Set(["ECONNRESET", "ECONNREFUSED", "ECONNABORTED", "EPIPE", "ETIMEDOUT",
+  "ENETRESET", "ENETDOWN", "ENETUNREACH", "EHOSTUNREACH", "EAI_AGAIN", "UND_ERR_SOCKET",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]);
+
+// Datos estructurados primero. El SDK instalado pierde cause/code al envolver
+// fetch; solo sus firmas concretas de transporte sirven como respaldo. Nunca
+// se conserva el mensaje, la URL ni el cuerpo de la solicitud en el informe.
+export function classifyModelError(error) {
+  const chain = [], seen = new Set();
+  for (let item = error; item && typeof item === "object" && !seen.has(item) && chain.length < 8; item = item.cause) {
+    seen.add(item); chain.push(item);
+  }
+  const httpStatus = chain.flatMap(item => [item.status, item.statusCode, item.response?.status])
+    .find(value => Number.isInteger(value) && value >= 100 && value <= 599);
+  const result = (errorClass, retryable, details = {}) => ({ errorClass, retryable,
+    ...(httpStatus !== undefined ? { httpStatus } : {}), ...details });
+  if (error?.code === "MODEL_CALL_TIMEOUT") return result("MODEL_TIMEOUT", true);
+  if (["TURN_TIMEOUT", "AGENT_TIMEOUT", "GUARDIAN_TIMEOUT"].includes(error?.code)) return result("TURN_TIMEOUT", false);
+  if (["GUARDIAN_SHUTDOWN", "TURN_CLOSED", "MODEL_ATTEMPT_CLOSED"].includes(error?.code)) return result("CANCELLED", false);
+  if (httpStatus === 429) return result("RATE_LIMIT", true);
+  if (httpStatus >= 500) return result("PROVIDER_5XX", true);
+  // Un 4xx explícito nunca se transforma en reintentable por su causa de red.
+  if (httpStatus >= 400) return result("HTTP_4XX", false);
+  if (chain.some(item => item.constructor?.name === "GoogleGenerativeAIRequestInputError")) return result("INVALID_REQUEST", false);
+  const networkCode = chain.find(item => NETWORK_CODES.has(item.code))?.code;
+  if (networkCode) return result("NETWORK", true, { networkCode });
+  const sdkNetwork = chain.some(item => item.constructor?.name === "GoogleGenerativeAIError"
+    && typeof item.message === "string"
+    && (/^\[GoogleGenerativeAI Error\]: Error fetching from https?:\/\/\S+: (?:fetch failed|Failed to fetch|NetworkError when attempting to fetch resource\.?|network (?:error|request failed)|socket hang up|(?:read )?ECONNRESET|EPIPE|ETIMEDOUT)$/iu.test(item.message)
+      || item.message === "[GoogleGenerativeAI Error]: Error reading from the stream"));
+  if (sdkNetwork) return result("NETWORK", true);
+  if (chain.some(item => item.name === "AbortError" || item.constructor?.name === "GoogleGenerativeAIAbortError")) return result("CANCELLED", false);
+  return result("OTHER", false);
+}
+
+// Sin mensajes crudos del SDK: pueden contener solicitudes o el prompt.
+export function safeErrorDetails(error) {
+  const knownNames = new Set(["Error", "TypeError", "RangeError", "AbortError", "TimeoutError", "ApiError", "GoogleGenerativeAIError"]);
+  const { retryable: _retryable, ...classification } = classifyModelError(error);
+  return { errorName: knownNames.has(error?.name) ? error.name : "OtherError",
+    ...classification };
+}
+
 // Tokens de consumo: exclusivamente metadatos del proveedor. La descomposición
 // fija es una estimación separada, sin red ni almacenamiento del prompt privado.
 export function estimateFixedInput({ systemPrompt, toolSchemas, serverContext }) {
@@ -67,6 +110,7 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
     async invoke(action, metadata = {}) {
       const entry = { id: trackerId + ":" + (calls.length + 1), status: "pending", usage: null, startedAt: now(),
         component, turn: metadata.turn ?? null, callInTurn: metadata.callInTurn ?? null,
+        attempt: metadata.attempt, modelStep: metadata.modelStep,
         fixedInput: metadata.fixedInput ? structuredClone(metadata.fixedInput) : null };
       calls.push(entry);
       try {
@@ -74,7 +118,7 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
         entry.usage = response?.usage_metadata ?? null;
         entry.status = "success";
         return response;
-      } catch (error) { entry.status = "failed"; throw error; }
+      } catch (error) { entry.status = "failed"; entry.errorCode = error.code ?? null; entry.errorDetails = safeErrorDetails(error); throw error; }
       finally { entry.durationMs = Math.max(0, now() - entry.startedAt); }
     },
     snapshot() {
@@ -91,6 +135,9 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
         if (valid(total)) result.reportedTokens.total += total;
         if (!valid(input) || !valid(output) || !valid(total)) result.callsWithoutUsage++;
         result.callDetails.push({ id: entry.id, component: entry.component, turn: entry.turn, callInTurn: entry.callInTurn, status: entry.status,
+          ...(entry.attempt !== undefined ? { attempt: entry.attempt, modelStep: entry.modelStep } : {}),
+          ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
+          ...(entry.errorDetails ?? {}),
           durationMs: entry.durationMs ?? Math.max(0, now() - entry.startedAt), incomplete: entry.status === "pending",
           reportedTokens: { input: valid(input) ? input : null, output: valid(output) ? output : null, total: valid(total) ? total : null },
           ...(entry.fixedInput ? { fixedInput: structuredClone(entry.fixedInput) } : {}) });

@@ -21,18 +21,38 @@ export function validateOrderPayload(order) {
   return { valid: true };
 }
 
+// Preparación pura: el llamador decide en qué transacción leer/escribir el contador.
+export function prepareOrderNumber(counter, timestampNow) {
+  const last = counter?.lastOrderNumber ?? 0;
+  const next = (Number.isSafeInteger(last) ? last : 0) + 1;
+  return { orderNumber: "hodie" + String(next).padStart(6, "0"),
+    counter: { lastOrderNumber: next, updatedAt: timestampNow() } };
+}
+
+export function buildOrderSnapshot(orderData, { id, orderNumber, pricing, metadata, shippingAddress, billing, timestampNow }) {
+  return {
+    id, orderNumber, userId: orderData.userId, userPhoneNumber: orderData.userPhoneNumber,
+    userDisplayName: orderData.userDisplayName, ...metadata,
+    items: pricing.sanitizedItems, subtotal: pricing.subtotal, shippingCost: 0, total: pricing.total,
+    shippingAddress, billing, shippingMethod: determineShippingMethod(shippingAddress.city),
+    createdAt: timestampNow(), updatedAt: timestampNow(), status: "pending",
+    whatsappChatId: orderData.whatsappChatId || "", pdfDelivered: false,
+    customizationPending: pricing.sanitizedItems.some(item => item.customizationPending === true),
+    customizationImagePending: pricing.sanitizedItems.some(item => item.customizationImagePending === true),
+  };
+}
+
 export function createOrderPersistence({ db, timestampNow, calculatePricing,
-  generateOrderId = () => db.collection("orders").doc().id, generateNumber,
+  generateOrderId = () => db.collection("orders").doc().id, generateNumber, counterId = "orderNumber",
 }) {
   async function generateUniqueOrderNumber() {
     if (generateNumber) return generateNumber();
-    const ref = db.collection("counters").doc("orderNumber");
+    const ref = db.collection("counters").doc(counterId);
     return db.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const last = snapshot.exists ? snapshot.data().lastOrderNumber : 0;
-      const next = (Number.isSafeInteger(last) ? last : 0) + 1;
-      transaction.set(ref, { lastOrderNumber: next, updatedAt: timestampNow() }, { merge: true });
-      return "hodie" + String(next).padStart(6, "0");
+      const prepared = prepareOrderNumber(snapshot.exists ? snapshot.data() : null, timestampNow);
+      transaction.set(ref, prepared.counter, { merge: true });
+      return prepared.orderNumber;
     });
   }
   async function persistOrderSnapshot(orderData, { identity } = {}) {
@@ -51,16 +71,7 @@ export function createOrderPersistence({ db, timestampNow, calculatePricing,
     const shippingAddress = validateShippingAddress(orderData.shippingAddress, { legacy: identity === undefined });
     const billing = validateOrderBilling(orderData.billing);
     const orderNumber = orderData.orderNumber || await generateUniqueOrderNumber();
-    const order = {
-      id, orderNumber, userId: orderData.userId, userPhoneNumber: orderData.userPhoneNumber,
-      userDisplayName: orderData.userDisplayName, ...metadata,
-      items: pricing.sanitizedItems, subtotal: pricing.subtotal, shippingCost: 0, total: pricing.total,
-      shippingAddress, billing, shippingMethod: determineShippingMethod(shippingAddress.city),
-      createdAt: timestampNow(), updatedAt: timestampNow(), status: "pending",
-      whatsappChatId: orderData.whatsappChatId || "", pdfDelivered: false,
-      customizationPending: pricing.sanitizedItems.some(item => item.customizationPending === true),
-      customizationImagePending: pricing.sanitizedItems.some(item => item.customizationImagePending === true),
-    };
+    const order = buildOrderSnapshot(orderData, { id, orderNumber, pricing, metadata, shippingAddress, billing, timestampNow });
     try { await ref.create(order); return order; }
     catch (error) {
       if (error.code !== 6 && error.code !== "already-exists") throw error;

@@ -4,14 +4,15 @@ import { createBurstBuffer, systemClock } from "./burst-buffer.js";
 import { prepareSession, sessionHistory } from "./session.js";
 import { admitBatch, RATE_LIMIT_NOTICE } from "./rate-limit.js";
 import { createTurnAttachments, assertCheckpointState } from "./attachments.js";
+import { MODEL_CLOCK } from "../consultation/model-invoker.js";
 import { createMediaPreparer, withSignal } from "./media.js";
-import { forceTechnicalHandoff } from "../consultation/terminal.js";
-import { modelUsageSince, sumModelUsage } from "../../utils/model-usage.util.js";
+import { handleTechnicalFailure, resetTechnicalFailures } from "../consultation/technical-failure.js";
+import { modelUsageSince, sumModelUsage, safeErrorDetails } from "../../utils/model-usage.util.js";
 import { normalizePurchasePhone } from "../consultation/order-access.js";
 import { randomUUID } from "node:crypto";
 
 export function createGuardianRuntime({ runtime, agent, config = createGuardianConfig(), clock = systemClock,
-  audioModel = null, logger = value => console.info(JSON.stringify(value)), processEvents = null }) {
+  audioModel = null, logger = value => console.info(JSON.stringify(value)), processEvents = null, deadlineClock = MODEL_CLOCK }) {
   const media = createMediaPreparer({ config, model: audioModel, getAttachment: id => runtime.transport.getAttachment(id),
     setExecutionPhase: runtime.setExecutionPhase });
   const deduplicate = createMessageDeduplicator(config.windowMs);
@@ -30,12 +31,17 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
     parentSignal?.addEventListener("abort", abort, { once: true });
     const timeout = Object.assign(new Error("Tiempo del lote agotado"), { code: "GUARDIAN_TIMEOUT" });
     const remaining = closedAt + config.turnTimeoutMs - clock.now();
+    const deadlineMs = deadlineClock.now() + Math.max(0, remaining);
     const timer = remaining > 0 ? clock.setTimeout(() => controller.abort(timeout), remaining) : null;
+    // El reloj de escenarios puede ser virtual; el plazo real incluye medios.
+    const deadlineTimer = remaining > 0 && deadlineClock !== clock
+      ? deadlineClock.setTimeout(() => controller.abort(timeout), remaining) : null;
     if (remaining <= 0) controller.abort(timeout);
     const signal = controller.signal;
     const registry = createTurnAttachments();
     const before = snapshotUsage();
     const beforeAudio = media.getModelUsage();
+    const batchId = turn.batchId ?? randomUUID();
     let processed = turn;
     const diagnostics = [];
     const finish = (outcome, extra = {}) => ({ usage: modelUsageSince(before, snapshotUsage()), diagnostics,
@@ -92,8 +98,9 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       }
       runtime.setExecutionPhase?.("media_preparation");
       processed = await withSignal(() => media.prepare(turn, { signal, registry }), signal);
-      runtime.setTurnContext?.({ id: turn.batchId ?? randomUUID(), sequence: runtime.getState().turnSequence,
-        messages: processed.messages.map(message => ({ text: message.text, type: message.type })), closedAt });
+      runtime.setTurnContext?.({ id: batchId, sequence: runtime.getState().turnSequence,
+        messages: processed.messages.map(message => ({ text: message.text, type: message.type })), closedAt,
+        deadlineMs, deadlineEpoch: closedAt + config.turnTimeoutMs });
       runtime.setTurnAttachments?.(registry);
       for (const issue of processed.mediaIssues) event({ code: issue.code, turn: turn.turn, mediaType: issue.type });
       runtime.setExecutionPhase?.("agent_adapter");
@@ -101,18 +108,27 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         now: closedAt, signal }), signal);
       signal.throwIfAborted();
       diagnostics.push(...(response?.diagnostics ?? []));
+      if (!response?.technicalFailure || response.orderRecovered) await withSignal(() => resetTechnicalFailures(runtime, { signal }), signal);
       event({ code: "PROCESSED", turn: turn.turn, groupedMessages: turn.messages.length, newSession: session.newSession });
-      return finish("processed", { newSession: session.newSession, mediaBytes: processed.mediaBytes });
+      return finish(response?.technicalFailure ? "technical_error" : "processed", {
+        newSession: session.newSession, mediaBytes: processed.mediaBytes,
+        ...(response?.orderCommitted ? { orderCommitted: true, orderRecovered: response.orderRecovered === true } : {}) });
     } catch (error) {
       if (parentSignal?.aborted) throw parentSignal.reason;
       if (closed) throw error;
       controller.abort(error);
-      diagnostics.push({ code: error.code ?? "GUARDIAN_ERROR", message: "Falla técnica al preparar el turno.",
+      diagnostics.push({ code: error.code ?? "GUARDIAN_ERROR", message: "Falla técnica al preparar el turno.", technicalFailure: true,
+        ...safeErrorDetails(error),
         ...(runtime.getExecutionPhase ? { interruptedPhase: runtime.getExecutionPhase() } : {}) });
-      await forceTechnicalHandoff(runtime, "Falla técnica: " + (error.code ?? "GUARDIAN_ERROR"), { signal: parentSignal });
+      // El commit es irreversible y su trabajo durable recupera el pago/PDF.
+      // No reemplazar ese mensaje por el aviso técnico ni escalar esta compra.
+      if (runtime.getCommittedReceipt && await runtime.getCommittedReceipt()) return finish("technical_error", { orderCommitted: true });
+      await handleTechnicalFailure(runtime, error.code ?? "GUARDIAN_ERROR", { signal: parentSignal, turnId: batchId,
+        lastMessage: turn.messages.at(-1)?.text, now: clock.now() });
       return finish("technical_error");
     } finally {
       clock.clearTimeout(timer);
+      deadlineClock.clearTimeout(deadlineTimer);
       controller.abort(Object.assign(new Error("Turno cerrado"), { code: "TURN_CLOSED" }));
       controllers.delete(controller);
       parentSignal?.removeEventListener("abort", abort);
@@ -125,7 +141,12 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
   function enqueue(input) {
     const chatId = runtime.getState().whatsappChatId;
     const previous = queues.get(chatId) ?? Promise.resolve();
-    const task = previous.catch(() => {}).then(() => { input.onStart?.(); return execute(input); });
+    const task = previous.catch(() => {}).then(() => {
+      if (closed) throw Object.assign(new Error("Guardián cerrado"), { code: "GUARDIAN_SHUTDOWN" });
+      input.signal?.throwIfAborted();
+      input.onStart?.();
+      return execute(input);
+    });
     queues.set(chatId, task);
     task.finally(() => { if (queues.get(chatId) === task) queues.delete(chatId); }).catch(() => {});
     return task;
@@ -160,28 +181,42 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       if (!deduplicate.accept(message.id, clock.now())) return Promise.resolve({ guardian: { outcome: "duplicate" } });
       return bursts.push(message);
     },
-    async runDeclaredTurn({ turn, scenario = {}, signal }) {
-      runtime.setExecutionPhase?.("burst_buffer");
-      signal?.throwIfAborted();
-      if (typeof clock.advanceAsync !== "function") throw new Error("Las ráfagas declaradas requieren reloj virtual del runner");
-      // El archivo no define intervalos: burst declara un lote. Todos sus
-      // mensajes llegan al mismo instante virtual, sin inventar tiempos reales.
-      let captured;
-      const buffer = createBurstBuffer({ config, clock, onBatch: batch => { captured = batch; } });
-      const promises = [];
-      for (const message of turn.messages) {
-        const envelope = { from: runtime.getState().whatsappChatId, body: message.text, hasMedia: message.type !== "text" && message.type !== "chat",
-          type: message.type === "text" ? "chat" : message.type };
-        if (acceptsMessage(envelope)) promises.push(buffer.push(envelope));
-      }
-      if (!promises.length) { buffer.close(); return { usage: modelUsageSince(snapshotUsage(), snapshotUsage()), guardian: { outcome: "filtered" }, diagnostics: [] }; }
+    async runDeclaredTurn({ turn, scenario = {}, signal: parentSignal }) {
+      if (closed) throw Object.assign(new Error("Guardián cerrado"), { code: "GUARDIAN_SHUTDOWN" });
+      parentSignal?.throwIfAborted();
+      // Registrar la cancelación antes de la primera espera, también durante
+      // la ráfaga declarada y mientras el lote espera su lugar en la cola.
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const abort = () => controller.abort(parentSignal.reason);
+      parentSignal?.addEventListener("abort", abort, { once: true });
+      controllers.add(controller);
+      let buffer;
       try {
-        await clock.advanceAsync(config.silenceMs);
-        await Promise.all(promises);
-        signal?.throwIfAborted();
+        runtime.setExecutionPhase?.("burst_buffer");
+        if (typeof clock.advanceAsync !== "function") throw new Error("Las ráfagas declaradas requieren reloj virtual del runner");
+        // El archivo no define intervalos: burst declara un lote. Todos sus
+        // mensajes llegan al mismo instante virtual, sin inventar tiempos reales.
+        let captured;
+        buffer = createBurstBuffer({ config, clock, onBatch: batch => { captured = batch; } });
+        const promises = [];
+        for (const message of turn.messages) {
+          const envelope = { from: runtime.getState().whatsappChatId, body: message.text, hasMedia: message.type !== "text" && message.type !== "chat",
+            type: message.type === "text" ? "chat" : message.type };
+          if (acceptsMessage(envelope)) promises.push(buffer.push(envelope));
+        }
+        if (!promises.length) return { usage: modelUsageSince(snapshotUsage(), snapshotUsage()), guardian: { outcome: "filtered" }, diagnostics: [] };
+        await withSignal(() => clock.advanceAsync(config.silenceMs), signal);
+        await withSignal(() => Promise.all(promises), signal);
+        signal.throwIfAborted();
         return await enqueue({ turn: { ...turn, batchId: captured.id, firstAt: captured.firstAt, lastAt: captured.lastAt },
           scenario, signal, closedAt: captured.closedAt });
-      } finally { buffer.close(); }
+      } finally {
+        buffer?.close();
+        controller.abort(Object.assign(new Error("Turno cerrado"), { code: "TURN_CLOSED" }));
+        controllers.delete(controller);
+        parentSignal?.removeEventListener("abort", abort);
+      }
     },
     shutdown,
   };

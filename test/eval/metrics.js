@@ -57,6 +57,12 @@ export function evaluationMetrics(cases) {
     tools: { overall: latencyStats(tools), byName },
     byCallInTurn: { consultation: byCallInTurn("agent"), transcription: byCallInTurn("transcription") },
     turns: latencyStats(turns.map(turn => ({ durationMs: turn.durationMs, incomplete: Boolean(turn.timeout) }))) },
+    modelAttempts: { agent: { retries: agent.filter(call => call.attempt > 1).length,
+      timedOut: agent.filter(call => call.errorCode === "MODEL_CALL_TIMEOUT").length,
+      byErrorClass: Object.fromEntries([...new Set(agent.filter(call => call.errorClass).map(call => call.errorClass))]
+        .sort().map(errorClass => [errorClass, agent.filter(call => call.errorClass === errorClass).length])),
+      byAttempt: Object.fromEntries([...new Set(agent.filter(call => call.attempt).map(call => call.attempt))]
+        .sort((a, b) => a - b).map(attempt => [attempt, latencyStats(agent.filter(call => call.attempt === attempt))])) } },
     modelCallsPerTurn: Object.fromEntries(["agent", "consultation", "transcription"].map(component =>
       [component, countStats(turnCalls.map(call => call[component]))])), fixedInput };
 }

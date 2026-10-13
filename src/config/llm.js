@@ -9,7 +9,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
  * @param {number} [options.thinkingBudget] - Presupuesto de pensamiento (0 para desactivar razonamiento extendido)
  * @returns {ChatGoogleGenerativeAI}
  */
-export const createGeminiModel = ({ temperature = 0, thinkingBudget } = {}) => {
+export const createGeminiModel = ({ temperature = 0, thinkingBudget, maxRetries } = {}) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY no configurada en variables de entorno");
@@ -28,6 +28,8 @@ export const createGeminiModel = ({ temperature = 0, thinkingBudget } = {}) => {
       thinkingBudget,
     };
   }
+  // Opt-in del agente nuevo; los demás consumidores conservan su default.
+  if (maxRetries !== undefined) config.maxRetries = maxRetries;
 
   return new ChatGoogleGenerativeAI(config);
 };

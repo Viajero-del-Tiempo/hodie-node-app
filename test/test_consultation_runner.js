@@ -95,7 +95,8 @@ test("CLI aplica dos presupuestos a la misma selección sin escribir .env y los 
       assert.deepEqual(report.cases.map(item => item.id), ["C-01", "C-02"]);
       assert.equal(report.metadata.agentThinkingBudgetOverride, budget);
       assert.deepEqual(report.metadata.agentConfigurations, [{ model: "test-model",
-        thinking: { mode: "budget", thinkingBudget: budget, source: "override" } }]);
+        thinking: { mode: "budget", thinkingBudget: budget, source: "override" },
+        modelCalls: { timeoutMs: 20000, maxRetries: 1, sdkMaxRetries: 0, retryReserveMs: 5000, transientRetryDelayMs: 500 } }]);
       assert.ok(report.cases.every(item => item.repetitions.every(run => run.agentConfiguration.thinking.thinkingBudget === budget)));
       assert.equal(report.summary.modelUsage.evaluator.calls, 0);
       assert.ok(child.stdout.includes('"agentConfigurations"'));

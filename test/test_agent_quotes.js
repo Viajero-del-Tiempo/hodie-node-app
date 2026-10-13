@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { purchaseFixture, itemArgs, readyContext } from "./helpers/purchase-fixtures.js";
+import { ORDER_CONFIRMATION_QUESTION } from "../src/services/order-quote.service.js";
 
 test("cotizar con lineas calcula subtotales sin carrito, confirmación ni quoteId", async () => {
   const f = purchaseFixture();
@@ -85,7 +86,10 @@ test("quoteId pertenece al chat y a las dos huellas; solo envío exitoso registr
     assert.equal(f.world.getState().lastQuote, null);
     f.transport.sendText = send;
     await f.call("responder", answer);
-    assert.equal(f.transport.getOutgoing().length, 1); assert.ok(f.transport.getOutgoing()[0].text.endsWith(quote.summary));
+    assert.equal(f.transport.getOutgoing().length, 1);
+    const message = f.transport.getOutgoing()[0].text;
+    assert.ok(message.includes(quote.summary)); assert.ok(message.endsWith(ORDER_CONFIRMATION_QUESTION));
+    assert.equal(message, answer.texto + "\n\n" + quote.summary + "\n\n" + ORDER_CONFIRMATION_QUESTION);
     const last = f.world.getState().lastQuote;
     assert.equal(last.quoteId, quote.quoteId); assert.equal(last.cartFingerprint, quote.cartFingerprint);
     assert.equal(last.pricingFingerprint, quote.pricingFingerprint); assert.equal(last.shownTurn, 1);
@@ -132,7 +136,12 @@ test("precio o stock frescos se revalidan al mostrar, sin reserva ni alteración
     assert.deepEqual(f.transport.getOutgoing(), []); assert.equal(f.world.getState().lastQuote, null);
     assert.deepEqual(f.world.snapshot().orders, before.orders);
     assert.equal(before.catalog.products[0].variants[0].stock, 8);
-    assert.equal((await f.call("crear_pedido", { quoteId: refreshed.quoteId })).code, "HERRAMIENTA_NO_DISPONIBLE");
+    assert.equal((await f.call("crear_pedido", { quoteId: refreshed.quoteId })).code, "CONFIRMACION_REQUERIDA");
+    const after = f.world.snapshot();
+    assert.deepEqual(after.orders, before.orders);
+    assert.deepEqual(after.orderPersistence.counter, before.orderPersistence.counter);
+    assert.deepEqual(after.orderPersistence.jobs, before.orderPersistence.jobs);
+    assert.equal(f.world.quotes.get(refreshed.quoteId).orderId, undefined);
   } finally { f.close(); }
 });
 

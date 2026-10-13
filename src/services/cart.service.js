@@ -12,6 +12,16 @@ export function stableJSON(value) {
 }
 export const fingerprint = value => createHash("sha256").update(stableJSON(value)).digest("hex");
 export const cartContent = cart => ({ lines: cart.lines, shipping: cart.shipping, billing: cart.billing });
+export function normalizeCartSnapshot(cart, chatId) {
+  const copy = structuredClone(cart);
+  copy.id ??= fingerprint([chatId, timestampMillis(cart.updatedAt)]);
+  copy.revision ??= 0;
+  copy.lines = copy.lines.map((line, index) => ({ ...line, id: line.id ?? fingerprint([copy.id, index]),
+    // Los carritos anteriores no registraban la decisión: null sigue pendiente.
+    packaging: { declined: false, ...line.packaging },
+    customization: { text: null, imageUrl: null, pending: false, declined: false, textDraft: null, ...line.customization } }));
+  return copy;
+}
 export function pricingInputs(cart, { includeDrafts = false } = {}) {
   return cart.lines.map(line => ({ productId: line.productId, variantId: line.variantId, quantity: line.quantity,
     packagingType: line.packagingType, customization: (includeDrafts ? line.customization.textDraft : null) ?? line.customization.text ?? "",
@@ -38,14 +48,7 @@ export function createCartService({ repository, chatId, now = Date.now, newId = 
     const cart = await repository.get(chatId);
     signal?.throwIfAborted();
     if (!cart || timestampMillis(cart.expiresAt) <= now()) { await onUnavailable({ signal }); return null; }
-    const copy = structuredClone(cart);
-    copy.id ??= fingerprint([chatId, timestampMillis(cart.updatedAt)]);
-    copy.revision ??= 0;
-    copy.lines = copy.lines.map((line, index) => ({ ...line, id: line.id ?? fingerprint([copy.id, index]),
-      // Los carritos anteriores no registraban la decisión: null sigue pendiente.
-      packaging: { declined: false, ...line.packaging },
-      customization: { text: null, imageUrl: null, pending: false, declined: false, textDraft: null, ...line.customization } }));
-    return copy;
+    return normalizeCartSnapshot(cart, chatId);
   }
   async function commit(candidate, { signal, operation } = {}) {
     signal?.throwIfAborted();

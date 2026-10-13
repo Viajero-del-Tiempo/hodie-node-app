@@ -127,7 +127,8 @@ export function buildInitialState(context = {}, fixtures, { chatId, now }) {
     messages: [...oldMessages, ...currentMessages], whatsappChatId: chatId,
     userPhoneNumber: context.telefonoCliente ?? null, phoneVerified: Object.hasOwn(context, "telefonoCliente"),
     pushname: null, sessionCutoff: oldMessages.length, lastActivityAt,
-    consecutiveMisunderstandings: 0, humanHandoffRequired: false, humanHandoffReason: null, lastQuote: null,
+    consecutiveMisunderstandings: 0, consecutiveTechnicalFailures: 0, lastTechnicalFailure: null,
+    humanHandoffRequired: false, humanHandoffReason: null, lastQuote: null,
     guardianRateLimit: { admittedAt: [], blocked: false, episodeId: null }, guardianAlerts: [],
     resumeRequestedAt: null, resumeAppliedAt: null,
   };
@@ -146,7 +147,8 @@ export function buildInitialState(context = {}, fixtures, { chatId, now }) {
           packaging: { declined: Object.hasOwn(line, "empaque") && line.empaque === null },
           customization: {
             text: line.texto ?? null, imageUrl: null,
-            pending: product.customization?.allowed === true && product.customization?.allowsText === true && !line.texto,
+            declined: Object.hasOwn(line, "texto") && line.texto === null,
+            pending: !Object.hasOwn(line, "texto") && product.customization?.allowed === true && product.customization?.allowsText === true,
           },
         };
       }),
@@ -203,7 +205,8 @@ export async function prepareShownQuote(context, world, signal) {
   };
   state.messages.push({
     role: "assistant",
-    content: typeof quote.summary === "string" ? quote.summary : "Cotización mostrada: " + JSON.stringify(quote),
+    content: (typeof quote.summary === "string" ? quote.summary : "Cotización mostrada: " + JSON.stringify(quote))
+      + (world.recordShownQuote ? "\n\n" + world.orderConfirmationQuestion : ""),
   });
   // El protocolo real puede haber actualizado lastQuote; no sobrescribirlo
   // con la copia anterior mientras se agrega el resumen de turno cero.

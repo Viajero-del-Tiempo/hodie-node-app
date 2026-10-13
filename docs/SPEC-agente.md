@@ -65,6 +65,8 @@ El estado del grafo guarda la conversación; el carrito vive aparte, en Firestor
 | `sessionCutoff` | Dónde empieza la sesión actual dentro de `messages` |
 | `lastActivityAt` | Último mensaje procesado |
 | `consecutiveMisunderstandings` | Intentos seguidos sin entender al cliente |
+| `consecutiveTechnicalFailures`, `lastTechnicalFailure` | Racha de fallas técnicas y último lote registrado; independiente de incomprensiones y persistida por chat |
+| `guardianAlerts` | Solicitudes pendientes de alerta por límite de uso o derivación técnica; solo whatsapp.js las envía y acusa entrega |
 | `humanHandoffRequired`, `humanHandoffReason` | Derivación activa y su motivo |
 | `lastQuote` | Último resumen de cotización mostrado: `quoteId`, huella del carrito y hora (ver Creación segura de pedidos) |
 
@@ -140,11 +142,11 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | `registrar_comprobante` | `attachmentId`, `orderNumber?` | Asocia la imagen al pedido pendiente del cliente y alerta al admin. Nunca cambia el estado del pedido |
 | `consultar_politicas` | — | Todas las políticas vigentes de la colección `policies` |
 | `derivar` | `motivo` | Marca el handoff y termina el turno (ver Derivación) |
-| `responder` | `texto`, `entendido`, `quoteIdMostrado?` | Un único envío y cierre; el servidor agrega el resumen de cotización y registra lastQuote después del envío exitoso. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
+| `responder` | `texto`, `entendido`, `quoteIdMostrado?` | Un único envío y cierre. El servidor agrega el resumen y la pregunta final, y registra lastQuote después del envío exitoso. Ante una consulta sobre la cotización vigente, responde y rearma solo la pregunta de confirmación. Después de crear el pedido, envía exclusivamente el mensaje armado por el servidor; los datos bancarios no están en la respuesta pública de crear_pedido. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
 
 ### Reglas comunes
 
-- **Todo turno termina** con `responder` o con `derivar`. Un turno que termina sin ninguna de las dos se trata como falla técnica.
+- **Todo turno del modelo termina** con `responder` o con `derivar`. Un turno que termina sin ninguna de las dos se trata como falla técnica y se cierra por código con la política técnica.
 - **Los errores son datos, no excepciones.** Cada herramienta devuelve códigos que el agente explica con sus palabras: `SIN_STOCK` (con el stock disponible), `VARIANTE_INACTIVA`, `EMPAQUE_INEXISTENTE`, `TEXTO_DEMASIADO_LARGO` (con el límite), `NO_ADMITE_IMAGEN`, `CANTIDAD_CORPORATIVA` (más de 100 unidades), `DATO_FALTANTE`.
 - **`CANTIDAD_CORPORATIVA` corresponde a la entrega 5**, con `derivar`; no se implementa en 4A ni agrega umbrales al agente. Entonces obliga a derivar con el motivo "pedido corporativo de N unidades de \<producto>".
 - **`entendido`** en `responder` indica si el agente pudo interpretar el mensaje del cliente; alimenta la escalada de 4 intentos.
@@ -156,14 +158,15 @@ El modelo no puede crear un pedido por error: `crear_pedido` solo funciona si el
 
 1. **Cotizar (4A).** Con datos completos y las confirmaciones de texto/RUC necesarias, calcula los totales con la función de precios del servidor y devuelve un `quoteId`, ligado al chat y a las huellas de líneas, envío, facturación y precios. Si faltan datos, devuelve `DATO_FALTANTE`, `confirmable:false` y un **Subtotal de productos** informativo, sin `quoteId` ni total final. No reserva stock. El resumen muestra consumidor final o razón social/RUC; cualquier cambio fiscal requiere una cotización nueva.
 2. **Mostrar (4A).** El agente pasa `quoteIdMostrado` a `responder`; el servidor vuelve a validar y agrega su propio resumen al único mensaje. Después del envío exitoso registra `lastQuote`: ID, ambas huellas, hora, secuencia y lote del turno. Cambiar el carrito lo invalida, al igual que vencer el TTL o detectar precios/stock obsoletos. El modelo no puede inventar ni copiar IDs de otro chat.
-3. **Confirmar (4B, pendiente).** En un turno posterior, si el cliente confirma, el agente llama a `crear_pedido(quoteId)`. El servidor rechaza la llamada si:
+3. **Confirmar (4B).** En un lote posterior a la pregunta final, si el cliente confirma, el agente llama a `crear_pedido(quoteId)`. La afirmación debe cubrir el mensaje completo: vocabulario configurable de afirmaciones y agregados neutros (por ejemplo, "Sí, confirmo, gracias!" o "confirmo el pedido"). Preguntas, cambios, otros agregados o un sí a otra pregunta no autorizan el pedido. Una consulta con cotización vigente sin cambios se responde y rearma con una pregunta corta; no repite el resumen. Si cambió la cotización, se muestra el resumen nuevo. El servidor rechaza la llamada si:
    - el `quoteId` no es el de `lastQuote`, o se mostró en el mismo turno;
    - el carrito cambió desde que se mostró (`CARRITO_CAMBIO`);
    - recalculado ahora, el total no coincide con el mostrado (`PRECIO_CAMBIO`);
    - faltan datos de envío o facturación, o una confirmación de RUC (`DATO_FALTANTE`).
+   - falta una afirmación válida posterior a la última pregunta final (`CONFIRMACION_REQUERIDA`).
 
-   En cualquiera de esos casos, el agente vuelve a cotizar y muestra el resumen nuevo.
-4. **Crear.** El pedido se crea con la misma función del checkout web (`processAndSendOrder`), que vuelve a validar stock y precios. Origen del pedido: `whatsapp`.
+   Los cambios de carrito/precio y los datos faltantes requieren completar y cotizar de nuevo. Una confirmación ambigua requiere volver a preguntar; no crea el pedido.
+4. **Crear.** Una transacción lee carrito, cotización, confirmación mostrada, productos, categorías y contador antes de escribir. Reutiliza el pricing y las funciones de snapshot y número del checkout web, con sus mismas validaciones. Guarda pedido, relación quoteId→orderId, incremento del contador y trabajo PDF, y borra carrito y confirmación. No descuenta stock: eso ocurre al confirmar el pago. El checkout web conserva su flujo de persistencia y sus mensajes. Origen del pedido: `whatsapp`.
    El transporte pasa `{ identity: { origin: "whatsapp", resolvedPhone } }` como
    opción de servidor. `resolvedPhone` solo procede de WhatsApp; nunca del
    teléfono escrito por el cliente ni de argumentos del LLM. El pedido guarda
@@ -171,9 +174,10 @@ El modelo no puede crear un pedido por error: `crear_pedido` solo funciona si el
    manualmente queda sin verificar y no habilita la lectura en Mi perfil.
    Dirección y facturación son fotos del pedido; el PDF aclara que no es factura.
 5. **Idempotencia.** Crear dos veces el mismo `quoteId` devuelve el mismo pedido, sin duplicarlo. La relación entre `quoteId` y pedido se guarda en una transacción.
-6. **Después.** Se borra el carrito. El agente responde con el número de pedido, el total y las instrucciones de pago que devuelve la herramienta, sin agregar datos propios. El PDF y su contingencia funcionan igual que hoy.
+6. **Después.** El servidor arma y envía textualmente número, total, instrucciones de pago desde la configuración bancaria y aviso de verificación manual. Los datos bancarios no forman parte del resultado público de `crear_pedido` ni quedan disponibles para que el modelo los copie o reformule. Un commit seguido de un fallo de respuesta se recupera desde la relación persistida y el trabajo pendiente; nunca se pide repetir la compra.
+7. **PDF independiente.** El trabajo durable usa el procesador de PDF existente fuera del plazo del turno, con lease y fases de entrega. Los trabajos que no habían iniciado el envío se recuperan automáticamente. Si el proceso reinicia con un envío iniciado sin confirmación de entrega, registra una solicitud de alerta y requiere reenvío por una persona. Las fallas dejan `pdfDelivered:false`; solo `whatsapp.js` enviará las alertas al equipo en la puesta en marcha. El nuevo trabajador no se inicia desde el flujo productivo actual.
 
-Si `processAndSendOrder` rechaza por stock, el agente lo trata como una corrección de la cotización, no como una falla. Si falla por un error técnico, deriva.
+Un rechazo por stock requiere corregir la cotización. Un error técnico previo al commit conserva el carrito. Ante un resultado incierto del commit se consulta la relación quoteId→orderId y se recupera el pedido existente. Las llamadas del agente nuevo al modelo tienen un plazo de 20 s y un único reintento compartido entre timeout y errores transitorios del proveedor (HTTP 429, 5xx, cortes o reinicios de red). Ante timeout exige al menos 25 s restantes; ante error transitorio espera 500 ms cancelables y exige al menos 25,5 s, comprobando otra vez el margen después de esperar. Otros 4xx de validación/autenticación y errores de argumentos no se reintentan. Cada intento cuenta en el consumo y el informe registra su clase de error sin mensajes crudos del SDK. Si falla el segundo intento, rige la política de fallas técnicas por turno. Se desactivan los reintentos internos del SDK solo para este agente. El límite total sigue siendo 60 s, incluyendo multimedia.
 
 ## Prompt del agente
 
@@ -232,7 +236,7 @@ El agente distingue entre **derivar** (pasar el chat a una persona y quedar en s
 - El cliente pide hablar con una persona, o acepta una oferta de hacerlo.
 - Hay un reclamo o un problema con un pedido.
 - La herramienta devuelve `CANTIDAD_CORPORATIVA`.
-- Hay una falla técnica que impide continuar.
+- Hay fallas técnicas en dos turnos consecutivos del mismo chat (ver política técnica).
 - Se alcanzan 4 intentos seguidos sin entender al cliente.
 
 ### Cuándo ofrece, sin derivar
@@ -252,10 +256,38 @@ El código cuenta los turnos con `entendido: false` y reinicia el contador con e
 
 Dentro de una cotización, los pasos 2 y 3 vuelven a pedir el mismo dato con un ejemplo y ofrecen una persona, sin mostrar el menú general ni perder el carrito.
 
+### Fallas técnicas, aplicadas por código
+
+- Primera falla aislada no recuperada por el reintento aprobado (timeout de modelo, error del proveedor o falta de cierre
+  válido): el código envía exactamente **"Perdón, tuve un inconveniente para
+  responderte. ¿Me lo escribís de nuevo?"**. No deriva ni solicita una alerta;
+  el siguiente mensaje sigue atendido por el bot.
+- Segunda falla en turnos consecutivos: activa handoff, registra el índice y una
+  solicitud de alerta pendiente, y conserva el mensaje de derivación actual.
+  Solo `whatsapp.js` envía la alerta al equipo. No vuelve a derivar ni a solicitar
+  otra alerta en los turnos que quedan en silencio.
+- `consecutiveTechnicalFailures` vive en el checkpoint del chat y se reinicia con
+  un cierre exitoso, aunque `entendido:false`. No aumenta ni reinicia el contador
+  de incomprensiones. La racha se conserva al restaurar el estado; una sesión
+  nueva por sí sola no equivale a un turno exitoso. El ID del lote impide contar
+  dos veces una falla que atraviesa agente y guardián.
+- El aviso de reintento invalida la autorización de la cotización y desarma las
+  confirmaciones pendientes de texto/RUC, conservando sus borradores y el carrito.
+  Un sí a ese aviso no confirma una compra.
+- Si `crear_pedido` ya hizo commit, tiene prioridad la recuperación existente:
+  el aviso técnico nunca sustituye el mensaje de pago, no deriva esta compra ni
+  incrementa su racha técnica. Una recuperación que termina enviando el pago
+  reinicia la racha como cierre exitoso; si la entrega queda incierta, continúa
+  el trabajo durable y la revisión humana de 4B.
+- Una falla técnica sigue siendo `error` en el runner, incluso si el código cerró
+  con el aviso o recuperó el pago. No se envía al juez ni se cuenta como falla de
+  calidad. El informe registra código, fase, clase de error y estado HTTP cuando
+  está disponible; no almacena mensajes crudos del SDK ni el prompt.
+
 ### Qué pasa al derivar
 
 - Se marca el handoff en el estado y en `handoff_threads`.
-- El agente escribe el mensaje de derivación, sin promesas de tiempo: una persona del equipo le va a responder por ese mismo chat. Si la derivación la fuerza el código (cuarto intento o falla técnica), se usa un texto fijo, porque en ese caso el modelo puede no estar disponible.
+- El agente escribe el mensaje de derivación, sin promesas de tiempo: una persona del equipo le va a responder por ese mismo chat. Si la derivación la fuerza el código (cuarto intento o segunda falla técnica consecutiva), se usa un texto fijo, porque en ese caso el modelo puede no estar disponible.
 - `whatsapp.js` envía una sola alerta al admin, con el motivo, el carrito, el último pedido y los últimos mensajes del cliente.
 - El bot queda en silencio hasta que un admin lo reactiva desde el panel.
 
@@ -321,7 +353,7 @@ La evaluación se construye primero, para que el agente se mida desde su primera
 3. **Guardián completo:** ráfagas, audios, imágenes, sesiones, contexto del turno y límites de uso.
 4. **Carrito y pedidos, dividida en dos rondas:**
    - **4A:** carrito_ver/agregar/modificar/quitar, datos_envio, datos_facturacion, cotizar, subtotal incompleto, quoteId y huellas, resumen del servidor con responder(quoteIdMostrado), lastQuote e invalidación, TTL de tres días, subida de imagen por puerto, customization.declined y errores estructurados opt-in del pricing. Runner con cotizacionMostrada real (F-05). Quitar TEMPORAL ENTREGA 4; conservar TEMPORAL ENTREGA 5. Incluir aviso neutro del límite e imágenes del cliente como referencias. Sin crear pedidos ni lógica corporativa.
-   - **4B, pendiente:** confirmación final posterior, crear_pedido, persistencia transaccional de pedido/contador, relación quoteId→pedido e idempotencia, PDF independiente con alerta de falla y pruebas en emulador. No se implementa en 4A.
+   - **4B, implementada pendiente de verificación del dueño:** confirmación final posterior con vocabulario y agregados neutros configurables; pregunta corta tras consultas sin cambios; crear_pedido y persistencia transaccional con contador compartido, relación quoteId→pedido e idempotencia; mensaje de pago exclusivo del servidor; PDF independiente con recuperación y alerta de envío incierto; pruebas de concurrencia, rollback y lectura del pedido en admin/Mis pedidos en el emulador. Runner con K-01 a K-05 y decisiones texto:null/empaque:null. Timeout por llamada al modelo y un reintento dentro del plazo total. Conservar TEMPORAL ENTREGA 5. Sin conexión productiva.
 5. **Comprobantes y derivación:** `registrar_comprobante`, `derivar`, escalada aplicada por código y alerta con contexto. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 5` y habilitar `derivar` como cierre conversacional.
 6. **Evaluación completa:** todos los casos, hasta alcanzar los umbrales.
 

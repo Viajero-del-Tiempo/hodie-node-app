@@ -5,6 +5,10 @@ import { createSignedImageUploader } from "../src/services/cloudinary.service.js
 import { pricingFixture } from "./helpers/order-fixtures.js";
 import { validateOrderBilling } from "../src/validators/billing.validator.js";
 import { validateShippingAddress } from "../src/services/shipping.service.js";
+import { createOrderPersistence, buildOrderSnapshot, prepareOrderNumber } from "../src/services/order-persistence.service.js";
+import { resolveOrderIdentity } from "../src/services/order-identity.service.js";
+import { memoryCustomerStore, shippingFixture } from "./helpers/customer-fixtures.js";
+import { normalizePurchasePhone } from "../src/agents/consultation/order-access.js";
 
 test("contrato web: foto, pendientes y precios existentes idénticos con y sin códigos del agente", async () => {
   const f = pricingFixture();
@@ -74,4 +78,25 @@ test("contrato de subida firmada anterior mantiene parámetros; señal opcional 
   const controller = new AbortController(); controller.abort(new Error("cancelado"));
   await assert.rejects(uploader({ base64: "YWJj", mimetype: "image/png" }, { signal: controller.signal }), /cancelado/);
   assert.equal(requests.length, 1);
+});
+
+test("constructor compartido conserva foto, campos y contador web; WhatsApp solo cambia procedencia verificada", async () => {
+  const f = pricingFixture(), store = memoryCustomerStore();
+  const phone = normalizePurchasePhone("+595 (900) 000-001");
+  assert.equal(phone, "595900000001");
+  const calculatePricing = createOrderPricingService({ catalog: f.service });
+  const payload = { id: "test-order", userId: "test-user", userDisplayName: "Cliente Alfa", userPhoneNumber: phone,
+    items: [f.item], shippingAddress: shippingFixture(), billing: { invoiceRequested: false }, whatsappChatId: "test-chat@lid" };
+  const persistence = createOrderPersistence({ ...store, calculatePricing, generateNumber: async () => "test-number" });
+  const web = await persistence.persistOrderSnapshot(payload, { identity: { origin: "web", phone } });
+  const whatsapp = buildOrderSnapshot(payload, { id: web.id, orderNumber: web.orderNumber,
+    pricing: await calculatePricing(payload.items), metadata: await resolveOrderIdentity(null, payload, { origin: "whatsapp", resolvedPhone: phone }),
+    shippingAddress: validateShippingAddress(payload.shippingAddress), billing: validateOrderBilling(payload.billing), timestampNow: store.timestampNow });
+  assert.deepEqual(whatsapp, { ...web, origin: "whatsapp", phoneVerification: { verified: true, source: "whatsapp_resolved" } });
+  assert.equal(whatsapp.items[0].variantId, f.item.variantId);
+  const prepared = prepareOrderNumber({ lastOrderNumber: 7 }, store.timestampNow);
+  assert.deepEqual(prepared, { orderNumber: "hodie000008", counter: { lastOrderNumber: 8, updatedAt: store.timestampNow() } });
+  const actual = createOrderPersistence({ ...store, calculatePricing });
+  assert.equal(await actual.generateUniqueOrderNumber(), "hodie000001");
+  assert.deepEqual(store.documents.get("counters/orderNumber"), { lastOrderNumber: 1, updatedAt: store.timestampNow() });
 });

@@ -8,6 +8,7 @@ import { runEvaluation } from "./eval/run-eval.js";
 import { createStubJudge } from "./eval/judge.js";
 import { evalDataset, evalCase, evalCart } from "./helpers/eval-fixtures.js";
 import { createAgent } from "../src/agents/consultation/eval-adapter.js";
+import { TECHNICAL_FAILURE_NOTICE, TECHNICAL_HANDOFF_MESSAGE } from "../src/agents/consultation/technical-failure.js";
 
 test("límite se guarda antes de transcribir y el consumo suma audio y agente", async () => {
   let f;
@@ -52,7 +53,9 @@ test("timeout de sesenta segundos desde cierre incluye descarga y evita efectos 
   await f.clock.advanceAsync(59999); assert.equal(f.outgoing.length, 0);
   await f.clock.advanceAsync(1); const result = await pending;
   assert.equal(result.guardian.outcome, "technical_error"); assert.equal(result.diagnostics[0].code, "GUARDIAN_TIMEOUT");
-  assert.equal(f.state().humanHandoffRequired, true); assert.equal(f.outgoing.length, 1);
+  assert.equal(f.state().humanHandoffRequired, false); assert.equal(f.outgoing.length, 1);
+  assert.equal(f.state().consecutiveTechnicalFailures, 1); assert.equal(f.outgoing[0], TECHNICAL_FAILURE_NOTICE);
+  assert.equal(result.diagnostics[0].technicalFailure, true); assert.equal(f.state().guardianAlerts, undefined);
   complete({ data: Buffer.from([1]), mimeType: "image/png" }); await flushMicrotasks();
   assert.equal(f.guardian.getModelUsage().calls, 0); assert.equal(f.outgoing.length, 1); f.guardian.shutdown();
 });
@@ -62,6 +65,23 @@ test("cancelación externa no autoriza mensaje ni handoff tardíos", async () =>
   const pending = f.guardian.processTurn({ turn: f.turn(), signal: controller.signal });
   await flushMicrotasks(); controller.abort(new Error("Cancelado"));
   await assert.rejects(pending, /Cancelado/); assert.deepEqual(f.outgoing, []); assert.equal(f.state().humanHandoffRequired, false); f.guardian.shutdown();
+});
+test("el guardián aplica la misma racha de fallas y registra una única solicitud de alerta al derivar", async () => {
+  const f = guardianFixture({ state: { consecutiveMisunderstandings: 3 }, step: () => { throw new Error("Falla de prueba"); } });
+  try {
+    await f.run();
+    assert.equal(f.state().consecutiveTechnicalFailures, 1); assert.equal(f.state().humanHandoffRequired, false);
+    assert.equal(f.state().consecutiveMisunderstandings, 3);
+    await f.run();
+    assert.equal(f.state().consecutiveTechnicalFailures, 2); assert.equal(f.state().humanHandoffRequired, true);
+    assert.equal(f.state().consecutiveMisunderstandings, 3);
+    assert.equal(f.state().guardianAlerts.length, 1); assert.equal(f.state().guardianAlerts[0].delivered, false);
+    assert.equal(f.handoffs.filter(row => row.active === true).length, 1);
+    const alerts = structuredClone(f.state().guardianAlerts);
+    await f.run();
+    assert.deepEqual(f.outgoing, [TECHNICAL_FAILURE_NOTICE, TECHNICAL_HANDOFF_MESSAGE]);
+    assert.deepEqual(f.state().guardianAlerts, alerts); assert.equal(f.guardian.getModelUsage().calls, 2);
+  } finally { f.guardian.shutdown(); }
 });
 test("apagado por señal registra lotes RAM descartados", async () => {
   const events = new EventEmitter(), f = guardianFixture({ processEvents: events });

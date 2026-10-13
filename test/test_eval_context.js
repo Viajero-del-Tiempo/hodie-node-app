@@ -55,6 +55,20 @@ test("excluye historial anterior y conserva los mensajes declarados de la sesió
     assert.ok(world.getCart());
   } finally { world.close(); }
 });
+test("null explícito es una decisión tomada; clave omitida conserva pendiente, sin leer ni editar YAML", () => {
+  for (const explicit of [true, false]) {
+    const cart = evalCart();
+    if (!explicit) { delete cart.lineas[0].texto; delete cart.lineas[0].empaque; }
+    const world = initialize({ carrito: cart });
+    try {
+      const line = world.getCart().lines[0];
+      assert.equal(line.customization.declined, explicit);
+      assert.equal(line.customization.pending, !explicit);
+      assert.equal(line.packaging.declined, explicit);
+      assert.equal(line.customization.text, null);
+    } finally { world.close(); }
+  }
+});
 test("carrito vence a 72 horas y el historial del modelo se limita a 20 mensajes", () => {
   const world = initialize({ carrito: evalCart({ actualizadoHaceHoras: CART_TTL_MS / 3600000 }),
     conversacion: Array.from({ length: 25 }, (_, index) => ({ cliente: "Mensaje " + index })) });

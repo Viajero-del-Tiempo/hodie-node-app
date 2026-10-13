@@ -11,6 +11,8 @@ import { writeReport } from "./eval/report.js";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { TECHNICAL_FAILURE_NOTICE } from "../src/agents/consultation/technical-failure.js";
+import { createVirtualClock } from "./helpers/virtual-clock.js";
 
 test("llamadas por turno calcula percentiles con ceros conocidos y omite consumo desconocido", () => {
   assert.deepEqual(countStats([0, 1, 2, 4, null]), { samples: 4, unknownSamples: 1, p50: 1, p95: 4, max: 4 });
@@ -41,14 +43,15 @@ test("agente reinicia el ordinal por turno; informe conserva configuración soli
     createAgent: input => {
       requested.push(input.thinkingBudget);
       return createAgent({ ...input, modelEnv: {}, modelFactory: options => {
-        assert.deepEqual(options, { thinkingBudget: 512 });
+        assert.deepEqual(options, { thinkingBudget: 512, maxRetries: 0 });
         return scriptedModel([reply("ver_producto", { productId: "product-a" }),
           reply("responder", { texto: "Primera respuesta", entendido: true }), reply("responder", { texto: "Segunda respuesta", entendido: true })]);
       } });
     } });
   assert.deepEqual(requested, [512, 512, 512]);
   assert.equal(report.metadata.agentThinkingBudgetOverride, 512);
-  assert.deepEqual(report.metadata.agentConfigurations, [{ model: "test-model", thinking: { mode: "budget", thinkingBudget: 512, source: "override" } }]);
+  assert.deepEqual(report.metadata.agentConfigurations, [{ model: "test-model", thinking: { mode: "budget", thinkingBudget: 512, source: "override" },
+    modelCalls: { timeoutMs: 20000, maxRetries: 1, sdkMaxRetries: 0, retryReserveMs: 5000, transientRetryDelayMs: 500 } }]);
   for (const run of report.cases[0].repetitions) {
     assert.deepEqual(run.modelUsage.agent.callDetails.map(call => [call.turn, call.callInTurn]), [[1, 1], [1, 2], [2, 1]]);
     assert.deepEqual(run.turns.map(turn => turn.modelCalls.agent), [2, 1]);
@@ -56,6 +59,20 @@ test("agente reinicia el ordinal por turno; informe conserva configuración soli
   assert.deepEqual(report.summary.modelCallsPerTurn.consultation, { samples: 6, unknownSamples: 0, p50: 1, p95: 2, max: 2 });
   assert.equal(report.summary.latency.byCallInTurn.consultation.byPosition[1].samples, 6);
   assert.equal(report.summary.latency.byCallInTurn.consultation.byPosition[2].samples, 3);
+});
+test("métricas cuentan cada intento y separan timeout/reintento sin inventar tokens del intento abortado", () => {
+  const usage = { ...emptyModelUsage(), calls: 2, observedCalls: 2, failedCalls: 1, successfulCalls: 1,
+    callsWithoutUsage: 1, usageComplete: false, reportedTokens: { input: 10, output: 2, total: 12 },
+    callDetails: [
+      { component: "agent", turn: 1, callInTurn: 1, modelStep: 1, attempt: 1, durationMs: 20000, errorCode: "MODEL_CALL_TIMEOUT" },
+      { component: "agent", turn: 1, callInTurn: 2, modelStep: 1, attempt: 2, durationMs: 4000 },
+    ] };
+  const metrics = evaluationMetrics([{ repetitions: [{ modelUsage: { agent: usage, evaluator: emptyModelUsage() }, tools: [],
+    turns: [{ number: 1, durationMs: 24000, usage }] }] }]);
+  assert.equal(metrics.modelAttempts.agent.retries, 1); assert.equal(metrics.modelAttempts.agent.timedOut, 1);
+  assert.equal(metrics.modelAttempts.agent.byAttempt[1].maxMs, 20000);
+  assert.equal(metrics.modelAttempts.agent.byAttempt[2].maxMs, 4000);
+  assert.equal(metrics.modelCallsPerTurn.consultation.max, 2);
 });
 
 test("latencia por llamada usa reloj inyectado e incluye fallos y tiempo observado de pendientes", async () => {
@@ -161,6 +178,22 @@ test("TURN_TIMEOUT identifica la herramienta en curso y conserva su tiempo obser
   }
   assert.equal(report.summary.latency.tools.byName.consultar_politicas.samples, 3);
 });
+test("timeouts devueltos como diagnóstico son error técnico y no se evalúan como calidad", async () => {
+  for (const code of ["TURN_TIMEOUT", "AGENT_TIMEOUT", "GUARDIAN_TIMEOUT", "MODEL_CALL_TIMEOUT"]) {
+    const judge = createStubJudge();
+    judge.evaluate = () => assert.fail("Un timeout no debe enviarse al juez");
+    const report = await runEvaluation(evalDataset(), { now: FIXTURE_NOW, judge,
+      createAgent: async () => ({ kind: "real", getModelUsage: () => emptyModelUsage(),
+        runTurn: async () => ({ diagnostics: [{ code, message: "Plazo agotado", interruptedPhase: { phase: "model", callInTurn: 1 } }] }) }) });
+    for (const run of report.cases[0].repetitions) {
+      assert.equal(run.status, "error"); assert.equal(run.executed, true);
+      assert.equal(run.diagnostics[0].code, code); assert.equal(run.turns[0].timeout.code, code);
+      assert.deepEqual(run.turns[0].timeout.interruptedPhase, { phase: "model", callInTurn: 1 });
+      assert.deepEqual(run.criteria, []);
+    }
+    assert.equal(report.summary.exitCode, 2); assert.equal(report.summary.thresholdsPassed, false);
+  }
+});
 
 test("contador registra invocaciones efectivas, tokens del proveedor y fallos sin inventar consumo", async () => {
   const tracker = createModelUsageTracker();
@@ -233,13 +266,73 @@ test("JSON inválido del evaluador conserva ambas llamadas, sus tokens y el extr
   assert.equal(report.summary.thresholdsPassed, false);
   assert.equal(report.summary.productionApproved, false);
 });
-test("fallos del modelo se cuentan aun cuando el agente cierre por derivación técnica", async () => {
-  const report = await runEvaluation(evalDataset(), { now: FIXTURE_NOW, judge: createStubJudge(),
-    createAgent: input => createAgent({ ...input, model: scriptedModel([() => { throw new Error("Falla de prueba"); }]) }) });
+test("fallos no transitorios se cuentan y el aviso técnico deja error, sin pasar por el juez ni derivar", async () => {
+  const judge = createStubJudge();
+  judge.evaluate = () => assert.fail("Una falla técnica no se evalúa como calidad");
+  const report = await runEvaluation(evalDataset(), { now: FIXTURE_NOW, judge,
+    createAgent: input => createAgent({ ...input, model: scriptedModel([() => {
+      throw Object.assign(new Error("PRIVATE_PROVIDER_ERROR con prompt privado"), { status: 400 });
+    }]) }) });
   assert.equal(report.summary.modelUsage.agent.calls, 3);
   assert.equal(report.summary.modelUsage.agent.failedCalls, 3);
   assert.equal(report.summary.modelUsage.agent.callsWithoutUsage, 3);
   assert.equal(report.summary.modelUsage.agent.usageComplete, false);
   assert.equal(report.summary.modelUsage.evaluator.calls, 0);
   assert.ok(report.cases[0].repetitions.every(run => run.turns[0].agentDiagnostics.length === 1));
+  for (const run of report.cases[0].repetitions) {
+    assert.equal(run.status, "error"); assert.equal(run.diagnostics[0].code, "AGENT_ERROR");
+    assert.equal(run.diagnostics[0].technicalFailure, true);
+    assert.equal(run.diagnostics[0].errorName, "Error"); assert.equal(run.diagnostics[0].httpStatus, 400);
+    assert.equal(run.diagnostics[0].errorClass, "HTTP_4XX");
+    assert.equal(run.modelUsage.agent.callDetails[0].errorName, "Error"); assert.equal(run.modelUsage.agent.callDetails[0].httpStatus, 400);
+    assert.equal(run.modelUsage.agent.callDetails[0].errorClass, "HTTP_4XX");
+    assert.equal(run.turns[0].outgoing[0].text, TECHNICAL_FAILURE_NOTICE); assert.equal(run.turns[0].handoffAfter, false);
+    assert.deepEqual(run.criteria, []);
+  }
+  assert.equal(JSON.stringify(report).includes("PRIVATE_PROVIDER_ERROR"), false);
+  assert.equal(report.summary.exitCode, 2); assert.equal(report.summary.thresholdsPassed, false);
+});
+
+test("informe conserva la clase de cada intento fallido y cuenta el reintento, sin calidad ni mensajes privados", async () => {
+  const judge = createStubJudge();
+  judge.evaluate = () => assert.fail("Dos intentos fallidos cierran como error técnico");
+  const report = await runEvaluation(evalDataset(), { now: FIXTURE_NOW, judge,
+    createAgent: input => {
+      const clock = createVirtualClock(0), schedule = clock.setTimeout;
+      // Avanzar únicamente la espera programada: ningún retardo real de 500 ms.
+      clock.setTimeout = (fn, milliseconds) => {
+        const id = schedule(fn, milliseconds);
+        if (milliseconds === 500) queueMicrotask(() => clock.advance(500));
+        return id;
+      };
+      return createAgent({ ...input, modelClock: clock, model: scriptedModel([503, 429].map(status => () => {
+        throw Object.assign(new Error("PRIVATE_PROVIDER_ERROR con prompt privado"), { status });
+      })) });
+    } });
+  assert.equal(report.summary.modelUsage.agent.calls, 6); assert.equal(report.summary.modelUsage.agent.failedCalls, 6);
+  assert.equal(report.summary.modelUsage.agent.callsWithoutUsage, 6); assert.equal(report.summary.modelUsage.agent.usageComplete, false);
+  assert.equal(report.summary.modelUsage.evaluator.calls, 0); assert.equal(report.summary.modelAttempts.agent.retries, 3);
+  assert.deepEqual(report.summary.modelAttempts.agent.byErrorClass, { PROVIDER_5XX: 3, RATE_LIMIT: 3 });
+  for (const run of report.cases[0].repetitions) {
+    assert.equal(run.status, "error"); assert.deepEqual(run.criteria, []);
+    assert.deepEqual(run.modelUsage.agent.callDetails.map(call => [call.attempt, call.errorClass, call.httpStatus]),
+      [[1, "PROVIDER_5XX", 503], [2, "RATE_LIMIT", 429]]);
+    assert.equal(run.turns[0].technicalFailure.errorClass, "RATE_LIMIT"); assert.equal(run.diagnostics[0].errorClass, "RATE_LIMIT");
+    assert.equal(run.turns[0].outgoing[0].text, TECHNICAL_FAILURE_NOTICE); assert.equal(run.turns[0].handoffAfter, false);
+  }
+  assert.equal(report.summary.exitCode, 2); assert.equal(report.summary.thresholdsPassed, false);
+  const directory = await mkdtemp(join(tmpdir(), "eval-retry-classes-"));
+  try {
+    const output = await writeReport(report, directory);
+    const saved = JSON.parse(await readFile(join(output, "report.json"), "utf8"));
+    const rawTrace = await readFile(join(output, "trace.jsonl"), "utf8");
+    const trace = rawTrace.trim().split("\n").map(line => JSON.parse(line)).filter(event => event.type === "model_call");
+    const summary = await readFile(join(output, "summary.md"), "utf8");
+    assert.deepEqual(trace.map(call => [call.attempt, call.errorClass, call.httpStatus]),
+      Array.from({ length: 3 }, () => [[1, "PROVIDER_5XX", 503], [2, "RATE_LIMIT", 429]]).flat());
+    assert.deepEqual(saved.summary.modelAttempts.agent.byErrorClass, { PROVIDER_5XX: 3, RATE_LIMIT: 3 });
+    assert.ok(summary.includes('"PROVIDER_5XX":3')); assert.ok(summary.includes('"RATE_LIMIT":3'));
+    assert.equal(JSON.stringify(saved).includes("PRIVATE_PROVIDER_ERROR"), false);
+    assert.equal(rawTrace.includes("PRIVATE_PROVIDER_ERROR"), false); assert.equal(summary.includes("PRIVATE_PROVIDER_ERROR"), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

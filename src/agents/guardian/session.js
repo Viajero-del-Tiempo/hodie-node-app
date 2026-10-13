@@ -10,6 +10,8 @@ export function prepareSession(state, now, config, { newSession = false } = {}) 
     next.sessionCutoff = next.messages.length;
     next.consecutiveMisunderstandings = 0;
     next.lastQuote = null;
+    next.pendingOrderConfirmation = null;
+    next.pendingOrderReceipt = null;
     next.pendingTextConfirmation = null;
     next.pendingRucConfirmation = null;
     if (resumeRequested) next.resumeAppliedAt = next.resumeRequestedAt;

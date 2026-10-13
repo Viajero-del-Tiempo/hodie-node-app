@@ -57,3 +57,26 @@ test("genera PDF real con datos de la foto del pedido, sin red, y limpia el arch
     assert.ok(rendered.some(value => typeof value === "string" && value.includes("no es una factura")));
   } finally { if (path && existsSync(path)) await unlink(path); }
 });
+test("PDF de pruebas usa datos bancarios inyectados y desactiva la imagen de cuenta real, sin alterar defaults web", async () => {
+  const bankConfig = JSON.parse(await readFile(new URL("./fixtures/agent-bank.json", import.meta.url), "utf8"));
+  const rendered = [], images = [];
+  let path;
+  try {
+    path = await generateOrderPDF({ orderNumber: "test-" + randomUUID(), createdAt: new Date(), userDisplayName: "Cliente Alfa", userPhoneNumber: "test-phone",
+      shippingAddress: shippingFixture(), shippingMethod: "transportadora_contra_entrega", billing: { invoiceRequested: false },
+      items: [{ productName: "Producto Alfa", productSku: "test-sku", quantity: 1, price: 10, selectedPackaging: null, imageUrl: "" }],
+      subtotal: 10, shippingCost: 0, total: 10,
+    }, { bankConfig, bankImagePath: null, documentFactory(options) {
+      const doc = new PDFDocument(options), text = doc.text, image = doc.image;
+      doc.text = function(value, ...args) { rendered.push(value); return text.call(this, value, ...args); };
+      doc.image = function(value, ...args) { images.push(value); return image.call(this, value, ...args); };
+      return doc;
+    }, loadImage: async () => { assert.fail("Sin imágenes no usa red"); } });
+    for (const value of ["Entidad: " + bankConfig.bankName, "Titular: " + bankConfig.accountHolder,
+      "Nro. de Cuenta: " + bankConfig.accountNumber, "Cédula / RUC: " + bankConfig.documentId]) assert.ok(rendered.includes(value), value);
+    assert.deepEqual(rendered.filter(value => typeof value === "string" && value.startsWith("Alias:")), ["Alias: " + bankConfig.alias]);
+    assert.ok(rendered.includes("Alias para transferencia: " + bankConfig.alias));
+    assert.equal(images.some(value => typeof value === "string" && value.endsWith("banco.png")), false);
+    assert.equal((await readFile(path)).subarray(0, 5).toString(), "%PDF-");
+  } finally { if (path && existsSync(path)) await unlink(path); }
+});

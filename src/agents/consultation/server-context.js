@@ -31,6 +31,7 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
         shipping: pick(cart.shipping, ["recipientName", "recipientDocument", "city", "department", "street", "phone"]),
         billing: pick(cart.billing, ["invoiceRequested", "legalName", "ruc", "rucValidation"]) } : null,
       lastQuote: runtime.getState().lastQuote ? pick(runtime.getState().lastQuote, ["quoteId", "shownAt"]) : null,
+      orderConfirmation: state.pendingOrderConfirmation ? { quoteId: state.pendingOrderConfirmation.quoteId, awaiting: true } : null,
       billingProfiles: (profile?.billingProfiles ?? []).map(row => pick(row, ["id", "legalName", "ruc", "rucValidation", "isDefault"])),
       defaultBillingProfileId: profile?.billingProfiles?.some(row => row.id === profile.defaultBillingProfileId) ? profile.defaultBillingProfileId : null,
       // Sin fecha no se presenta esta lista como ordenada por antigüedad.

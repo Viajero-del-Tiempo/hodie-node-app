@@ -16,12 +16,20 @@ import { evaluationMetrics, turnModelCalls } from "./metrics.js";
 import { parseAgentThinkingBudget, resolveAgentModelConfig } from "../../src/agents/consultation/model-config.js";
 import { enableMemoryOnly } from "./production-guard.js";
 import { emptyModelUsage, readModelUsage, sumModelUsage, modelUsageSince } from "../../src/utils/model-usage.util.js";
+import { resolveModelCallTimeout } from "../../src/agents/consultation/model-invoker.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const turnTimeoutCodes = new Set(["TURN_TIMEOUT", "AGENT_TIMEOUT", "GUARDIAN_TIMEOUT", "MODEL_CALL_TIMEOUT"]);
 const errorDiagnostic = (error, location = {}) => ({
   code: error.code ?? "EVALUATION_ERROR", message: error.message,
   ...(typeof error.rawExcerpt === "string" ? { rawExcerpt: error.rawExcerpt.slice(0, 300) } : {}),
   ...(error.interruptedPhase ? { interruptedPhase: error.interruptedPhase } : {}),
+  ...(error.technicalFailure === true ? { technicalFailure: true } : {}),
+  ...(error.errorName ? { errorName: error.errorName } : {}),
+  ...(error.errorClass ? { errorClass: error.errorClass } : {}),
+  ...(error.httpStatus !== undefined ? { httpStatus: error.httpStatus } : {}),
+  ...(error.networkCode ? { networkCode: error.networkCode } : {}),
+  ...(error.retrySkipped ? { retrySkipped: error.retrySkipped } : {}),
   ...location,
 });
 
@@ -48,12 +56,14 @@ async function runRepetition(item, fixtures, options, number) {
     initialized = true;
     factoryStarted = true;
     agent = assertAgent(await withTimeout(signal => options.createAgent({ world, transport, signal,
+      ...(options.agentModelCallTimeoutMs !== undefined ? { modelCallTimeoutMs: options.agentModelCallTimeoutMs } : {}),
       ...(options.agentThinkingBudget !== undefined ? { thinkingBudget: options.agentThinkingBudget } : {}) }), options.timeoutMs, "AGENT_SETUP_TIMEOUT"));
     result.agentKind = agent.kind;
     result.agentModelInjected = agent.metadata?.modelInjected === true;
     result.agentConfiguration = { model: agent.metadata?.model ?? null,
       thinking: agent.metadata?.thinking ?? { mode: agent.kind === "trivial" ? "not_applicable" : "unknown",
         thinkingBudget: null, source: "adapter" },
+      ...(agent.metadata?.modelCalls ? { modelCalls: structuredClone(agent.metadata.modelCalls) } : {}),
       ...(agent.metadata?.requestedThinking ? { requestedThinking: structuredClone(agent.metadata.requestedThinking) } : {}) };
     try {
       await withTimeout(signal => prepareShownQuote(item.input.context, world, signal), options.timeoutMs, "QUOTE_SETUP_TIMEOUT");
@@ -79,6 +89,7 @@ async function runRepetition(item, fixtures, options, number) {
       let usage = null;
       let agentDiagnostics = [];
       let guardian = null;
+      let declaredTechnicalFailure = false;
       try {
         await withTimeout(async signal => {
           world.beginTurn(number, signal);
@@ -92,6 +103,7 @@ async function runRepetition(item, fixtures, options, number) {
           usage = response?.usage ?? null;
           agentDiagnostics = response?.diagnostics ?? [];
           guardian = response?.guardian ?? null;
+          declaredTechnicalFailure = response?.technicalFailure === true || guardian?.outcome === "technical_error";
           for (const [index, message] of (response?.processedMessages ?? []).entries()) {
             if (incoming[index]) incoming[index].content = message.text;
           }
@@ -101,11 +113,16 @@ async function runRepetition(item, fixtures, options, number) {
         if (error.code === "TURN_TIMEOUT") error.interruptedPhase = world.getExecutionPhase();
       }
       finally { transport.endTurn(); }
+      const durationMs = performance.now() - startedAt;
+      // Fuera del withTimeout del turno; en el runner los puertos son ficticios.
+      const backgroundStarted = performance.now();
+      const backgroundJobs = await world.drainBackgroundJobs();
+      const backgroundDurationMs = performance.now() - backgroundStarted;
       const outgoing = transport.getOutgoing().filter(message => message.turn === number);
       const sent = outgoing.map(message => ({
         role: "assistant", turn: number, eventId: message.id,
         content: message.type === "text" ? message.text
-          : (message.caption ? message.caption + " " : "") + "[imagen enviada: " + message.source + "]",
+          : (message.caption ? message.caption + " " : "") + (message.type === "document" ? "[PDF enviado: " : "[imagen enviada: ") + message.source + "]",
       }));
       conversation.push(...sent);
       const state = world.getState();
@@ -113,14 +130,31 @@ async function runRepetition(item, fixtures, options, number) {
       state.messages.push(...[...incoming, ...sent].map(message => ({ role: message.role, content: message.content })));
       state.lastActivityAt = clock.now();
       world.setState(state);
-      const timeoutDiagnostic = failure?.code === "TURN_TIMEOUT" ? failure
-        : agentDiagnostics.find(diagnostic => ["AGENT_TIMEOUT", "GUARDIAN_TIMEOUT", "TURN_TIMEOUT"].includes(diagnostic.code));
+      const timeoutDiagnostic = turnTimeoutCodes.has(failure?.code) ? failure
+        : agentDiagnostics.find(diagnostic => turnTimeoutCodes.has(diagnostic.code));
+      const technicalDiagnostic = agentDiagnostics.find(diagnostic => diagnostic.technicalFailure === true) ?? timeoutDiagnostic
+        ?? (declaredTechnicalFailure ? { code: "TECHNICAL_FAILURE", technicalFailure: true,
+          message: "Falla técnica comunicada por el agente.", interruptedPhase: world.getExecutionPhase() } : null);
       result.turns.push({
         number, incoming, outgoing, handoffBefore, handoffAfter: state.humanHandoffRequired,
-        durationMs: performance.now() - startedAt, usage, agentDiagnostics, guardian, snapshotAfter: world.snapshot(),
+        durationMs, usage, agentDiagnostics, guardian, backgroundJobs, backgroundDurationMs, snapshotAfter: world.snapshot(),
         ...(timeoutDiagnostic ? { timeout: { code: timeoutDiagnostic.code, interruptedPhase: timeoutDiagnostic.interruptedPhase } } : {}),
+        ...(technicalDiagnostic ? { technicalFailure: { code: technicalDiagnostic.code,
+          errorName: technicalDiagnostic.errorName, errorClass: technicalDiagnostic.errorClass, httpStatus: technicalDiagnostic.httpStatus,
+          ...(technicalDiagnostic.networkCode ? { networkCode: technicalDiagnostic.networkCode } : {}),
+          ...(technicalDiagnostic.retrySkipped ? { retrySkipped: technicalDiagnostic.retrySkipped } : {}),
+          interruptedPhase: technicalDiagnostic.interruptedPhase } } : {}),
       });
       if (failure) throw failure;
+      // El agente puede cerrar por código después de una falla y devolver un
+      // diagnóstico. Ese turno sigue siendo un error técnico, no una muestra
+      // de calidad evaluable; no se envía al juez ni se inventa pass/fail.
+      if (technicalDiagnostic) throw Object.assign(new Error(technicalDiagnostic.message ?? "Falla técnica en el turno."),
+        { code: technicalDiagnostic.code, interruptedPhase: technicalDiagnostic.interruptedPhase,
+          technicalFailure: true, errorName: technicalDiagnostic.errorName, errorClass: technicalDiagnostic.errorClass,
+          httpStatus: technicalDiagnostic.httpStatus,
+          ...(technicalDiagnostic.networkCode ? { networkCode: technicalDiagnostic.networkCode } : {}),
+          ...(technicalDiagnostic.retrySkipped ? { retrySkipped: technicalDiagnostic.retrySkipped } : {}) });
       clock.advance(1000);
     }
     result.after = world.snapshot();
@@ -186,10 +220,11 @@ async function runRepetition(item, fixtures, options, number) {
 export async function runEvaluation(dataset, {
   createAgent, judge, timeoutMs = 60000, now = Date.now(), caseIds = [], categories = [],
   mediaResolver = null, onRepetition = () => {},
-  agentThinkingBudget,
+  agentThinkingBudget, agentModelCallTimeoutMs,
 } = {}) {
   enableMemoryOnly();
   agentThinkingBudget = parseAgentThinkingBudget(agentThinkingBudget, "agentThinkingBudget");
+  if (agentModelCallTimeoutMs !== undefined) agentModelCallTimeoutMs = resolveModelCallTimeout({}, agentModelCallTimeoutMs);
   if (dataset.errors.length || dataset.warnings.length) {
     throw Object.assign(new Error("El archivo no es válido"), { code: "INVALID_FILE", diagnostics: [...dataset.errors, ...dataset.warnings] });
   }
@@ -206,8 +241,9 @@ export async function runEvaluation(dataset, {
     totalInFile: dataset.cases.length, categories: dataset.categories,
     node: process.version, agentKind: null, judgeKind: judge.kind, judge: judge.metadata ?? { kind: judge.kind },
     mediaComplete: true, agentThinkingBudgetOverride: agentThinkingBudget ?? null,
+    agentModelCallTimeoutOverride: agentModelCallTimeoutMs ?? null,
   };
-  const options = { createAgent, judge, timeoutMs, now, mediaResolver, agentThinkingBudget, filename: dataset.filename };
+  const options = { createAgent, judge, timeoutMs, now, mediaResolver, agentThinkingBudget, agentModelCallTimeoutMs, filename: dataset.filename };
   const judgeUsageBefore = readModelUsage(judge, { knownZero: judge.kind === "stub" });
   const cases = [];
   for (const item of selected) {
@@ -300,13 +336,16 @@ export async function main(args = process.argv.slice(2)) {
       now: { type: "string" }, "timeout-ms": { type: "string", default: "60000" },
       "judge-timeout-ms": { type: "string", default: "60000" },
       "agent-thinking-budget": { type: "string" },
+      "agent-model-call-timeout-ms": { type: "string" },
     }, strict: true, allowPositionals: false,
   });
   if (values.help) {
-    console.log("npm run test:eval -- [--validate] [--agent trivial|real|ruta] [--agent-thinking-budget N] [--judge stub|llm] [--case ID] [--cases ID,ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
+    console.log("npm run test:eval -- [--validate] [--agent trivial|real|ruta] [--agent-thinking-budget N] [--agent-model-call-timeout-ms N] [--judge stub|llm] [--case ID] [--cases ID,ID] [--category nombre] [--media manifiesto.json] [--now ISO] [--output directorio]");
     return 0;
   }
   const agentThinkingBudget = parseAgentThinkingBudget(values["agent-thinking-budget"], "--agent-thinking-budget");
+  const agentModelCallTimeoutMs = values["agent-model-call-timeout-ms"] === undefined ? undefined
+    : resolveModelCallTimeout({}, values["agent-model-call-timeout-ms"]);
   enableMemoryOnly();
   const dataset = await loadCases(resolve(values.file));
   const spec = checkToolSpecification(await readFile(resolve(HERE, "../../docs/SPEC-agente.md"), "utf8"));
@@ -335,11 +374,14 @@ export async function main(args = process.argv.slice(2)) {
     const dotenv = await import("dotenv");
     dotenv.config({ quiet: true });
   }
-  if (values.agent !== "trivial") resolveAgentModelConfig({ thinkingBudget: agentThinkingBudget });
+  if (values.agent !== "trivial") {
+    resolveAgentModelConfig({ thinkingBudget: agentThinkingBudget });
+    resolveModelCallTimeout(process.env, agentModelCallTimeoutMs);
+  }
   const adapter = await loadAgent(values.agent);
   const judge = values.judge === "stub" ? createStubJudge() : await createLLMJudge({ timeoutMs: judgeTimeoutMs });
   const report = await runEvaluation(dataset, {
-    createAgent: adapter.factory, judge, timeoutMs, now, agentThinkingBudget,
+    createAgent: adapter.factory, judge, timeoutMs, now, agentThinkingBudget, agentModelCallTimeoutMs,
     caseIds, categories: values.category ?? [],
     mediaResolver: await loadMediaResolver(values.media, dataset),
     onRepetition: result => console.log(JSON.stringify(result)),

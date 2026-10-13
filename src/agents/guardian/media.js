@@ -8,7 +8,7 @@ export async function withSignal(action, signal) {
     listener = () => reject(signal.reason);
     signal.addEventListener("abort", listener, { once: true });
   });
-  try { return await Promise.race([Promise.resolve().then(action), abort]); }
+  try { return await Promise.race([Promise.resolve().then(() => { signal.throwIfAborted(); return action(); }), abort]); }
   finally { signal.removeEventListener("abort", listener); }
 }
 const imageTypes = new Set(["image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"]);

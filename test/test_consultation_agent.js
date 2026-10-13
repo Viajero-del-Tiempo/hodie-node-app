@@ -7,6 +7,9 @@ import { evalFixtures, evalCart } from "./helpers/eval-fixtures.js";
 import { deterministicChecks } from "./eval/checks.js";
 import { createConsultationAgent } from "../src/agents/consultation/agent.js";
 import { parseAgentThinkingBudget, resolveAgentModelConfig } from "../src/agents/consultation/model-config.js";
+import { createVirtualClock, flushMicrotasks } from "./helpers/virtual-clock.js";
+import { withTimeout } from "./eval/agent-contract.js";
+import { TECHNICAL_FAILURE_NOTICE, TECHNICAL_HANDOFF_MESSAGE } from "../src/agents/consultation/technical-failure.js";
 
 test("presupuesto del agente valida números, usa 512 por defecto y prioriza override sin mutar entorno", () => {
   assert.deepEqual(resolveAgentModelConfig({ env: {} }), { options: { thinkingBudget: 512 },
@@ -25,13 +28,15 @@ test("presupuesto del agente valida números, usa 512 por defecto y prioriza ove
   assert.equal(resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" }, thinkingBudget: 512 }).options.thinkingBudget, 512);
   assert.throws(() => resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" } }), { code: "INVALID_AGENT_THINKING_BUDGET" });
 });
-test("factory del agente recibe exclusivamente su presupuesto y metadata describe lo enviado", async () => {
+test("factory del agente recibe presupuesto y maxRetries cero sin modificar otros consumidores", async () => {
   for (const [env, thinkingBudget, expected] of [[{}, undefined, { thinkingBudget: 512 }], [{ AGENT_THINKING_BUDGET: "512" }, undefined, { thinkingBudget: 512 }],
     [{ AGENT_THINKING_BUDGET: "2048" }, 0, { thinkingBudget: 0 }]]) {
     const requests = [];
     const agent = await createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba de configuración.", modelEnv: env, thinkingBudget,
       modelFactory: options => { requests.push(options); return { model: "test-budget-model" }; } });
-    assert.deepEqual(requests, [expected]); assert.equal(agent.metadata.model, "test-budget-model");
+    assert.deepEqual(requests, [{ ...expected, maxRetries: 0 }]); assert.equal(agent.metadata.model, "test-budget-model");
+    assert.deepEqual(agent.metadata.modelCalls, { timeoutMs: 20000, maxRetries: 1, sdkMaxRetries: 0,
+      retryReserveMs: 5000, transientRetryDelayMs: 500 });
     assert.equal(agent.metadata.thinking.thinkingBudget, expected.thinkingBudget);
     assert.equal(agent.metadata.thinking.mode, "budget");
     assert.equal(agent.metadata.thinking.source, thinkingBudget !== undefined ? "override" : env.AGENT_THINKING_BUDGET === undefined ? "default" : "env");
@@ -152,8 +157,11 @@ test("lotes que superan el presupuesto, omiten la reserva o continúan después 
       const result = await f.run();
       assert.equal(result.diagnostics[0].code, "TOOL_LIMIT");
       assert.equal(f.world.getEvents().length, 0);
-      assert.equal(f.world.getState().humanHandoffRequired, true);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+      assert.deepEqual(f.world.getState().guardianAlerts, []);
       assert.equal(f.transport.getOutgoing().length, 1);
+      assert.equal(f.transport.getOutgoing()[0].text, TECHNICAL_FAILURE_NOTICE);
     } finally { f.close(); }
   }
   for (const names of [["responder", "ver_producto"], ["responder", "responder"]]) {
@@ -183,20 +191,85 @@ test("intentos de herramientas ajenas consumen presupuesto y no modifican catál
     assert.deepEqual(model.bindings.at(-1).options.allowedFunctionNames, ["responder"]);
   } finally { f.close(); }
 });
-test("sin cierre o con error del proveedor se deriva por código una vez y el siguiente turno queda en silencio", async () => {
+test("sin cierre o con error del proveedor se avisa una vez; la segunda falla deriva y los turnos siguientes quedan en silencio", async () => {
   for (const step of [new AIMessage("Texto fuera de responder"), () => { throw new Error("PRIVATE_PROVIDER_ERROR"); }]) {
-    const f = await consultationFixture({ model: scriptedModel([step]) });
+    const f = await consultationFixture({ model: scriptedModel([step, step]) });
     try {
+      const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
       const result = await f.run();
       assert.equal(result.diagnostics.length, 1);
-      assert.equal(f.world.getState().humanHandoffRequired, true);
+      assert.equal(result.diagnostics[0].technicalFailure, true);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+      assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+      assert.deepEqual(f.world.getState().guardianAlerts, []);
       assert.equal(f.transport.getOutgoing().length, 1);
+      assert.equal(f.transport.getOutgoing()[0].text, TECHNICAL_FAILURE_NOTICE);
       assert.equal(f.transport.getOutgoing()[0].text.includes("PRIVATE_PROVIDER_ERROR"), false);
       await f.run({ user: "Otro mensaje" }, 2);
-      assert.equal(f.model.invocations.length, 1);
-      assert.equal(f.transport.getOutgoing().length, 1);
-    } finally { f.close(); }
+      assert.equal(f.model.invocations.length, 2);
+      assert.equal(f.world.getState().humanHandoffRequired, true);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 2);
+      assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+      assert.equal(f.transport.getOutgoing().length, 2);
+      assert.equal(f.transport.getOutgoing()[1].text, TECHNICAL_HANDOFF_MESSAGE);
+      const alerts = f.world.getState().guardianAlerts;
+      assert.equal(alerts.length, 1); assert.equal(alerts[0].type, "TECHNICAL_FAILURE"); assert.equal(alerts[0].delivered, false);
+      const index = f.world.handoffs.get(f.world.getState().whatsappChatId);
+      assert.equal(index.active, true); assert.equal(index.motivo, f.world.getState().humanHandoffReason);
+      await f.run({ user: "Siguiente mensaje" }, 3);
+      assert.equal(f.model.invocations.length, 2); assert.equal(f.transport.getOutgoing().length, 2);
+      assert.deepEqual(f.world.getState().guardianAlerts, alerts);
+    } finally { await f.agent.dispose(); f.close(); }
   }
+});
+test("un cierre válido reinicia la racha técnica aunque entendido sea false", async () => {
+  const fail = () => { throw new Error("Falla de prueba"); };
+  const f = await consultationFixture({ model: scriptedModel([fail,
+    reply("responder", { texto: "Repregunta de prueba.", entendido: false }), fail]) });
+  try {
+    const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
+    await f.run(); assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    await f.run({ user: "Lo explico de nuevo" }, 2);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 0);
+    assert.equal(f.world.getState().lastTechnicalFailure, null);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
+    await f.run({ user: "Otro mensaje" }, 3);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.deepEqual(f.world.getState().guardianAlerts, []);
+    assert.deepEqual(f.transport.getOutgoing().map(message => message.text),
+      [TECHNICAL_FAILURE_NOTICE, "Repregunta de prueba.", TECHNICAL_FAILURE_NOTICE]);
+  } finally { await f.agent.dispose(); f.close(); }
+});
+test("la racha técnica persiste al restaurar el checkpoint en otro runtime", async () => {
+  const fail = () => { throw new Error("Falla de prueba"); };
+  const first = await consultationFixture({ model: scriptedModel([fail]) });
+  let saved;
+  try { await first.run(); saved = structuredClone(first.world.getState()); }
+  finally { await first.agent.dispose(); first.close(); }
+  const second = await consultationFixture({ model: scriptedModel([fail]) });
+  try {
+    second.world.setState(saved);
+    await second.run();
+    assert.equal(second.world.getState().consecutiveTechnicalFailures, 2);
+    assert.equal(second.world.getState().humanHandoffRequired, true);
+    assert.equal(second.world.getState().guardianAlerts.length, 1);
+    assert.equal(second.transport.getOutgoing()[0].text, TECHNICAL_HANDOFF_MESSAGE);
+  } finally { await second.agent.dispose(); second.close(); }
+});
+test("si falla el envío del aviso, agente y guardián no cuentan dos fallas en el mismo lote", async () => {
+  const f = await consultationFixture({ model: scriptedModel([() => { throw new Error("Proveedor no disponible"); }]) });
+  let attempts = 0;
+  f.transport.sendText = async () => { attempts++; throw new Error("Transporte no disponible"); };
+  try {
+    const result = await f.run();
+    assert.equal(result.guardian.outcome, "technical_error");
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.deepEqual(f.world.getState().guardianAlerts, []); assert.equal(attempts, 1);
+  } finally { await f.agent.dispose(); f.close(); }
 });
 test("cancelación externa impide envíos y escrituras tardías aunque el modelo ignore AbortSignal", async () => {
   let finish, started;
@@ -218,19 +291,34 @@ test("cancelación externa impide envíos y escrituras tardías aunque el modelo
   } finally { f.close(); }
 });
 test("timeout interno fuerza cierre antes del timeout del runner y no acepta una respuesta tardía", async () => {
-  let finish;
-  const model = scriptedModel([() => new Promise(resolve => { finish = resolve; })]);
-  const f = await consultationFixture({ model, timeoutMs: 10 });
+  const clock = createVirtualClock(0);
+  let finish, notifyStarted, runnerSignal;
+  const started = new Promise(resolve => { notifyStarted = resolve; });
+  const model = scriptedModel([() => { notifyStarted(); return new Promise(resolve => { finish = resolve; }); }]);
+  const f = await consultationFixture({ model, timeoutMs: 5000, modelCallTimeoutMs: 1000, modelClock: clock });
+  const task = withTimeout(signal => { runnerSignal = signal; return f.run(undefined, 1, signal); }, 60000);
+  const outcome = task.then(result => ({ result }), error => ({ error }));
   try {
-    const result = await f.run();
-    assert.equal(result.diagnostics[0].code, "AGENT_TIMEOUT");
-    assert.equal(f.world.getState().humanHandoffRequired, true);
+    await Promise.race([started, outcome.then(value => { throw value.error ?? new Error("El turno terminó antes de invocar el modelo"); })]);
+    await clock.advanceAsync(1000);
+    const result = await task;
+    assert.equal(result.diagnostics[0].code, "MODEL_CALL_TIMEOUT");
+    assert.equal(result.diagnostics[0].retrySkipped, "INSUFFICIENT_TURN_TIME");
+    assert.equal(runnerSignal.aborted, false); assert.equal(clock.now(), 1000);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.deepEqual(f.world.getState().guardianAlerts, []);
     assert.equal(result.usage.callsWithoutUsage, 1);
+    assert.equal(result.usage.calls, 1); assert.equal(result.usage.failedCalls, 1);
+    const messages = f.transport.getOutgoing(), state = f.world.getState();
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, TECHNICAL_FAILURE_NOTICE);
     finish(reply("responder", { texto: "No enviar tarde", entendido: true }));
-    await Promise.resolve();
-    assert.equal(f.transport.getOutgoing().length, 1);
+    await flushMicrotasks();
+    assert.deepEqual(f.transport.getOutgoing(), messages); assert.deepEqual(f.world.getState(), state);
     assert.equal(f.world.getEvents().length, 0);
-  } finally { f.close(); }
+    assert.equal(model.invocations.length, 1); assert.equal(clock.pendingTimers(), 0);
+  } finally { await f.agent.dispose(); await outcome; f.close(); }
 });
 test("entendido mantiene el contador sin implementar todavía la escalada de cuatro intentos", async () => {
   const f = await consultationFixture({ model: scriptedModel([reply("responder", { texto: "Repregunta", entendido: false })]) });
@@ -246,7 +334,9 @@ test("prompt habilita 4A, preserva seguridad y restricciones temporales de entre
   assert.equal(prompt.includes("TEMPORAL ENTREGA 4"), false);
   assert.ok(prompt.includes("<!-- TEMPORAL ENTREGA 5:"));
   assert.ok(prompt.includes("<!-- FIN TEMPORAL ENTREGA 5 -->"));
-  for (const rule of ["sin afirmar que es un producto de HoDie", "confirmarTexto", "Subtotal de productos", "confirmedRuc", "acknowledgeRucMismatch", "responder.quoteIdMostrado", "nunca hagas cuentas", "crear_pedido todavía no está disponible"]) assert.ok(prompt.includes(rule), rule);
+  for (const rule of ["sin afirmar que es un producto de HoDie", "confirmarTexto", "Subtotal de productos", "confirmedRuc", "acknowledgeRucMismatch", "responder.quoteIdMostrado", "nunca hagas cuentas", "usá crear_pedido solo con el quoteId vigente"]) assert.ok(prompt.includes(rule), rule);
+  assert.equal(prompt.includes("crear_pedido todavía no está disponible"), false);
+  for (const rule of ["lote posterior", "pregunta corta sin repetir", "nunca copies ni reformules datos bancarios", "no pidas repetir la compra"]) assert.ok(prompt.includes(rule), rule);
   assert.equal(prompt.includes("Producto Alfa"), false);
   for (const rule of ["Seguí pendientes del servidor en su orden", "nombres y precios", "packagingType:null",
     "cotizar con lineas", "no prometas que se puede producir", "cliente posterga la compra",

@@ -1,14 +1,20 @@
 import { performance } from "node:perf_hooks";
+import { readFileSync } from "node:fs";
 import { createCatalogService } from "../../src/services/catalog.service.js";
 import { TOOL_NAMES } from "./tool-names.js";
 import { createVirtualClock } from "../helpers/virtual-clock.js";
 import { assertCheckpointState } from "../../src/agents/guardian/attachments.js";
+import { createMemoryOrderConfirmationRepository } from "../helpers/order-confirmation-memory.js";
+import { createOrderPdfJobService } from "../../src/services/order-pdf-job.service.js";
+
+export const EVAL_BANK_CONFIG = Object.freeze(JSON.parse(readFileSync(new URL("../fixtures/agent-bank.json", import.meta.url), "utf8")));
 
 export function createClock(initialTime) {
   return createVirtualClock(initialTime);
 }
 
-export function createMemoryWorld(fixtures, { clock, transport }) {
+export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVAL_BANK_CONFIG, orderFaults = {},
+  generatePdf = async () => null, sendPdf = (...args) => transport.sendPdf(...args) }) {
   let closed = false;
   const assertOpen = () => { if (closed) throw new Error("La ejecución ya terminó"); };
   function repository(rows, key) {
@@ -84,6 +90,7 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
         if ((current ? current.revision ?? 0 : null) !== expectedRevision) throw Object.assign(new Error("El carrito cambió; volvé a consultarlo."), { code: "CARRITO_CAMBIO", field: "cart", statusCode: 400 });
         world.setCart(cart);
       },
+      delete(id) { if (id !== chatId) throw new Error("Carrito de otro chat"); assertOpen(); carts.delete(id); },
     },
     quoteRepository: { get: id => quotes.get(id), set: (id, quote) => quotes.set(id, quote) },
     async uploadCustomizationImage({ base64, mimetype }, { signal } = {}) {
@@ -158,10 +165,17 @@ export function createMemoryWorld(fixtures, { clock, transport }) {
       return {
         catalog: { categories: categories.list(), products: products.list() },
         policies: policies.list(), orders: orders.list(), cart: world.getCart(),
+        paymentConfig: structuredClone(bankConfig), orderPersistence: world.orderRepository.inspect(),
       };
     },
-    close() { closed = true; transport.close(); },
+    close() { world.orderJobs.stop(); closed = true; transport.close(); },
   };
+  world.bankConfig = structuredClone(bankConfig);
+  world.orderRepository = createMemoryOrderConfirmationRepository({ catalog: world.catalog, cartRepository: world.cartRepository,
+    quoteRepository: world.quoteRepository, orders, now: clock.now, assertOpen, faults: orderFaults });
+  world.orderJobs = createOrderPdfJobService({ repository: world.orderRepository,
+    transport: { sendText: transport.sendText, sendPdf }, generatePdf, now: clock.now, clock });
+  world.drainBackgroundJobs = () => world.orderJobs.drain();
   world.registerTool("responder", async ({ texto, entendido, quoteIdMostrado }) => {
     if (typeof texto !== "string" || !texto.trim() || typeof entendido !== "boolean") throw new Error("Respuesta inválida");
     if (quoteIdMostrado !== undefined) throw new Error("El responder de prueba no registra cotizaciones; use la herramienta real");

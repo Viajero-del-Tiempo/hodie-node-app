@@ -1,14 +1,37 @@
 import { randomUUID } from "node:crypto";
 import { cartContent, fingerprint, pricingInputs, cartIssue } from "./cart.service.js";
 
-// Solo calcula/emite/muestra. Crear pedidos y su idempotencia pertenecen a 4B.
+export const ORDER_CONFIRMATION_QUESTION = "¿Confirmás este pedido?";
+export const cartQuoteFingerprint = (cart, contactPhone) => fingerprint({ id: cart.id, revision: cart.revision,
+  ...cartContent(cart), contactPhone });
+
+// Misma evaluación y mismas huellas para mostrar y para confirmar dentro de una transacción.
+export async function evaluateCartPricing(cart, { calculatePricing, inspectData, renderSummary, signal }) {
+  if (!cart?.lines.length) return { pricing: null,
+    quote: { code: "DATO_FALTANTE", confirmable: false, fields: ["lines"], summary: renderSummary({}) } };
+  const pricing = await calculatePricing(pricingInputs(cart));
+  signal?.throwIfAborted();
+  const data = await inspectData(cart);
+  const quote = { code: data.fields.length ? "DATO_FALTANTE" : "OK", confirmable: data.fields.length === 0,
+    fields: data.fields, pendientes: data.pendientes, items: pricing.sanitizedItems, subtotal: pricing.subtotal,
+    shippingCost: pricing.shippingCost, ...(data.fields.length ? {} : { total: pricing.total }),
+    shipping: data.options, shippingAddress: data.shippingAddress, contactPhone: data.phone, billing: data.billing ?? cart.billing,
+    cartFingerprint: cartQuoteFingerprint(cart, data.phone),
+    pricingFingerprint: fingerprint(pricing), cartId: cart.id, revision: cart.revision };
+  quote.summary = renderSummary(quote);
+  return { quote, pricing };
+}
+
 export function createOrderQuoteService({ carts, repository, chatId, calculatePricing, inspectData, getState, setState,
-  renderSummary, now = Date.now, newId = randomUUID, getTurn }) {
+  renderSummary, now = Date.now, newId = randomUUID, getTurn, confirmationRepository = null }) {
   let lastResult = null;
   async function invalidate(context) {
     context.signal?.throwIfAborted();
     const state = getState();
-    if (state.lastQuote) { state.lastQuote = null; await setState(state); }
+    if (state.lastQuote || state.pendingOrderConfirmation) {
+      state.lastQuote = null; state.pendingOrderConfirmation = null; await setState(state);
+    }
+    await confirmationRepository?.clearConfirmation(chatId, context);
   }
   async function acknowledgeSubtotal(expected, context) {
     context.signal?.throwIfAborted();
@@ -21,18 +44,7 @@ export function createOrderQuoteService({ carts, repository, chatId, calculatePr
   }
   async function evaluate(context = {}) {
     const cart = await carts.read(context);
-    if (!cart?.lines.length) return { code: "DATO_FALTANTE", confirmable: false, fields: ["lines"], summary: renderSummary({}) };
-    const pricing = await calculatePricing(pricingInputs(cart));
-    context.signal?.throwIfAborted();
-    const data = await inspectData(cart);
-    const result = { code: data.fields.length ? "DATO_FALTANTE" : "OK", confirmable: data.fields.length === 0,
-      fields: data.fields, pendientes: data.pendientes, items: pricing.sanitizedItems, subtotal: pricing.subtotal,
-      shippingCost: pricing.shippingCost, ...(data.fields.length ? {} : { total: pricing.total }),
-      shipping: data.options, shippingAddress: data.shippingAddress, contactPhone: data.phone, billing: data.billing ?? cart.billing,
-      cartFingerprint: fingerprint({ id: cart.id, revision: cart.revision, ...cartContent(cart), contactPhone: data.phone }),
-      pricingFingerprint: fingerprint(pricing), cartId: cart.id, revision: cart.revision };
-    result.summary = renderSummary(result);
-    return result;
+    return (await evaluateCartPricing(cart, { calculatePricing, inspectData, renderSummary, signal: context.signal })).quote;
   }
   async function informative(lineas, context) {
     // Pricing del servidor, sin leer/escribir el carrito ni invalidar lastQuote.
@@ -87,10 +99,22 @@ export function createOrderQuoteService({ carts, repository, chatId, calculatePr
       const state = getState();
       state.lastQuote = { quoteId: quote.quoteId, cartFingerprint: quote.cartFingerprint,
         pricingFingerprint: quote.pricingFingerprint, shownAt: now(), shownTurn: turn.sequence, shownBatchId: turn.id };
+      state.pendingOrderConfirmation = { quoteId: quote.quoteId, cartId: quote.cartId,
+        cartFingerprint: quote.cartFingerprint, pricingFingerprint: quote.pricingFingerprint,
+        shownAt: now(), shownSequence: turn.sequence, shownBatchId: turn.id };
+      await confirmationRepository?.saveConfirmation(chatId, state.pendingOrderConfirmation, context);
+      context.signal?.throwIfAborted();
       await setState(state);
     },
+    async clearConfirmation(context = {}) {
+      context.signal?.throwIfAborted();
+      await confirmationRepository?.clearConfirmation(chatId, context);
+      const state = getState();
+      if (state.pendingOrderConfirmation) { state.pendingOrderConfirmation = null; await setState(state); }
+    },
     async partialForTurn(context = {}) {
-      if (lastResult?.turnId !== getTurn()?.id || lastResult.result.confirmable) return null;
+      const turn = getTurn();
+      if (!turn || !lastResult || lastResult.turnId !== turn.id || lastResult.result.confirmable) return null;
       if (lastResult.result.mode === "informative") return informative(lastResult.lineas, context);
       const current = await evaluate(context);
       return lastResult.result.cartFingerprint === current.cartFingerprint ? current : null;

@@ -6,6 +6,7 @@ import { buildInitialState } from "../eval/initial-state.js";
 import { evalFixtures } from "./eval-fixtures.js";
 import { createAgent } from "../../src/agents/consultation/eval-adapter.js";
 import { enableMemoryOnly } from "../eval/production-guard.js";
+import { createOrderConfirmationConfig } from "../../src/agents/consultation/order-confirmation.config.js";
 
 export const FIXTURE_NOW = Date.parse("2026-01-01T12:00:00Z");
 export function reply(name, args, id = randomUUID()) {
@@ -28,13 +29,15 @@ export function scriptedModel(steps) {
     },
   };
 }
-export async function consultationFixture({ fixtures = evalFixtures(), context = {}, model = scriptedModel([]), timeoutMs } = {}) {
+export async function consultationFixture({ fixtures = evalFixtures(), context = {}, model = scriptedModel([]), timeoutMs,
+  modelCallTimeoutMs, modelClock, orderFaults, generatePdf, sendPdf,
+  confirmationConfig = createOrderConfirmationConfig({}) } = {}) {
   enableMemoryOnly();
   const clock = createClock(FIXTURE_NOW);
   const transport = createFakeWhatsApp();
-  const world = createMemoryWorld(fixtures, { clock, transport });
+  const world = createMemoryWorld(fixtures, { clock, transport, orderFaults, generatePdf, sendPdf });
   world.initialize(buildInitialState(context, fixtures, { chatId: "test-customer@lid", now: clock.now() }));
-  const agent = await createAgent({ world, transport, model, timeoutMs });
+  const agent = await createAgent({ world, transport, model, timeoutMs, modelCallTimeoutMs, modelClock, confirmationConfig });
   return { world, transport, agent, model,
     async run(input = { user: "Consulta de prueba" }, number = 1, signal = new AbortController().signal) {
       const turn = await transport.receive(input, number, "TEST-CONSULTATION");

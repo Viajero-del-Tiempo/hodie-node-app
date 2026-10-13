@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { SystemMessage, HumanMessage, AIMessage, ToolMessage } from "@langchain/core/messages";
 import { createGeminiModel } from "../../config/llm.js";
-import { createModelUsageTracker, modelUsageSince, estimateFixedInput } from "../../utils/model-usage.util.js";
+import { createModelUsageTracker, modelUsageSince, estimateFixedInput, safeErrorDetails } from "../../utils/model-usage.util.js";
 import { prepareServerContext } from "./server-context.js";
-import { forceTechnicalHandoff } from "./terminal.js";
+import { handleTechnicalFailure } from "./technical-failure.js";
 import { resolveAgentModelConfig } from "./model-config.js";
+import { createModelInvoker, resolveModelCallTimeout, MODEL_CLOCK, TRANSIENT_RETRY_DELAY_MS } from "./model-invoker.js";
 
 export const MAX_TOOL_CALLS = 8;
 const failure = (code, message) => Object.assign(new Error(message), { code });
@@ -17,18 +18,20 @@ async function abortable(action, signal) {
     listener = () => reject(signal.reason);
     signal.addEventListener("abort", listener, { once: true });
   });
-  try { return await Promise.race([Promise.resolve().then(action), cancelled]); }
+  try { return await Promise.race([Promise.resolve().then(() => { signal.throwIfAborted(); return action(); }), cancelled]); }
   finally { signal.removeEventListener("abort", listener); }
 }
 
 export async function createConsultationAgent({ runtime, registry, model = null, prompt = null, timeoutMs = 50000,
-  thinkingBudget, modelEnv = process.env, modelFactory = createGeminiModel }) {
+  thinkingBudget, modelEnv = process.env, modelFactory = createGeminiModel,
+  modelCallTimeoutMs, modelClock = MODEL_CLOCK }) {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new Error("Timeout inválido");
   const modelConfig = resolveAgentModelConfig({ env: modelEnv, thinkingBudget });
+  const callTimeoutMs = resolveModelCallTimeout(modelEnv, modelCallTimeoutMs);
   prompt ??= await readFile(new URL("../prompts/agente.md", import.meta.url), "utf8");
   const suppliedModel = model !== null;
   const modelInjected = suppliedModel || modelFactory !== createGeminiModel;
-  model ??= modelFactory(modelConfig.options);
+  model ??= modelFactory({ ...modelConfig.options, maxRetries: 0 });
   // Un modelo suministrado directamente puede tener otra configuración: no
   // anunciar el presupuesto solicitado como si se hubiera aplicado a ese doble.
   const thinking = suppliedModel ? { mode: "unknown", thinkingBudget: null, source: "injected_model" } : modelConfig.thinking;
@@ -37,6 +40,8 @@ export async function createConsultationAgent({ runtime, registry, model = null,
   return {
     kind: "real",
     metadata: { model: model.model ?? null, modelInjected, thinking,
+      modelCalls: { timeoutMs: callTimeoutMs, maxRetries: 1, sdkMaxRetries: suppliedModel ? null : 0,
+        retryReserveMs: 5000, transientRetryDelayMs: TRANSIENT_RETRY_DELAY_MS },
       ...(suppliedModel ? { requestedThinking: modelConfig.thinking } : {}),
       promptHash: createHash("sha256").update(prompt).digest("hex") },
     getModelUsage: () => tracker.snapshot(),
@@ -48,10 +53,12 @@ export async function createConsultationAgent({ runtime, registry, model = null,
       const controller = new AbortController();
       const abort = () => controller.abort(parentSignal.reason);
       parentSignal?.addEventListener("abort", abort, { once: true });
-      const timer = setTimeout(() => controller.abort(failure("AGENT_TIMEOUT", "Tiempo del agente agotado.")), timeoutMs);
+      const timer = modelClock.setTimeout(() => controller.abort(failure("AGENT_TIMEOUT", "Tiempo del agente agotado.")), timeoutMs);
       const signal = controller.signal;
       let attemptedTools = 0;
       let modelCallsInTurn = 0;
+      let modelStep = 0;
+      const deadline = Math.min(modelClock.now() + timeoutMs, runtime.getTurnContext?.()?.deadlineMs ?? Infinity);
       const diagnostics = [];
       runtime.setTurnSignal(signal);
       try {
@@ -72,10 +79,15 @@ export async function createConsultationAgent({ runtime, registry, model = null,
           const fixedInput = estimateFixedInput({ systemPrompt: prompt, toolSchemas: definitions, serverContext });
           const bound = model.bindTools(definitions,
             { tool_choice: "any", allowedFunctionNames: allowed });
-          const callInTurn = ++modelCallsInTurn;
-          runtime.setExecutionPhase?.("model", { modelCall: tracker.snapshot().calls + 1, callInTurn });
-          const response = await tracker.invoke(() => abortable(() => bound.invoke(messages, { signal }), signal),
-            { turn: turn.turn, callInTurn, fixedInput });
+          modelStep++;
+          const invoker = createModelInvoker({ tracker, timeoutMs: callTimeoutMs, clock: modelClock,
+            getRemainingMs: () => deadline - modelClock.now(), onAttempt: attempt => {
+              const callInTurn = ++modelCallsInTurn;
+              runtime.setExecutionPhase?.("model", { modelCall: tracker.snapshot().calls + 1, callInTurn, modelStep, attempt });
+              return { callInTurn, modelStep };
+            } });
+          const response = await invoker.invoke(attemptSignal => bound.invoke([...messages], { signal: attemptSignal }),
+            { signal, turn: turn.turn, fixedInput });
           signal.throwIfAborted();
           runtime.setExecutionPhase?.("tool_validation");
           const calls = response?.tool_calls;
@@ -116,12 +128,28 @@ export async function createConsultationAgent({ runtime, registry, model = null,
         // Una cancelación externa no autoriza efectos después de cerrar el mundo.
         if (parentSignal?.aborted) throw parentSignal.reason;
         controller.abort(error);
-        diagnostics.push({ code: error.code ?? "AGENT_ERROR", message: "Falla técnica en el turno de consulta.",
+        diagnostics.push({ code: error.code ?? "AGENT_ERROR", message: "Falla técnica en el turno de consulta.", technicalFailure: true,
+          ...safeErrorDetails(error),
+          ...(error.retrySkipped ? { retrySkipped: error.retrySkipped } : {}),
           ...(runtime.getExecutionPhase ? { interruptedPhase: runtime.getExecutionPhase() } : {}) });
-        await forceTechnicalHandoff(runtime, "Falla técnica: " + (error.code ?? "AGENT_ERROR"), { signal: parentSignal });
-        return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics };
+        // Si el pedido ya se confirmó, cerrar con su mensaje durable en lugar
+        // de tratarlo como compra fallida. El PDF sigue independiente.
+        if (runtime.getCommittedReceipt && await runtime.getCommittedReceipt()) {
+          let orderRecovered = false;
+          // Si el cierre ya fue la octava llamada, la recuperación continúa
+          // por el trabajo durable; no autoriza una novena llamada.
+          if (attemptedTools < MAX_TOOL_CALLS) {
+            runtime.setTurnSignal(parentSignal ?? new AbortController().signal);
+            const result = await runtime.invokeTool("responder", { texto: "Pedido registrado.", entendido: true });
+            orderRecovered = result.code === "OK";
+          }
+          return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics, technicalFailure: true, orderCommitted: true, orderRecovered };
+        }
+        await handleTechnicalFailure(runtime, error.code ?? "AGENT_ERROR", { signal: parentSignal,
+          turnId: runtime.getTurnContext?.()?.id ?? turn.batchId });
+        return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics, technicalFailure: true };
       } finally {
-        clearTimeout(timer);
+        modelClock.clearTimeout(timer);
         controller.abort(failure("TURN_CLOSED", "El turno ya terminó."));
         parentSignal?.removeEventListener("abort", abort);
         runtime.setTurnSignal(null);

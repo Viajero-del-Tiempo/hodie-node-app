@@ -35,6 +35,7 @@ export const cleanupStaleOrderPDFs = () => {
 
 export const generateOrderPDF = async (order, {
   documentFactory = options => new PDFDocument(options), loadImage = loadImageFromUrl,
+  bankConfig = BANK_CONFIG, bankImagePath = path.join(process.cwd(), "assets", "banco.png"),
 } = {}) => {
   let filePath;
   let stream;
@@ -334,7 +335,6 @@ export const generateOrderPDF = async (order, {
     // ======================================================
     // INFORMACIÓN BANCARIA Y DE PAGO
     // ======================================================
-    const bankImagePath = path.join(process.cwd(), "assets", "banco.png");
 
     // nueva página para datos bancarios
     doc.addPage();
@@ -347,7 +347,7 @@ export const generateOrderPDF = async (order, {
 
     doc.moveDown(0.8);
 
-    if (fs.existsSync(bankImagePath)) {
+    if (bankImagePath && fs.existsSync(bankImagePath)) {
       doc.image(bankImagePath, {
         width: 250,
         align: "center",
@@ -359,12 +359,12 @@ export const generateOrderPDF = async (order, {
         .font("Poppins")
         .fontSize(16)
         .fillColor("#333")
-        .text(`Entidad: ${BANK_CONFIG.bankName}`)
-        .text(`Titular: ${BANK_CONFIG.accountHolder}`)
-        .text(`Cédula / RUC: ${BANK_CONFIG.documentId}`)
-        .text(`Nro. de Cuenta: ${BANK_CONFIG.accountNumber}`)
-        .text(`Moneda: ${BANK_CONFIG.currency}`)
-        .text(`Alias: ${BANK_CONFIG.alias}`);
+        .text(`Entidad: ${bankConfig.bankName}`)
+        .text(`Titular: ${bankConfig.accountHolder}`)
+        .text(`Cédula / RUC: ${bankConfig.documentId}`)
+        .text(`Nro. de Cuenta: ${bankConfig.accountNumber}`)
+        .text(`Moneda: ${bankConfig.currency}`)
+        .text(`Alias: ${bankConfig.alias}`);
       doc.moveDown(1.5);
     }
 
@@ -373,7 +373,7 @@ export const generateOrderPDF = async (order, {
       .font("Poppins-Bold")
       .fontSize(14)
       .fillColor("#333")
-      .text(`Alias para transferencia: ${BANK_CONFIG.alias}`, { align: "center" });
+      .text(`Alias para transferencia: ${bankConfig.alias}`, { align: "center" });
 
     doc.moveDown(1);
 

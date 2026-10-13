@@ -13,7 +13,9 @@ export async function writeReport(report, outputRoot) {
       case: item.id, repetition: result.number, type: "turn", number: turn.number,
       incoming: turn.incoming, outgoing: turn.outgoing, handoffAfter: turn.handoffAfter, durationMs: turn.durationMs,
       usage: turn.usage, agentDiagnostics: turn.agentDiagnostics, guardian: turn.guardian,
+      backgroundJobs: turn.backgroundJobs, backgroundDurationMs: turn.backgroundDurationMs,
       ...(turn.timeout ? { timeout: turn.timeout } : {}),
+      ...(turn.technicalFailure ? { technicalFailure: turn.technicalFailure } : {}),
       modelCalls: turn.modelCalls,
     })),
     ...(result.guardianEvents ?? []).map(event => ({ case: item.id, repetition: result.number, type: "guardian", ...event })),
@@ -32,6 +34,7 @@ export async function writeReport(report, outputRoot) {
     "## Modelo y pensamiento del agente", "",
     ...report.metadata.agentConfigurations.map(config => "- Modelo: " + (config.model ?? "desconocido")
       + "; pensamiento enviado: " + JSON.stringify(config.thinking)
+      + (config.modelCalls ? "; llamadas: " + JSON.stringify(config.modelCalls) : "")
       + (config.requestedThinking ? "; solicitado para el modelo inyectado (sin afirmar aplicación): " + JSON.stringify(config.requestedThinking) : "")),
     "",
     "## Consumo del modelo", "",
@@ -41,6 +44,11 @@ export async function writeReport(report, outputRoot) {
       + "; instrumentado: " + usage.instrumented + "; consumo completo: " + usage.usageComplete
       + "; llamadas sin metadatos: " + usage.callsWithoutUsage),
     "",
+    "## Intentos del agente", "",
+    "- Reintentos: " + report.summary.modelAttempts.agent.retries + "; intentos con timeout: " + report.summary.modelAttempts.agent.timedOut + ".",
+    "- Intentos fallidos por clase: " + JSON.stringify(report.summary.modelAttempts.agent.byErrorClass) + ".",
+    "La clase de cada intento fallido y su HTTP/código de red, cuando existen, quedan en report.json y trace.jsonl.",
+    "Cada intento cuenta como llamada. Tokens no informados quedan desconocidos, no se estiman como consumo.", "",
     "## Latencia (ms)", "",
     "Percentiles por rango más próximo; incluye fallos y tiempo observado de llamadas interrumpidas.", "",
     "| Medición | Muestras | Incompletas | p50 | p95 | Máximo |",

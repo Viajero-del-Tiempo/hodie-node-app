@@ -1,18 +1,42 @@
 import { purchaseError, cartIssue } from "../../services/cart.service.js";
-import { pendingTextFor } from "./confirmations.js";
+import { pendingTextFor, clientAskedQuestion } from "./confirmations.js";
+import { ORDER_CONFIRMATION_QUESTION } from "../../services/order-quote.service.js";
 
 export function createResponder({ getState, setState, transport, purchase = null, getTurnContext = () => null }) {
   return async ({ texto, entendido, quoteIdMostrado }, { signal } = {}) => {
     signal?.throwIfAborted();
     const turn = getTurnContext();
+    const receipt = await purchase?.orders.receiptForTurn();
+    signal?.throwIfAborted();
+    if (receipt) {
+      // Mensaje exclusivo del servidor: el modelo no recibe datos bancarios y
+      // su texto no puede reformularlos ni agregar instrucciones alternativas.
+      if (receipt.job.receiptDelivered) {
+        await transport.sendText(receipt.customerMessage);
+      } else if (await purchase.orders.beginReceipt(receipt, { signal })) {
+        await transport.sendText(receipt.customerMessage);
+        await purchase.orders.receiptDelivered(receipt);
+      }
+      signal?.throwIfAborted();
+      const state = getState();
+      state.consecutiveMisunderstandings = entendido ? 0 : (state.consecutiveMisunderstandings ?? 0) + 1;
+      await setState(state);
+      return { code: "OK", entendido, orderMessageAdded: true };
+    }
     let quote = null, pendingText = null, pendingRuc = null;
     const parts = [texto];
     if (purchase) {
       try {
-        if (quoteIdMostrado !== undefined) {
-          quote = await purchase.quotes.prepareShow(quoteIdMostrado, { signal });
+        const effectiveQuoteId = quoteIdMostrado ?? (clientAskedQuestion(turn) ? getState().lastQuote?.quoteId : undefined);
+        if (effectiveQuoteId !== undefined) {
+          const previous = getState().lastQuote;
+          quote = await purchase.quotes.prepareShow(effectiveQuoteId, { signal });
           if (!turn) throw cartIssue("TURNO_NO_DISPONIBLE", "quoteIdMostrado", "Hace falta un turno del cliente para mostrar la cotización.");
-          parts.push(quote.summary);
+          if (/[¿?❓❔]/u.test(texto)) throw cartIssue("CONFIRMACION_AMBIGUA", "texto", "El servidor agrega la pregunta final; respondé sin otra pregunta.");
+          const repeated = previous?.quoteId === quote.quoteId && previous.cartFingerprint === quote.cartFingerprint
+            && previous.pricingFingerprint === quote.pricingFingerprint;
+          if (!repeated) parts.push(quote.summary);
+          parts.push(ORDER_CONFIRMATION_QUESTION);
         } else {
           const partial = await purchase.quotes.partialForTurn({ signal });
           if (partial) parts.push(partial.summary);
@@ -26,6 +50,9 @@ export function createResponder({ getState, setState, transport, purchase = null
           ? "¿Tu RUC es " + pendingRuc.value + "? Confirmalo antes de guardarlo completo."
           : "El dígito verificador no coincide. ¿Querés corregir el RUC “" + pendingRuc.input + "” o continuar con él como lo ingresaste?");
       } catch (error) { signal?.throwIfAborted(); return purchaseError(error); }
+      // Desactivar antes de enviar: incluso si no podemos registrar después
+      // del envío, un sí a otra pregunta no autoriza crear el pedido anterior.
+      await purchase.quotes.clearConfirmation({ signal });
     }
     await transport.sendText(parts.join("\n\n"));
     signal?.throwIfAborted();
@@ -43,16 +70,4 @@ export function createResponder({ getState, setState, transport, purchase = null
     if (quote) await purchase.quotes.markShown(quote, turn, { signal });
     return { code: "OK", entendido };
   };
-}
-
-export async function forceTechnicalHandoff({ getState, setState, transport }, reason, { signal } = {}) {
-  signal?.throwIfAborted();
-  const state = getState();
-  if (state.humanHandoffRequired) return;
-  state.humanHandoffRequired = true;
-  state.humanHandoffReason = reason;
-  await setState(state);
-  signal?.throwIfAborted();
-  // Cierre mínimo por código: sin herramienta del modelo, índice ni alerta externa.
-  await transport.sendText("No pude continuar con la consulta. Una persona del equipo te va a responder por este chat.");
 }
