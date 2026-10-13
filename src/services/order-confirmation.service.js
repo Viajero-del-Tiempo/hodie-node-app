@@ -7,6 +7,7 @@ import { resolveOrderIdentity } from "./order-identity.service.js";
 import { validateShippingAddress } from "./shipping.service.js";
 import { validateOrderBilling } from "../validators/billing.validator.js";
 import { renderOrderPaymentMessage, validateOrderBankConfig } from "./order-payment.service.js";
+import { assertCorporateQuantity } from "./agent-config.service.js";
 
 export function createOrderConfirmationService({ repository, chatId, now, getTurn, getState, setState,
   normalizePhone, acceptsConfirmation, inspectProgress, renderSummary, bankConfig }) {
@@ -35,6 +36,9 @@ export function createOrderConfirmationService({ repository, chatId, now, getTur
         }
         const cart = await tx.readCart(chatId), pending = await tx.readConfirmation(chatId);
         if (!cart || timestampMillis(cart.expiresAt) <= now()) throw cartIssue("CARRITO_CAMBIO", "quoteId", "El carrito ya no está vigente; hace falta una cotización nueva.");
+        const agentConfig = await tx.readAgentConfig();
+        assertCorporateQuantity(cart.lines, agentConfig);
+        if (state.pendingCorporateRequest?.expiresAt > now()) assertCorporateQuantity(state.pendingCorporateRequest.lines, agentConfig);
         if (cartQuoteFingerprint(cart, verifiedPhone ?? normalizePhone(cart.shipping.phone)) !== stored.cartFingerprint) {
           throw cartIssue("CARRITO_CAMBIO", "quoteId", "El carrito cambió; hace falta una cotización nueva.");
         }

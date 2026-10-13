@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildInitialState, prepareShownQuote, CART_TTL_MS } from "./eval/initial-state.js";
-import { createMemoryWorld, createClock } from "./eval/memory-world.js";
+import { createMemoryWorld, createClock, EVAL_AGENT_CONFIG } from "./eval/memory-world.js";
 import { createFakeWhatsApp } from "./eval/fake-whatsapp.js";
 import { evalFixtures, evalCart } from "./helpers/eval-fixtures.js";
 
@@ -13,6 +13,38 @@ function initialize(context) {
   world.initialize(buildInitialState(context, fixtures, { chatId: "test-chat@lid", now }));
   return world;
 }
+test("umbral del contexto configura solo el servidor en memoria y no contamina otros casos", async () => {
+  const fixtures = evalFixtures();
+  const initial = buildInitialState({ umbralCorporativo: 5, carrito: evalCart() }, fixtures, { chatId: "test-chat@lid", now });
+  assert.deepEqual(initial.agentConfig, { corporateQuantityThreshold: 5 });
+  assert.equal(Object.hasOwn(initial.state, "umbralCorporativo"), false);
+  assert.equal(Object.hasOwn(initial.state, "agentConfig"), false);
+  assert.equal(Object.hasOwn(initial.cart, "umbralCorporativo"), false);
+  const first = initialize({ umbralCorporativo: 5 }), second = initialize({ umbralCorporativo: 12 }), base = initialize({});
+  try {
+    assert.equal((await first.agentConfig.get()).corporateQuantityThreshold, 5);
+    assert.equal((await second.agentConfig.get()).corporateQuantityThreshold, 12);
+    assert.deepEqual(await base.agentConfig.get(), EVAL_AGENT_CONFIG);
+    first.agentConfig.set({ corporateQuantityThreshold: 2 });
+    assert.equal((await second.agentConfig.get()).corporateQuantityThreshold, 12);
+    assert.deepEqual(await base.agentConfig.get(), EVAL_AGENT_CONFIG);
+    assert.equal(first.snapshot().agentConfig.corporateQuantityThreshold, 2);
+    // La configuración de un caso no se reutiliza al inicializar el siguiente.
+    first.initialize(buildInitialState({}, fixtures, { chatId: "next-chat@lid", now }));
+    assert.deepEqual(await first.agentConfig.get(), EVAL_AGENT_CONFIG);
+    assert.deepEqual(buildInitialState({}, fixtures, { chatId: "next-chat@lid", now }).agentConfig, undefined);
+  } finally { first.close(); second.close(); base.close(); }
+});
+test("initial-state rechaza umbral inválido aun sin pasar por el loader", () => {
+  for (const value of [null, 0, -1, 1.5, "5", true, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+    assert.throws(() => buildInitialState({ umbralCorporativo: value }, evalFixtures(), { chatId: "test-chat@lid", now }), error => {
+      assert.equal(error.code, "INVALID_CONTEXT");
+      assert.ok(error.diagnostics.some(issue => issue.code === "INVALID_CONTEXT"
+        && issue.path.join(".") === "context.umbralCorporativo"));
+      return true;
+    });
+  }
+});
 test("mapea carrito, envío y facturación sin guardar precios ni confirmar RUC", () => {
   const cart = evalCart({
     actualizadoHaceHoras: 24,
@@ -88,12 +120,13 @@ test("cotizacionMostrada no usa un sustituto ni inventa quoteId", async () => {
     assert.deepEqual(world.getEvents(), []);
   } finally { world.close(); }
 });
-test("cotización real usa el carrito inicial y queda mostrada en el turno anterior", async () => {
-  const world = initialize({ carrito: evalCart() });
+test("cotización real usa el carrito inicial y el umbral del caso antes de mostrarse", async () => {
+  const world = initialize({ carrito: evalCart(), umbralCorporativo: 5 });
   let calls = 0;
   world.registerTool("cotizar", async () => {
     calls++;
     assert.equal(world.getCart().lines[0].quantity, 1);
+    assert.equal((await world.agentConfig.get()).corporateQuantityThreshold, 5);
     return { code: "OK", quoteId: "real-quote", cartFingerprint: "fingerprint", summary: "Resumen de prueba" };
   }, { real: true });
   try {

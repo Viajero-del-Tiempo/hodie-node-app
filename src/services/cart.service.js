@@ -30,7 +30,7 @@ export function pricingInputs(cart, { includeDrafts = false } = {}) {
 export function purchaseError(error) {
   if (![error.statusCode, error.status].some(status => status >= 400 && status < 500)) throw error;
   return { code: error.code ?? "ARGUMENTOS_INVALIDOS", message: error.message,
-    ...Object.fromEntries(["field", "productId", "variantId", "categoryId", "available", "requested", "limit", "packagingType", "suggestedRuc", "expectedDigit", "requiresConfirmation"]
+    ...Object.fromEntries(["field", "productId", "variantId", "categoryId", "available", "requested", "limit", "packagingType", "suggestedRuc", "expectedDigit", "requiresConfirmation", "totalUnits", "threshold"]
       .filter(key => error[key] !== undefined).map(key => [key, error[key]])) };
 }
 export function cartIssue(code, field, message) {

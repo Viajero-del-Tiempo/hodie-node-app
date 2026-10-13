@@ -23,7 +23,7 @@ test("crear_pedido confirma en una sola transacción, guarda foto web, borra car
     const trace = persistence.traces.find(trace => trace.some(item => item.operation === "write"));
     const firstWrite = trace.findIndex(item => item.operation === "write");
     assert.ok(trace.slice(0, firstWrite).some(item => item.name === "counter"));
-    for (const name of ["cart", "quote", "confirmation", "product", "category"]) assert.ok(trace.slice(0, firstWrite).some(item => item.name === name));
+    for (const name of ["cart", "quote", "confirmation", "product", "category", "agentConfig"]) assert.ok(trace.slice(0, firstWrite).some(item => item.name === name));
     assert.ok(trace.slice(firstWrite).every(item => item.operation === "write"));
   } finally { f.close(); }
 });

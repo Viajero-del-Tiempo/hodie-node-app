@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { assertLocalEnvironment } from "../scripts/local-catalog.config.js";
 import { openCustomerTestApi } from "./helpers/customer-firestore.js";
 import { evalFixtures } from "./helpers/eval-fixtures.js";
-import { EVAL_BANK_CONFIG } from "./eval/memory-world.js";
+import { EVAL_BANK_CONFIG, EVAL_AGENT_CONFIG } from "./eval/memory-world.js";
 import { createOrderConfirmationRepository } from "../src/services/order-confirmation.repository.js";
 import { createOrderConfirmationService } from "../src/services/order-confirmation.service.js";
 import { createOrderPricingService } from "../src/services/order-pricing.service.js";
@@ -24,9 +24,11 @@ assertLocalEnvironment(process.env);
 test("4B: transacciones reales, concurrencia, rollback, recuperación y contrato de lectura web/WhatsApp", async t => {
   const api = await openCustomerTestApi({ includeAdminOrders: true });
   const { db, Timestamp, scope } = api;
+  const agentConfigId = scope.id("agent-config"), agentConfigRef = scope.track("agent_config", agentConfigId);
   let sequence = 0;
   const phone = "5959" + String(Math.floor(Math.random() * 100000000)).padStart(8, "0");
   try {
+  await agentConfigRef.create(EVAL_AGENT_CONFIG);
   const customer = await api.createUser("agent-customer", { phoneNumber: phone });
   const admin = await api.createUser("agent-admin", { role: "admin" });
   const data = evalFixtures().products[0];
@@ -39,10 +41,10 @@ test("4B: transacciones reales, concurrencia, rollback, recuperación y contrato
     async getProductForPricing(id) { const doc = await db.collection("products").doc(id).get(); return doc.exists ? { id, ...doc.data() } : null; },
     async getCategoryForPricing(id) { const doc = await db.collection("categories").doc(id).get(); return doc.exists ? { id, ...doc.data() } : null; },
   };
-  async function scenario(suffix, { counterId = scope.id("counter-" + suffix) } = {}) {
+  async function scenario(suffix, { counterId = scope.id("counter-" + suffix), quantity = 1 } = {}) {
     const chatId = scope.id("chat-" + suffix), quoteId = scope.id("quote-" + suffix);
     const cart = { id: scope.id("cart-" + suffix), revision: 0, updatedAt: Date.now(), expiresAt: Date.now() + 86400000,
-      lines: [{ id: scope.id("line-" + suffix), productId, variantId: "variant-a", quantity: 1,
+      lines: [{ id: scope.id("line-" + suffix), productId, variantId: "variant-a", quantity,
         packagingType: null, packaging: { declined: true }, customization: { text: "Texto Alfa", textDraft: null, imageUrl: null, declined: false, pending: false } }],
       shipping: { ...shippingFixture(), phone: phone },
       billing: { invoiceRequested: false, legalName: null, ruc: null, rucValidation: null } };
@@ -55,7 +57,7 @@ test("4B: transacciones reales, concurrencia, rollback, recuperación y contrato
       renderSummary: renderQuoteSummary });
     assert.equal(quote.confirmable, true);
     await scope.track("order_quotes", quoteId).create({ ...quote, quoteId, chatId, issuedAt: Date.now() });
-    const repository = createOrderConfirmationRepository({ db, now: Date.now, timestampNow: () => Timestamp.now(), counterId,
+    const repository = createOrderConfirmationRepository({ db, now: Date.now, timestampNow: () => Timestamp.now(), counterId, agentConfigId,
       generateOrderId: () => {
         const id = scope.id("order-" + ++sequence); scope.track("orders", id); scope.track("order_pdf_jobs", id);
         for (const code of ["PDF_DELIVERY_UNCERTAIN", "ORDER_RECEIPT_UNCERTAIN", "PDF_DELIVERY_FAILED", "PDF_DELIVERY_STATE_UNCERTAIN", "PDF_JOB_FAILED"]) scope.track("order_alerts", id + "-" + code);
@@ -172,6 +174,18 @@ test("4B: transacciones reales, concurrencia, rollback, recuperación y contrato
           const alert = await db.collection("order_alerts").doc(result.orderId + "-PDF_DELIVERY_UNCERTAIN").get();
           assert.equal(alert.exists, true); assert.equal(alert.data().delivered, false);
         }
+      }
+    });
+    await t.test("5A: umbral reducido o configuración ausente impiden commit y preservan carrito/contador", async () => {
+      for (const missing of [false, true]) {
+        const s = await scenario("corporate-" + missing, { quantity: 2 });
+        if (missing) await agentConfigRef.delete(); else await agentConfigRef.update({ corporateQuantityThreshold: 1 });
+        await assert.rejects(s.service().create(s.quoteId), error => error.code === (missing ? "CONFIGURACION_INCOMPLETA" : "CANTIDAD_CORPORATIVA"));
+        assert.equal((await db.collection("carts").doc(s.chatId).get()).exists, true);
+        assert.equal((await db.collection("counters").doc(s.counterId).get()).exists, false);
+        assert.equal((await db.collection("order_quotes").doc(s.quoteId).get()).data().orderId, undefined);
+        assert.equal((await productRef.get()).data().variants[0].stock, product.variants[0].stock);
+        await agentConfigRef.set(EVAL_AGENT_CONFIG);
       }
     });
     assert.equal(ORDER_CONFIRMATION_QUESTION, "¿Confirmás este pedido?");

@@ -30,11 +30,11 @@ export function scriptedModel(steps) {
   };
 }
 export async function consultationFixture({ fixtures = evalFixtures(), context = {}, model = scriptedModel([]), timeoutMs,
-  modelCallTimeoutMs, modelClock, orderFaults, generatePdf, sendPdf,
+  modelCallTimeoutMs, modelClock, orderFaults, generatePdf, sendPdf, mediaResolver,
   confirmationConfig = createOrderConfirmationConfig({}) } = {}) {
   enableMemoryOnly();
   const clock = createClock(FIXTURE_NOW);
-  const transport = createFakeWhatsApp();
+  const transport = createFakeWhatsApp({ mediaResolver });
   const world = createMemoryWorld(fixtures, { clock, transport, orderFaults, generatePdf, sendPdf });
   world.initialize(buildInitialState(context, fixtures, { chatId: "test-customer@lid", now: clock.now() }));
   const agent = await createAgent({ world, transport, model, timeoutMs, modelCallTimeoutMs, modelClock, confirmationConfig });

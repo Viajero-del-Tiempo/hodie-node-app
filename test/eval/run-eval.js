@@ -5,7 +5,7 @@ import { resolve, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadCases, validationSummary } from "./load-cases.js";
 import { buildInitialState, prepareShownQuote } from "./initial-state.js";
-import { createMemoryWorld, createClock } from "./memory-world.js";
+import { createMemoryWorld, createClock, EVAL_AGENT_CONFIG } from "./memory-world.js";
 import { createFakeWhatsApp } from "./fake-whatsapp.js";
 import { assertAgent, withTimeout } from "./agent-contract.js";
 import { deterministicChecks, aggregateResults } from "./checks.js";
@@ -241,6 +241,8 @@ export async function runEvaluation(dataset, {
     totalInFile: dataset.cases.length, categories: dataset.categories,
     node: process.version, agentKind: null, judgeKind: judge.kind, judge: judge.metadata ?? { kind: judge.kind },
     mediaComplete: true, agentThinkingBudgetOverride: agentThinkingBudget ?? null,
+    agentConfigFixture: Object.hasOwn(dataset.fixtures, "agentConfig") ? { source: "injected", value: structuredClone(dataset.fixtures.agentConfig) }
+      : { source: "test/fixtures/agent-config.json", value: structuredClone(EVAL_AGENT_CONFIG) },
     agentModelCallTimeoutOverride: agentModelCallTimeoutMs ?? null,
   };
   const options = { createAgent, judge, timeoutMs, now, mediaResolver, agentThinkingBudget, agentModelCallTimeoutMs, filename: dataset.filename };
@@ -310,10 +312,12 @@ async function loadMediaResolver(filename, dataset) {
   if (!filename) return null;
   const absolute = resolve(filename);
   const manifest = JSON.parse(await readFile(absolute, "utf8"));
-  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("El manifiesto de imágenes debe ser un objeto");
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) throw new Error("El manifiesto de medios debe ser un objeto");
   for (const [key, value] of Object.entries(manifest)) {
-    const matching = dataset.cases.some(item => item.input?.turns?.some((turn, index) => turn.attachment === "image" && key === item.id + "/" + (index + 1)));
-    if (!matching || !value || typeof value.path !== "string" || !/^image\/(png|jpeg|webp|gif)$/.test(value.mimeType)
+    const matching = dataset.cases.some(item => item.input?.turns?.some((turn, index) => key === item.id + "/" + (index + 1)
+      && ((turn.attachment === "image" && /^image\//.test(value?.mimeType ?? ""))
+        || (turn.attachment === "document" && value?.mimeType === "application/pdf"))));
+    if (!matching || !value || typeof value.path !== "string" || !/^(image\/(png|jpeg|webp|gif)|application\/pdf)$/.test(value.mimeType)
         || Object.keys(value).some(field => !["path", "mimeType"].includes(field))) {
       throw new Error("Referencia de imagen inválida: " + key);
     }

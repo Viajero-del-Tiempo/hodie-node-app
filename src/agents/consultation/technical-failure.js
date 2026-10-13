@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { activateAgentHandoff } from "../../services/agent-handoff.service.js";
 
 export const TECHNICAL_FAILURE_NOTICE = "Perdón, tuve un inconveniente para responderte. ¿Me lo escribís de nuevo?";
 export const TECHNICAL_HANDOFF_MESSAGE = "No pude continuar con la consulta. Una persona del equipo te va a responder por este chat.";
@@ -20,7 +20,13 @@ export async function handleTechnicalFailure(runtime, code, { signal, turnId, la
   signal?.throwIfAborted();
   const state = runtime.getState();
   if (typeof turnId !== "string" || !turnId) throw new Error("La falla técnica necesita el ID del lote.");
-  if (state.humanHandoffRequired || (state.lastTechnicalFailure && state.lastTechnicalFailure.turnId === turnId)) return { alreadyHandled: true };
+  if (state.humanHandoffRequired) return { alreadyHandled: true };
+  if (state.lastTechnicalFailure?.turnId === turnId) {
+    if (state.lastTechnicalFailure.escalated) return { ...await activateAgentHandoff(runtime, {
+      motivo: "Falla técnica: " + code, texto: TECHNICAL_HANDOFF_MESSAGE,
+      type: "TECHNICAL_FAILURE", episodeId: turnId, signal, lastMessage, now }), escalated: true };
+    return { alreadyHandled: true };
+  }
   const previous = Number.isSafeInteger(state.consecutiveTechnicalFailures) && state.consecutiveTechnicalFailures > 0
     ? state.consecutiveTechnicalFailures : 0;
   state.consecutiveTechnicalFailures = Math.min(previous + 1, 2);
@@ -33,21 +39,12 @@ export async function handleTechnicalFailure(runtime, code, { signal, turnId, la
   if (state.pendingTextConfirmation) state.pendingTextConfirmation.shown = false;
   if (state.pendingRucConfirmation) state.pendingRucConfirmation.shown = false;
   const reason = "Falla técnica: " + code;
-  if (escalate) {
-    state.humanHandoffRequired = true;
-    state.humanHandoffReason = reason;
-    state.guardianAlerts = [...(state.guardianAlerts ?? []), { id: randomUUID(), type: "TECHNICAL_FAILURE",
-      chatId: state.whatsappChatId, reason, createdAt: now, consecutiveFailures: 2, delivered: false }];
-  }
   await runtime.setState(state);
   signal?.throwIfAborted();
-  if (escalate) await runtime.handoffs?.upsert?.(state.whatsappChatId, { active: true,
-    thread_id: state.whatsappChatId, whatsappChatId: state.whatsappChatId,
-    userPhoneNumber: state.userPhoneNumber ?? "", pushname: state.pushname ?? "", motivo: reason,
-    lastCustomerMessage: (lastMessage ?? runtime.getTurnContext?.()?.messages?.at(-1)?.text ?? "").slice(0, 200), updatedAt: now });
-  signal?.throwIfAborted();
+  if (escalate) return { ...await activateAgentHandoff(runtime, { motivo: reason, texto: TECHNICAL_HANDOFF_MESSAGE,
+    type: "TECHNICAL_FAILURE", episodeId: turnId, signal, lastMessage, now }), escalated: true };
   // Solo whatsapp.js despachará guardianAlerts y marcará delivered.
-  await runtime.transport.sendText(escalate ? TECHNICAL_HANDOFF_MESSAGE : TECHNICAL_FAILURE_NOTICE);
+  await runtime.transport.sendText(TECHNICAL_FAILURE_NOTICE);
   signal?.throwIfAborted();
   return { escalated: escalate };
 }

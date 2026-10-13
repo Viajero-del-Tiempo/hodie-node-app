@@ -33,7 +33,11 @@ export function validateContext(context, fixtures, issue, root = ["context"]) {
       for (const role of roles) text(message[role], [...child, role]);
     });
   }
-  if (!object(context, ["telefonoCliente", "sesionNueva", "historialPrevio", "conversacion", "carrito", "cotizacionMostrada"], root)) return;
+  if (!object(context, ["telefonoCliente", "sesionNueva", "historialPrevio", "conversacion", "carrito", "cotizacionMostrada", "umbralCorporativo"], root)) return;
+  if (Object.hasOwn(context, "umbralCorporativo")
+      && (!Number.isSafeInteger(context.umbralCorporativo) || context.umbralCorporativo < 1)) {
+    at([...root, "umbralCorporativo"], "Debe ser un entero positivo dentro del rango seguro");
+  }
   if (Object.hasOwn(context, "telefonoCliente")) {
     text(context.telefonoCliente, [...root, "telefonoCliente"]);
     if (typeof context.telefonoCliente === "string" && !/^\d+$/.test(context.telefonoCliente)) {
@@ -169,6 +173,9 @@ export function buildInitialState(context = {}, fixtures, { chatId, now }) {
   }
   return {
     state, cart,
+    // Configuración del servidor para este caso, fuera del estado del cliente.
+    ...(Object.hasOwn(context, "umbralCorporativo")
+      ? { agentConfig: { corporateQuantityThreshold: context.umbralCorporativo } } : {}),
     scenario: {
       newSession: context.sesionNueva === true,
       previousSession: context.historialPrevio ? {

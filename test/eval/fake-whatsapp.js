@@ -18,7 +18,7 @@ export function createFakeWhatsApp({ mediaResolver = null } = {}) {
         if (type === "audio") {
           descriptor.mode = "transcribed";
           messages[0].text = "[audio transcripto] " + input.user;
-        } else if (type === "image") {
+        } else if (type === "image" || type === "document") {
           const media = await mediaResolver?.({ caseId, turn });
           if (media) {
             descriptor.mode = "file";
@@ -26,9 +26,9 @@ export function createFakeWhatsApp({ mediaResolver = null } = {}) {
             descriptor.size = media.data.length;
             attachments.set(id, { ...descriptor, data: Buffer.from(media.data) });
           } else {
-            descriptor.mode = "described";
-            descriptor.description = input.user;
-            attachments.set(id, { ...descriptor });
+            descriptor.mode = type === "image" ? "described" : "metadata";
+            if (type === "image") descriptor.description = input.user;
+            if (type === "image") attachments.set(id, { ...descriptor });
           }
         } else {
           // Documentos/archivos: solo tipo y nombre, nunca contenido binario.

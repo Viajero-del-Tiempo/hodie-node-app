@@ -8,6 +8,7 @@ import { evalFixtures, evalCart } from "./eval-fixtures.js";
 import { FIXTURE_NOW } from "./consultation-fixtures.js";
 import { ORDER_CONFIRMATION_QUESTION } from "../../src/services/order-quote.service.js";
 import { createOrderConfirmationConfig } from "../../src/agents/consultation/order-confirmation.config.js";
+import { createSupportTools } from "../../src/agents/consultation/support-tools.js";
 
 export const itemArgs = { productId: "product-a", variantId: "variant-a", quantity: 1 };
 export const localShipping = { recipientName: "Persona Alfa", city: "Minga Guazú", department: "Zona Alfa", street: "Referencia Alfa" };
@@ -25,16 +26,20 @@ export function purchaseFixture({ fixtures = evalFixtures(), context = {}, bankC
   world.initialize(buildInitialState(context, fixtures, { chatId: "purchase-test@lid", now: clock.now() }));
   let turn = null, sequence = 0;
   const attachments = new Map();
-  const runtime = { catalog: world.catalog, transport, now: world.now,
+  const runtime = { catalog: world.catalog, transport, now: world.now, agentConfig: world.agentConfig, alerts: world.agentAlerts,
+    getCart: world.getCart, orders: { listByPhone: async phone => world.orders.list().filter(order => order.userPhoneNumber === phone),
+      listByChat: async chatId => world.orders.list().filter(order => order.whatsappChatId === chatId) },
+    handoffs: { get: id => world.handoffs.get(id), upsert: async (id, value) => world.handoffs.set(id, { ...world.handoffs.get(id), ...value }) },
     cartRepository: world.cartRepository, quoteRepository: world.quoteRepository,
     orderRepository: world.orderRepository, bankConfig: world.bankConfig,
     getState: world.getState, setState: world.setState,
     getTurnContext: () => turn, getTurnAttachment: id => attachments.get(id) ?? null,
     uploadCustomizationImage: world.uploadCustomizationImage, getOwnProfile: world.getOwnProfile };
   const purchase = createPurchaseTools(runtime, { confirmationConfig });
-  const registry = createToolRegistry({ ...purchase.handlers, responder: createResponder({ ...runtime, purchase }) });
+  runtime.getCommittedReceipt = () => purchase.orders.receiptForTurn();
+  const registry = createToolRegistry({ ...purchase.handlers, ...createSupportTools(runtime), responder: createResponder({ ...runtime, purchase }) });
   world.setToolGate(registry.check);
-  for (const name of Object.keys(purchase.handlers).concat("responder")) world.registerTool(name,
+  for (const name of Object.keys(purchase.handlers).concat("responder", "derivar")) world.registerTool(name,
     (args, context) => registry.dispatch(name, args, context), { real: true });
   world.recordShownQuote = purchase.quotes.markShown;
   world.orderConfirmationQuestion = ORDER_CONFIRMATION_QUESTION;

@@ -1,10 +1,16 @@
 import { purchaseError, cartIssue } from "../../services/cart.service.js";
 import { pendingTextFor, clientAskedQuestion } from "./confirmations.js";
 import { ORDER_CONFIRMATION_QUESTION } from "../../services/order-quote.service.js";
+import { activateAgentHandoff, MISUNDERSTANDING_HANDOFF_MESSAGE } from "../../services/agent-handoff.service.js";
 
-export function createResponder({ getState, setState, transport, purchase = null, getTurnContext = () => null }) {
-  return async ({ texto, entendido, quoteIdMostrado }, { signal } = {}) => {
+export function createResponder(runtime) {
+  const { getState, setState, transport, purchase = null, getTurnContext = () => null } = runtime;
+  return async ({ texto, entendido, fueraDeAlcance = false, quoteIdMostrado }, { signal } = {}) => {
     signal?.throwIfAborted();
+    // Se mantiene el nombre persistido del contador; ambas causas forman la
+    // misma racha. Un cierre normal (entendido y dentro del alcance) la reinicia.
+    const nextCounter = state => entendido === false || fueraDeAlcance === true
+      ? (state.consecutiveMisunderstandings ?? 0) + 1 : 0;
     const turn = getTurnContext();
     const receipt = await purchase?.orders.receiptForTurn();
     signal?.throwIfAborted();
@@ -19,13 +25,31 @@ export function createResponder({ getState, setState, transport, purchase = null
       }
       signal?.throwIfAborted();
       const state = getState();
-      state.consecutiveMisunderstandings = entendido ? 0 : (state.consecutiveMisunderstandings ?? 0) + 1;
+      state.consecutiveMisunderstandings = nextCounter(state);
       await setState(state);
-      return { code: "OK", entendido, orderMessageAdded: true };
+      return { code: "OK", entendido, fueraDeAlcance, orderMessageAdded: true };
+    }
+    const receiptAck = await runtime.paymentReceipts?.acknowledgementForTurn();
+    signal?.throwIfAborted();
+    if (receiptAck) {
+      await transport.sendText(receiptAck.text);
+      signal?.throwIfAborted();
+      await runtime.paymentReceipts.markAcknowledged(receiptAck.id);
+      signal?.throwIfAborted();
+      const state = getState(); state.consecutiveMisunderstandings = nextCounter(state); await setState(state);
+      signal?.throwIfAborted();
+      return { code: "OK", entendido, fueraDeAlcance, receiptAcknowledgementAdded: true };
+    }
+    if (nextCounter(getState()) >= 4) {
+      const state = getState(); state.consecutiveMisunderstandings = 4;
+      await setState(state);
+      return activateAgentHandoff(runtime, { motivo: "4 intentos sin encauzar la consulta", texto: MISUNDERSTANDING_HANDOFF_MESSAGE,
+        type: "MISUNDERSTANDING", signal });
     }
     let quote = null, pendingText = null, pendingRuc = null;
     const parts = [texto];
-    if (purchase) {
+    const corporatePending = getState().pendingCorporateRequest?.expiresAt > (runtime.now?.() ?? Date.now());
+    if (purchase && !corporatePending) {
       try {
         const effectiveQuoteId = quoteIdMostrado ?? (clientAskedQuestion(turn) ? getState().lastQuote?.quoteId : undefined);
         if (effectiveQuoteId !== undefined) {
@@ -57,17 +81,16 @@ export function createResponder({ getState, setState, transport, purchase = null
     await transport.sendText(parts.join("\n\n"));
     signal?.throwIfAborted();
     const state = getState();
-    state.consecutiveMisunderstandings = entendido ? 0 : (state.consecutiveMisunderstandings ?? 0) + 1;
+    state.consecutiveMisunderstandings = nextCounter(state);
     if (turn && pendingText) {
       state.pendingTextConfirmation = { ...pendingText, shown: true, shownSequence: turn.sequence, shownBatchId: turn.id };
       // Una afirmación al texto no confirma también una propuesta fiscal anterior.
       if (state.pendingRucConfirmation) state.pendingRucConfirmation = { ...state.pendingRucConfirmation, shown: false };
     }
     if (turn && !pendingText && pendingRuc) state.pendingRucConfirmation = { ...pendingRuc, shown: true, shownSequence: turn.sequence, shownBatchId: turn.id };
-    // La escalada y derivar como herramienta se implementan en la entrega 5.
     await setState(state);
     signal?.throwIfAborted();
     if (quote) await purchase.quotes.markShown(quote, turn, { signal });
-    return { code: "OK", entendido };
+    return { code: "OK", entendido, fueraDeAlcance };
   };
 }

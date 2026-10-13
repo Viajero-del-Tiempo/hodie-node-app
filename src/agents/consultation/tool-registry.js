@@ -32,7 +32,13 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
       quantity: { type: "integer", minimum: 1 }, packagingType: { ...string("Tipo real del empaque; opcional."), nullable: true } },
     ["productId", "variantId", "quantity"]) } }),
   crear_pedido: object({ quoteId: string("Cotización vigente mostrada. Solo funciona con confirmación del cliente en un lote posterior; el servidor la verifica.") }, ["quoteId"]),
+  registrar_comprobante: object({ attachmentId: string("Imagen o PDF admitido de este turno."),
+    comprobanteId: string("Comprobante privado pendiente devuelto por el servidor, para seleccionar pedido en un turno posterior."),
+    orderNumber: string("Número indicado por el cliente; el servidor comprueba dueño y estado pendiente.") }),
+  derivar: object({ motivo: string("Motivo de la solicitud humana o del reclamo; sin datos inventados."),
+    texto: string("Mensaje al cliente: una persona del equipo seguirá por este chat, sin promesas de tiempo.") }, ["motivo", "texto"]),
   responder: object({ texto: string("Respuesta final al cliente."), entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
+    fueraDeAlcance: { type: "boolean", description: "true si pide algo que la tienda no ofrece, aunque lo entendiste. Stock insuficiente no implica fuera de alcance. Por defecto false." },
     quoteIdMostrado: string("ID devuelto por cotizar para que el servidor agregue y registre el resumen completo." ) }, ["texto", "entendido"]),
 });
 export const CONSULTATION_TOOL_NAMES = Object.freeze(Object.keys(CONSULTATION_SCHEMAS));
@@ -50,6 +56,8 @@ const descriptions = {
   datos_facturacion: "Guarda decisión fiscal y borrador. Valida RUC y confirmaciones; solo permite elegir registros del perfil verificado propio.",
   cotizar: "Calcula con pricing del servidor. Con lineas: subtotales por línea y productsTotal informativos, sin carrito ni quoteId. Sin lineas: cotiza el carrito; DATO_FALTANTE da subtotal no confirmable; completo da quoteId y huellas.",
   crear_pedido: "Registra idempotentemente el pedido tras confirmación posterior. Verifica carrito, precios y stock en transacción. El servidor agrega el mensaje de pedido y pago al responder; nunca copies ni reformules datos bancarios.",
+  registrar_comprobante: "Registra imagen/PDF como comprobante, sin confirmar pagos ni modificar pedidos. Acepta attachmentId O comprobanteId. Sin número: uno asocia, varios pide elegir, ninguno informa falta de pedido. El acuse lo agrega el servidor al responder.",
+  derivar: "Activa el handoff, solicita una alerta durable y cierra. Pedidos explícitos y reclamos derivan directo; ante condiciones fuera de política o cantidad corporativa primero ofrecé y esperá aceptación.",
   responder: "Envía un único mensaje y cierra. quoteIdMostrado agrega el resumen del servidor y registra lastQuote solo después del envío.",
 };
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
@@ -90,7 +98,8 @@ export function createToolRegistry(handlers) {
     if (!Object.hasOwn(CONSULTATION_SCHEMAS, name)) return { code: "HERRAMIENTA_NO_DISPONIBLE", message: "Esta herramienta no está disponible." };
     const error = validate(CONSULTATION_SCHEMAS[name], args);
     if (error) return error;
-    for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado", "quoteId"]) {
+    if (name === "registrar_comprobante" && Number(Object.hasOwn(args, "attachmentId")) + Number(Object.hasOwn(args, "comprobanteId")) !== 1) return invalid("attachmentId", "Indicá attachmentId o comprobanteId, uno solo.");
+    for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado", "quoteId", "attachmentId", "comprobanteId"]) {
       if (args[field] !== undefined && (args[field] !== args[field].trim() || args[field].includes("/")
           || [".", ".."].includes(args[field]) || args[field].length > 200)) return invalid(field, "Identificador inválido.");
     }
@@ -122,7 +131,7 @@ export function createToolRegistry(handlers) {
     definitions({ onlyTerminal = false, optionNames = [] } = {}) {
       // Gemini exige propiedades explícitas en objetos. Los ejes se aprenden
       // de resultados reales, nunca de una lista fija ni precargando productos.
-      const names = onlyTerminal ? ["responder"] : CONSULTATION_TOOL_NAMES;
+      const names = onlyTerminal ? ["responder", "derivar"] : CONSULTATION_TOOL_NAMES;
       const declarations = names.map(name => {
         const schema = structuredClone(CONSULTATION_SCHEMAS[name]);
         if (name === "buscar_productos") {

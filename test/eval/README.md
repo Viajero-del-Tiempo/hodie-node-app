@@ -813,3 +813,28 @@ npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-m
 Las selecciones de regresión 4A, consulta/guardián y 4B son las anteriores.
 El asistente no ejecutó estas pruebas ni esta evaluación.
 
+## Entrega 5A
+
+derivar(motivo,texto) es cierre real del agente; responder false alcanza escalada
+por código en el cuarto turno. Solicitudes de persona y reclamos derivan directo;
+condiciones fuera de política/cantidad corporativa ofrecen, y derivan al aceptar.
+La configuración única se inyecta desde test/fixtures/agent-config.json con un
+valor ficticio, indicado en metadata.agentConfigFixture. `context.umbralCorporativo`
+acepta un entero positivo y reemplaza solo el umbral para ese caso y sus tres
+repeticiones, antes de preparar cotizacionMostrada. Sin la clave se conserva la
+configuración base. Una clave desconocida o un valor inválido bloquea el caso
+con campo y línea; no se modifica el formato v2. El snapshot refleja el umbral
+efectivo del caso. Carrito rechazado queda
+intacto; su solicitud de volumen se guarda aparte para el contexto humano.
+Snapshot registra reglas y solicitudes durables en memoria. No accede a Firestore
+ni envía alertas al equipo. La nueva herramienta no registra comprobantes.
+
+```bash
+npm run test:agent:support:unit
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases O-03,O-04,H-01,H-03,CQ-01,CQ-02,CQ-03
+```
+
+O-02 y el resto de TEMPORAL ENTREGA 5 quedan para 5B. No se modifican YAML,
+checks, umbrales, pensamiento ni tiempos. Guía completa de archivos, regresión,
+emulador y Angular: ../../docs/VERIFICACION-agente-5A.md.
+

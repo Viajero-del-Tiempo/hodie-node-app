@@ -11,8 +11,17 @@ import { router as adminUserRouter } from "./routes/admin.user.routes.js";
 import { router as adminChatRouter } from "./routes/admin.chat.routes.js";
 import { router as adminCategoryRouter } from "./routes/admin.category.routes.js";
 import { router as adminPolicyRouter } from "./routes/admin.policy.routes.js";
+import { createAdminAgentConfigRouter } from "./routes/admin.agent-config.routes.js";
+import { createAgentConfigRepository } from "./services/agent-config.repository.js";
+import { db } from "./config/firebase.js";
+import { Timestamp } from "firebase-admin/firestore";
+import { requireAuth, requireAdmin } from "./middlewares/auth.middleware.js";
 import { router as catalogRouter } from "./routes/catalog.routes.js";
 
+import { createReceiptInfrastructure } from "./services/payment-receipt.infrastructure.js";
+import { createAdminReceiptRouter } from "./routes/admin.receipt.routes.js";
+
+export const receipts = createReceiptInfrastructure({ db });
 const app = express();
 
 const allowedOrigins = [
@@ -45,10 +54,12 @@ app.use("/catalog", catalogRouter);
 app.use("/auth", authRouter);
 app.use("/orders", orderRouter);
 app.use("/users", userRouter);
+app.use("/admin", createAdminReceiptRouter({ ...receipts, requireAuth, requireAdmin }));
 app.use("/admin", adminOrderRouter);
 app.use("/admin", adminUserRouter);
 app.use("/admin", adminChatRouter);
 app.use("/admin", adminCategoryRouter);
 app.use("/admin", adminPolicyRouter);
+app.use("/admin", createAdminAgentConfigRouter({ repository: createAgentConfigRepository({ db, timestampNow: () => Timestamp.now() }), requireAuth, requireAdmin }));
 
 export default app;

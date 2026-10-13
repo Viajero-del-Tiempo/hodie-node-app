@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeCartSnapshot, timestampMillis } from "./cart.service.js";
 import { pdfJobAdmission } from "./order-pdf-job.service.js";
+import { AGENT_CONFIG_COLLECTION, AGENT_CONFIG_ID } from "./agent-config.service.js";
+import { prepareDurableAlert } from "./agent-alert.service.js";
 
 // Puerto dormido: conexión explícita del llamador, nunca inicializa Firebase.
-export function createOrderConfirmationRepository({ db, timestampNow, now = Date.now, counterId = "orderNumber",
+export function createOrderConfirmationRepository({ db, timestampNow, now = Date.now, counterId = "orderNumber", agentConfigId = AGENT_CONFIG_ID,
   generateOrderId = () => db.collection("orders").doc().id }) {
   const ref = (collection, id) => db.collection(collection).doc(id);
   const data = snapshot => snapshot.exists ? snapshot.data() : null;
@@ -16,10 +18,10 @@ export function createOrderConfirmationRepository({ db, timestampNow, now = Date
   };
   async function attention(tx, job, type) {
     const id = job.id + "-" + type;
-    const existing = await tx.get(alertRef(id));
-    // Leer la solicitud antes de escribir. Un reinicio no duplica la alerta.
-    if (!existing.exists) tx.create(alertRef(id), { id, type, orderId: job.orderId,
+    const commit = await prepareDurableAlert(tx, alertRef(id), { id, type, orderId: job.orderId,
       orderNumber: job.orderNumber, chatId: job.chatId, createdAt: timestampNow(), delivered: false });
+    // Leer la solicitud antes de escribir. Un reinicio no duplica la alerta.
+    commit();
     tx.update(jobRef(job.id), { status: "attention", failureCode: type, updatedAt: timestampNow(), leaseUntil: 0 });
   }
   const repository = {
@@ -37,6 +39,7 @@ export function createOrderConfirmationRepository({ db, timestampNow, now = Date
         readOrder: async id => data(await tx.get(ref("orders", id))),
         readJob: async id => data(await tx.get(jobRef(id))),
         readCounter: async () => data(await tx.get(ref("counters", counterId))),
+        readAgentConfig: async () => data(await tx.get(ref(AGENT_CONFIG_COLLECTION, agentConfigId))),
         catalog: {
           async getProductForPricing(id) { const product = data(await tx.get(ref("products", id))); return product ? { ...product, id } : null; },
           async getCategoryForPricing(id) { const category = data(await tx.get(ref("categories", id))); return category ? { ...category, id } : null; },

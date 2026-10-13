@@ -8,6 +8,7 @@ const fields = {
   audioMaxSeconds: ["AGENT_AUDIO_MAX_SECONDS", 120, 1, 120],
   audioFallbackBytes: ["AGENT_AUDIO_FALLBACK_BYTES", 2 * MB, 1, 2 * MB],
   imageMaxBytes: ["AGENT_IMAGE_MAX_BYTES", 5 * MB, 1, 5 * MB],
+  pdfMaxBytes: ["AGENT_PDF_MAX_BYTES", 5 * MB, 1, 5 * MB],
   imagesPerTurn: ["AGENT_IMAGES_PER_TURN", 3, 1, 3],
   totalMediaBytes: ["AGENT_TOTAL_MEDIA_BYTES", 10 * MB, 1, 10 * MB],
 };
@@ -21,7 +22,7 @@ export function createGuardianConfig(env = {}, overrides = {}) {
     config[key] = value;
   }
   if (config.silenceMs > config.burstMaxMs) throw new Error("El silencio no puede superar el máximo de ráfaga");
-  if (config.imageMaxBytes > config.totalMediaBytes || config.audioFallbackBytes > config.totalMediaBytes) {
+  if (config.imageMaxBytes > config.totalMediaBytes || config.pdfMaxBytes > config.totalMediaBytes || config.audioFallbackBytes > config.totalMediaBytes) {
     throw new Error("El límite individual no puede superar el total de medios");
   }
   return Object.freeze(config);

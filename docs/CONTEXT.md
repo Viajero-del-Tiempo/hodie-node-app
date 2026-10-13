@@ -70,7 +70,9 @@ en el código. Leé todo antes de actuar.
   pago contra entrega. shippingCost siempre 0 en el pedido.
 - Pago 100% manual por transferencia; el admin confirma.
 - La compra web exige login con OTP por WhatsApp.
-- Cantidad de 1 a 100; más de 100 = pedido corporativo → handoff.
+- Pricing: cantidad de 1 a 100 por ítem para todos. En el agente nuevo, la
+  cantidad corporativa depende de la suma total del carrito y del documento
+  agent_config/conversation; el bot ofrece una persona y deriva cuando acepta.
 - Política de derivación: solo si el cliente pide una persona, hay un
   reclamo, pedido corporativo, dos fallas técnicas consecutivas del agente nuevo, o 4 intentos seguidos sin
   entenderlo (1: reformular; 2 y 3: menú contextual o repregunta de dato + ofrecer asesor;
@@ -1074,3 +1076,132 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   la primera vez y derivación ante el segundo turno consecutivo. Un reintento
   exitoso cierra normalmente y reinicia la racha. La recuperación tras un commit
   sigue teniendo prioridad. Los tests los ejecuta el dueño.
+
+## Agente nuevo: entrega 5A
+
+- Implementa derivar({motivo,texto}) como segundo cierre. La octava llamada
+  permite responder o derivar; dos cierres o llamadas posteriores se rechazan
+  antes de ejecutar el lote. El mensaje conversacional lo escribe el modelo.
+  responder suma la racha con entendido:false O fueraDeAlcance:true, una vez por
+  turno; el cuarto lo deriva el código con un único texto fijo. Un cierre normal
+  o sesión nueva reinicia la racha; las fallas técnicas conservan su contador
+  separado. El contexto expone el contador de turnos cerrados: con valor 2 y una
+  nueva consulta sin encauzar, el prompt ofrece una persona en el tercero sin
+  usar derivar. fueraDeAlcance es booleano y false si se omite.
+- Pedidos explícitos de una persona y reclamos derivan directamente. Negociaciones
+  y cantidad corporativa explican lo vigente y ofrecen una persona; solo derivan
+  cuando acepta. Ante reclamos, el prompt pide disculpas antes de derivar. No se
+  deriva por palabras clave. Se conserva el carrito.
+- Umbral en el documento único agent_config/conversation, separado de policies.
+  corporateQuantityThreshold es entero positivo, sin default en src/. GET/PUT
+  /admin/agent-config requieren sesión y administrador real. Revisión/timestamp
+  son del servidor; versión opaca por umbral/revisión. 400/409 indican el campo.
+  Angular tiene formulario propio en Políticas, conserva borrador y permite
+  recargar tras un conflicto antes de volver a guardar.
+  El contexto del servidor lee corporateQuantityThreshold en cada turno y expone
+  solo el umbral válido, o null si falta/es inválido. El prompt ofrece atención
+  corporativa para una cantidad total mayor incluso si también consulta por
+  diseño/logo; las herramientas conservan su comprobación obligatoria.
+- Cantidad corporativa compara suma total de unidades > umbral; igualdad permite
+  seguir. Carrito agregar/modificar conserva el anterior y guarda por separado
+  pendingCorporateRequest durante tres días, con referencias resueltas del catálogo
+  y sin subidas. Invalida cotización/confirmación anterior. La alerta incluye esa
+  solicitud. Una operación válida sobre líneas la limpia; subir el umbral no
+  aplica silenciosamente una solicitud rechazada.
+- Cotizar aplica la regla tanto al carrito como a sus líneas informativas.
+  CANTIDAD_CORPORATIVA se comprueba antes del stock: aun sin unidades suficientes,
+  una solicitud sobre el umbral ofrece atención humana.
+  crear_pedido la lee dentro de la transacción antes de cualquier escritura;
+  falta de configuración devuelve CONFIGURACION_INCOMPLETA. La repetición de
+  un pedido ya creado conserva idempotencia. Pricing mantiene exactamente su
+  tope de 100 por ítem, sus mensajes y el checkout web. El cierre de una compra
+  recién creada sigue usando responder y su pago exclusivo del servidor.
+- Alertas comunes: agent_alerts para episodios de chat y order_alerts para PDF
+  4B, con primitiva compartida de creación idempotente. El checkpoint guarda la
+  solicitud antes de escribir la bandeja/índice. Recuperar reintenta persistencia,
+  sin duplicar el episodio, repetir mensaje, reiniciar delivered ni sobrescribir
+  una reactivación del mismo episodio. Si falta contexto por una lectura fallida,
+  se marca contextUnavailable en los metadatos de la alerta y no se inventan datos.
+  Su contexto para el equipo es un DTO: nombres de producto/variante/empaque,
+  cantidades, texto confirmado, envío, facturación y total de la cotización
+  mostrada del mismo chat, más la solicitud de volumen rechazada. No incluye IDs
+  internos, huellas, borradores ni marcas de sesión/TTL; mensajes y pedidos también
+  se proyectan por campos. La cotización y el carrito originales quedan intactos.
+  Nadie envía al equipo aquí.
+  Solo whatsapp.js despachará y acusará entrega en la puesta en marcha conjunta.
+- El runner inyecta configuración ficticia desde test/fixtures/agent-config.json,
+  identificada en metadata.agentConfigFixture. context.umbralCorporativo permite
+  un entero positivo por caso; initial-state lo lleva a la configuración del
+  servidor en memoria antes de cotizacionMostrada y de instalar herramientas.
+  Sin esa clave se mantiene la base; valores inválidos bloquean con campo/línea.
+  El snapshot registra la configuración efectiva. Repositorios de reglas/alertas y
+  pedidos siguen en memoria. Tests cubren derivación, cuarto intento, límite
+  agregado, ausencia de configuración, conservación del carrito y pago, contratos
+  y concurrencia/rollback en el emulador. O-03/O-04/H-01/H-03 usan las herramientas
+  reales; no se edita conversations.yaml ni los checks/umbrales.
+- 5B implementada, pendiente de verificación del dueño: registrar_comprobante,
+  PDF del guardián, almacenamiento privado, descarga autenticada para admin,
+  retención de seis horas sin asignación, panel de comprobantes y O-02.
+  Se quitó por completo TEMPORAL ENTREGA 5 del prompt. WhatsApp, router y agentes
+  productivos actuales siguen intactos.
+- En la puesta en marcha: cargar el umbral real desde el panel, conectar puertos
+  nuevos/checkpointer/reactivación y dispatcher de alertas solo en whatsapp.js,
+  desplegar índice agent_alerts(delivered,createdAt) mediante firestore:indexes.
+  Sin deploy antes de la puesta en marcha conjunta con el catálogo.
+- Archivos, comandos y recorrido manual: docs/VERIFICACION-agente-5A.md. El dueño
+  ejecuta pruebas/builds/evaluaciones; este documento no afirma sus resultados.
+
+## Agente nuevo: entrega 5B
+
+- registrar_comprobante acepta attachmentId O comprobanteId, y orderNumber
+  opcional. Identidad solo del servidor: mismo chat o teléfono verificado y
+  normalizado. Uno pendiente asocia; varios devuelven PEDIDO_AMBIGUO y números
+  propios; ninguno PEDIDO_NO_DISPONIBLE. Número explícito vuelve a validar
+  pertenencia y estado. El archivo se guarda primero en privado para elegir
+  en otro turno. No interpreta importes ni confirma pagos.
+- payment_receipts guarda intención de subida, descriptor privado y relación.
+  La asociación y agent_alerts/PAYMENT_RECEIPT se escriben en una transacción
+  que relee archivo, pedido y alerta antes de escribir. No escribe el pedido,
+  no cambia su estado ni stock. Un comprobante solo se asocia a un pedido;
+  repetición del mismo comprobante/pedido pendiente es idempotente. Alertas
+  deduplicadas por comprobante; solo whatsapp.js las despachará al activar el agente.
+- El acuse textual lo arma el servidor y responder lo envía en lugar del texto
+  del modelo. La entrega pendiente se recupera desde Firestore tras un reinicio
+  o una interrupción después del commit; nunca pide repetir la compra. El mensaje
+  de pago de una compra recién creada conserva su prioridad.
+- PDF del guardián: máximo 5 MB (AGENT_PDF_MAX_BYTES, solo puede reducirse), MIME
+  application/pdf y firma %PDF/version + cierre %%EOF. Cuenta dentro de los 10 MB
+  existentes por turno; no se transcribe ni pasa al modelo como contenido. El
+  modelo solo recibe tipo, nombre e identificador. Bytes solo en el registro
+  del turno, que se cierra incluso ante cancelación. Imágenes también se validan
+  por firma al registrar el comprobante.
+- Sin asignar: seis horas desde recepción, configurable con
+  AGENT_RECEIPT_UNASSIGNED_TTL_MS (1 minuto..7 días). El acceso/selección se corta
+  al vencer. Un barrido independiente cada minuto reclama transaccionalmente
+  el archivo vencido, borra almacenamiento y luego documento; reintenta fallos
+  y recupera uploading/deleting tras reinicio. El borrado físico puede demorarse
+  por la siguiente pasada o un fallo del proveedor; no vuelve a permitir acceso.
+  No usar TTL de Firestore que borre metadatos antes de eliminar el archivo.
+- **Retención de asociados pendiente de definir con Arnaldo:** propuesta de
+  90 días tras la verificación manual del pago. Todavía no hay borrado automático
+  de asociados; se requiere acordar el plazo antes de ponerlo en producción.
+- Cloudinary: subida firmada raw + type:authenticated, overwrite:false,
+  backup:false, sin conversiones ni URL en los contratos. Descarga firmada
+  temporal solo dentro del backend, que entrega bytes tras verificar admin real,
+  activo, y relación con el pedido. Cache-Control:no-store, attachment, nosniff
+  y CSP sandbox. Nunca retorna URL, firma ni descriptor del proveedor.
+- **Verificación de Cloudinary pendiente para puesta en marcha:** probar la cuenta
+  real y sus permisos de raw/authenticated, descarga firmada de JPG/PNG/PDF,
+  bloqueo de URL sin firma y de originales/derivados, eliminación sin backup
+  y configuración de PDF/ZIP de Security si la cuenta la requiere. No se cambió
+  la cuenta durante esta implementación. Fuentes y recorrido: VERIFICACION-agente-5B.md.
+- Emulador: archivos privados en dev/receipts (ignorado, permisos 0700/0600), sin
+  express.static, conservados al reiniciar. Siembra un comprobante sintético en
+  un pedido pendiente de las fixtures. Solo descarga con JWT admin local. Runner
+  usa un puerto de almacenamiento en memoria y o02-receipt.png en el manifiesto.
+  El panel agrega lista/descarga en un componente con estilos propios; el SCSS
+  del detalle y los presupuestos no cambian. Confirmación manual de pago intacta.
+- En puesta en marcha desplegar índices payment_receipts de firestore.indexes.json
+  y conectar los puertos del agente/checkpointer/transportes. El worker de limpieza
+  se inicia con server.js y con el servidor local. No conectar ni desplegar el
+  agente nuevo por separado del catálogo. Archivos y comandos: VERIFICACION-agente-5B.md.

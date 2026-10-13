@@ -64,7 +64,7 @@ El estado del grafo guarda la conversación; el carrito vive aparte, en Firestor
 | `pushname` | Nombre de contacto en WhatsApp |
 | `sessionCutoff` | Dónde empieza la sesión actual dentro de `messages` |
 | `lastActivityAt` | Último mensaje procesado |
-| `consecutiveMisunderstandings` | Intentos seguidos sin entender al cliente |
+| `consecutiveMisunderstandings` | Turnos cerrados consecutivos con entendido:false o fueraDeAlcance:true; se mantiene el nombre persistido |
 | `consecutiveTechnicalFailures`, `lastTechnicalFailure` | Racha de fallas técnicas y último lote registrado; independiente de incomprensiones y persistida por chat |
 | `guardianAlerts` | Solicitudes pendientes de alerta por límite de uso o derivación técnica; solo whatsapp.js las envía y acusa entrega |
 | `humanHandoffRequired`, `humanHandoffReason` | Derivación activa y su motivo |
@@ -139,17 +139,17 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | `cotizar` | lineas? (productId, variantId, quantity, packagingType?) | Con lineas: cálculo informativo con el pricing compartido, subtotal por línea y productsTotal; no modifica carrito, nunca confirmable ni quoteId. Sin lineas: carrito actual, modalidad y facturación; incompleto DATO_FALTANTE con subtotal sin total final ni quoteId; completo totales, quoteId y huellas |
 | `crear_pedido` | `quoteId` | Ver Creación segura de pedidos |
 | `estado_pedido` | `orderNumber?`, `phone?` | Aplica las reglas de verificación (ver Seguridad) |
-| `registrar_comprobante` | `attachmentId`, `orderNumber?` | Asocia la imagen al pedido pendiente del cliente y alerta al admin. Nunca cambia el estado del pedido |
+| `registrar_comprobante` | `attachmentId?` O `comprobanteId?`, `orderNumber?` | Imagen o PDF privado; uno pendiente asocia, varios PEDIDO_AMBIGUO, ninguno PEDIDO_NO_DISPONIBLE. El número explícito revalida dueño y estado en transacción. Guarda archivo sin asignar seis horas para seleccionar después. Asociación y solicitud durable de alerta atómicas; nunca confirma pagos ni modifica el pedido. Acuse textual del servidor al responder |
 | `consultar_politicas` | — | Todas las políticas vigentes de la colección `policies` |
-| `derivar` | `motivo` | Marca el handoff y termina el turno (ver Derivación) |
-| `responder` | `texto`, `entendido`, `quoteIdMostrado?` | Un único envío y cierre. El servidor agrega el resumen y la pregunta final, y registra lastQuote después del envío exitoso. Ante una consulta sobre la cotización vigente, responde y rearma solo la pregunta de confirmación. Después de crear el pedido, envía exclusivamente el mensaje armado por el servidor; los datos bancarios no están en la respuesta pública de crear_pedido. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
+| `derivar` | `motivo`, `texto` | El modelo escribe el mensaje; el código persiste handoff, contexto y solicitud durable de alerta y cierra el turno. No envía alertas al equipo |
+| `responder` | `texto`, `entendido`, `fueraDeAlcance?`, `quoteIdMostrado?` | Un único envío y cierre. fueraDeAlcance es booleano, false si se omite: señala pedidos de algo que la tienda no ofrece, aunque se entiendan. El servidor agrega el resumen y la pregunta final, y registra lastQuote después del envío exitoso. Ante una consulta sobre la cotización vigente, responde y rearma solo la pregunta de confirmación. Después de crear el pedido, envía exclusivamente el mensaje armado por el servidor; los datos bancarios no están en la respuesta pública de crear_pedido. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
 
 ### Reglas comunes
 
 - **Todo turno del modelo termina** con `responder` o con `derivar`. Un turno que termina sin ninguna de las dos se trata como falla técnica y se cierra por código con la política técnica.
-- **Los errores son datos, no excepciones.** Cada herramienta devuelve códigos que el agente explica con sus palabras: `SIN_STOCK` (con el stock disponible), `VARIANTE_INACTIVA`, `EMPAQUE_INEXISTENTE`, `TEXTO_DEMASIADO_LARGO` (con el límite), `NO_ADMITE_IMAGEN`, `CANTIDAD_CORPORATIVA` (más de 100 unidades), `DATO_FALTANTE`.
-- **`CANTIDAD_CORPORATIVA` corresponde a la entrega 5**, con `derivar`; no se implementa en 4A ni agrega umbrales al agente. Entonces obliga a derivar con el motivo "pedido corporativo de N unidades de \<producto>".
-- **`entendido`** en `responder` indica si el agente pudo interpretar el mensaje del cliente; alimenta la escalada de 4 intentos.
+- **Los errores son datos, no excepciones.** Cada herramienta devuelve códigos que el agente explica con sus palabras: `SIN_STOCK` (con el stock disponible), `VARIANTE_INACTIVA`, `EMPAQUE_INEXISTENTE`, `TEXTO_DEMASIADO_LARGO` (con el límite), `NO_ADMITE_IMAGEN`, `CANTIDAD_CORPORATIVA` (total de unidades superior al umbral configurado), `CONFIGURACION_INCOMPLETA`, `DATO_FALTANTE`.
+- **Cantidad corporativa (5A):** el umbral vive en el documento único `agent_config/conversation`, con `corporateQuantityThreshold`, revisión y timestamp del servidor. Se edita desde su propio formulario en la página de políticas, separado de los temas de texto libre. No existe un valor por defecto en src/. Si falta, las operaciones comerciales devuelven CONFIGURACION_INCOMPLETA. Se suman todas las unidades, incluso entre productos y variantes; igualar el umbral permite seguir. Agregar/modificar por encima conserva el carrito anterior y guarda la solicitud rechazada aparte, con TTL de tres días e invalidación de la confirmación anterior. Cotizar y crear_pedido también comprueban la regla; la creación lee configuración dentro de la transacción. El pricing mantiene su tope de 100 unidades por ítem para todos. El bot ofrece una persona y deriva cuando el cliente acepta; la alerta incluye la solicitud de volumen.
+- **`entendido`** en `responder` indica si el agente pudo interpretar el mensaje; `fueraDeAlcance` distingue una consulta comprensible sobre algo que la tienda no ofrece. La escalada cuenta cualquiera de las dos causas, una vez por turno.
 - **El agente nunca muestra más de 5 productos** en un mismo mensaje.
 
 ## Creación segura de pedidos
@@ -222,7 +222,7 @@ LÍMITES
 
 CIERRE DEL TURNO
 - Terminá siempre con responder o con derivar. En responder, indicá si
-  entendiste lo que el cliente quería.
+  entendiste lo que el cliente quería y si está fuera del alcance de la tienda.
 ```
 
 Las reglas de derivación y de seguridad se agregan al prompt tal como están en sus secciones. El prompt se ajusta solo con evidencia de la evaluación: cada cambio se corre contra `conversations.yaml` antes de aceptarse.
@@ -235,24 +235,24 @@ El agente distingue entre **derivar** (pasar el chat a una persona y quedar en s
 
 - El cliente pide hablar con una persona, o acepta una oferta de hacerlo.
 - Hay un reclamo o un problema con un pedido.
-- La herramienta devuelve `CANTIDAD_CORPORATIVA`.
 - Hay fallas técnicas en dos turnos consecutivos del mismo chat (ver política técnica).
 - Se alcanzan 4 intentos seguidos sin entender al cliente.
 
 ### Cuándo ofrece, sin derivar
 
 - Falta un dato que las herramientas no devuelven.
+- La herramienta devuelve `CANTIDAD_CORPORATIVA`: explicar el límite configurado, ofrecer una persona y derivar al aceptar.
 - El cliente pide algo fuera de las políticas: anticipos, entregas personales, descuentos o fechas garantizadas.
 - Un plazo de entrega parece justo.
 
 ### Escalada de 4 intentos, aplicada por código
 
-El código cuenta los turnos con `entendido: false` y reinicia el contador con el primer `entendido: true` o con una sesión nueva. El agente recibe el contador en el contexto del turno y adapta su respuesta:
+El código suma un turno si `entendido: false` O `fueraDeAlcance: true`, sin contar dos veces si se cumplen ambas. Reinicia con un cierre normal (`entendido: true` y `fueraDeAlcance: false`, también si se omite este último campo) o con una sesión nueva. El agente recibe `consecutiveMisunderstandings` como cantidad de turnos ya cerrados: si vale 2 y la nueva consulta tampoco se encauza, este es el tercer turno. Una consulta fuera de rubro no activa la herramienta derivar; su escalada la hace el código. Una solicitud explícita de una persona sigue derivando directamente. El agente adapta su respuesta:
 
 1. Primer intento: reformula la pregunta con otras palabras.
 2. Segundo intento: ofrece opciones concretas (ver el catálogo, cotizar, consultar un pedido) y menciona que puede hablar con una persona.
 3. Tercer intento: repite las opciones y ofrece una persona de forma directa.
-4. Cuarto intento: el código deriva, aunque el agente no lo haya hecho, con el motivo "4 intentos sin entender al cliente".
+4. Cuarto intento: el código deriva, aunque el agente no lo haya hecho, con el motivo "4 intentos sin encauzar la consulta".
 
 Dentro de una cotización, los pasos 2 y 3 vuelven a pedir el mismo dato con un ejemplo y ofrecen una persona, sin mostrar el menú general ni perder el carrito.
 
@@ -354,7 +354,9 @@ La evaluación se construye primero, para que el agente se mida desde su primera
 4. **Carrito y pedidos, dividida en dos rondas:**
    - **4A:** carrito_ver/agregar/modificar/quitar, datos_envio, datos_facturacion, cotizar, subtotal incompleto, quoteId y huellas, resumen del servidor con responder(quoteIdMostrado), lastQuote e invalidación, TTL de tres días, subida de imagen por puerto, customization.declined y errores estructurados opt-in del pricing. Runner con cotizacionMostrada real (F-05). Quitar TEMPORAL ENTREGA 4; conservar TEMPORAL ENTREGA 5. Incluir aviso neutro del límite e imágenes del cliente como referencias. Sin crear pedidos ni lógica corporativa.
    - **4B, implementada pendiente de verificación del dueño:** confirmación final posterior con vocabulario y agregados neutros configurables; pregunta corta tras consultas sin cambios; crear_pedido y persistencia transaccional con contador compartido, relación quoteId→pedido e idempotencia; mensaje de pago exclusivo del servidor; PDF independiente con recuperación y alerta de envío incierto; pruebas de concurrencia, rollback y lectura del pedido en admin/Mis pedidos en el emulador. Runner con K-01 a K-05 y decisiones texto:null/empaque:null. Timeout por llamada al modelo y un reintento dentro del plazo total. Conservar TEMPORAL ENTREGA 5. Sin conexión productiva.
-5. **Comprobantes y derivación:** `registrar_comprobante`, `derivar`, escalada aplicada por código y alerta con contexto. Quitar el bloque del prompt marcado `TEMPORAL ENTREGA 5` y habilitar `derivar` como cierre conversacional.
+5. **Dividida en dos rondas:**
+   - **5A:** derivar(motivo,texto) como segundo cierre, cuarto intento sin entender aplicado por código, configuración única del agente con formulario Angular, cantidad corporativa por total, solicitudes durables de alerta y deduplicación por episodio. O-03/O-04/H-01/H-03. Mantener el bloque TEMPORAL ENTREGA 5 con las restricciones de comprobantes; quitar solamente las negaciones de derivación/escalada. Sin conectar WhatsApp ni el router productivo.
+   - **5B implementada, pendiente de verificación del dueño:** registrar_comprobante, PDF validado en el guardián, almacenamiento raw/authenticated y descarga por backend con admin real/activo; retención configurable de seis horas sin asignar, borrado recuperable, transacción asociación+alerta, acuse del servidor recuperado tras commit/reinicio; panel de comprobantes y O-02 sintético. Se quitó TEMPORAL ENTREGA 5 completo. Retención de asociados y validación de la cuenta Cloudinary pendientes antes de puesta en marcha.
 6. **Evaluación completa:** todos los casos, hasta alcanzar los umbrales.
 
 Después viene la puesta en marcha conjunta con el catálogo (entrega 6 de `docs/SPEC-catalogo.md`), en la que también se eliminan el router, el BudgetAgent y el SupportAgent.

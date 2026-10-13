@@ -21,7 +21,9 @@
     "test:eval:unit": "node --test test/test_eval_loader.js test/test_eval_context.js test/test_eval_transport.js test/test_eval_checks.js test/test_eval_judge.js test/test_eval_runner.js test/test_eval_model_usage.js",
     "test:agent:purchase:unit": "node --test test/test_agent_cart.js test/test_agent_customer_data.js test/test_agent_quotes.js test/test_agent_purchase_runner.js test/test_agent_checkout_contract.js test/test_agent_order_confirmation.js test/test_agent_order_creation.js test/test_agent_order_pdf_jobs.js",
     "test:agent:unit": "node --test test/test_consultation_tools.js test/test_consultation_order_access.js test/test_consultation_agent.js test/test_consultation_runner.js test/test_eval_model_usage.js test/test_agent_model_invoker.js",
-    "test:agent:orders:emulator": "node scripts/test-catalog-emulator.js --agent-orders-only"
+    "test:agent:orders:emulator": "node scripts/test-catalog-emulator.js --agent-orders-only",
+    "test:agent:support:unit": "node --test test/test_agent_config.js test/test_agent_alerts.js test/test_agent_handoff.js test/test_agent_corporate_quantity.js test/test_agent_support_runner.js",
+    "test:agent:support:emulator": "node scripts/test-catalog-emulator.js --agent-support-only"
   },
   "keywords": [],
   "author": "Arnaldo Guerrero",

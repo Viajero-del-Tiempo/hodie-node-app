@@ -23,7 +23,7 @@ export async function evaluateCartPricing(cart, { calculatePricing, inspectData,
 }
 
 export function createOrderQuoteService({ carts, repository, chatId, calculatePricing, inspectData, getState, setState,
-  renderSummary, now = Date.now, newId = randomUUID, getTurn, confirmationRepository = null }) {
+  renderSummary, now = Date.now, newId = randomUUID, getTurn, confirmationRepository = null, assertLines = async () => {} }) {
   let lastResult = null;
   async function invalidate(context) {
     context.signal?.throwIfAborted();
@@ -44,9 +44,11 @@ export function createOrderQuoteService({ carts, repository, chatId, calculatePr
   }
   async function evaluate(context = {}) {
     const cart = await carts.read(context);
+    await assertLines(cart?.lines ?? [], context);
     return (await evaluateCartPricing(cart, { calculatePricing, inspectData, renderSummary, signal: context.signal })).quote;
   }
   async function informative(lineas, context) {
+    await assertLines(lineas, context);
     // Pricing del servidor, sin leer/escribir el carrito ni invalidar lastQuote.
     const pricing = await calculatePricing(lineas);
     context.signal?.throwIfAborted();

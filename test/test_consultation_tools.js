@@ -9,7 +9,7 @@ import { deterministicChecks } from "./eval/checks.js";
 
 test("registro de consulta es subconjunto canónico y coincide con la especificación", async () => {
   assert.deepEqual(CONSULTATION_TOOL_NAMES, ["buscar_productos", "ver_producto", "enviar_imagenes", "consultar_politicas", "estado_pedido",
-    "carrito_ver", "carrito_agregar", "carrito_modificar", "carrito_quitar", "datos_envio", "datos_facturacion", "cotizar", "crear_pedido", "responder"]);
+    "carrito_ver", "carrito_agregar", "carrito_modificar", "carrito_quitar", "datos_envio", "datos_facturacion", "cotizar", "crear_pedido", "registrar_comprobante", "derivar", "responder"]);
   assert.ok(CONSULTATION_TOOL_NAMES.every(name => TOOL_NAMES.includes(name)));
   assert.equal(checkToolSpecification(await readFile(new URL("../docs/SPEC-agente.md", import.meta.url), "utf8")).valid, true);
 });
@@ -127,11 +127,13 @@ test("argumentos inválidos quedan registrados sin ejecutar efectos ni borrar el
       ["estado_pedido", { phoneVerified: true }, "phoneVerified"],
       ["responder", { texto: "Respuesta" }, "entendido"],
       ["crear_pedido", {}, "quoteId"],
+      ["registrar_comprobante", {}, "attachmentId"],
     ]) {
       const result = await f.world.invokeTool(name, args);
       assert.equal(result.code, "ARGUMENTOS_INVALIDOS"); assert.equal(result.field, field);
     }
-    for (const name of ["derivar", "registrar_comprobante", "__proto__", "modificar_precio"]) {
+    assert.equal((await f.world.invokeTool("derivar", {})).code, "ARGUMENTOS_INVALIDOS");
+    for (const name of ["__proto__", "modificar_precio"]) {
       assert.equal((await f.world.invokeTool(name, {})).code, "HERRAMIENTA_NO_DISPONIBLE");
     }
     assert.equal((await f.world.invokeTool("responder", { texto: "Respuesta", entendido: true, quoteIdMostrado: "inventado" })).code, "COTIZACION_INEXISTENTE");
@@ -147,10 +149,31 @@ test("esquema del proveedor aprende ejes del catálogo y no anuncia funciones fu
   const dynamic = registry.definitions({ optionNames: ["ejeInventado"] })[0].functionDeclarations;
   assert.deepEqual(Object.keys(dynamic.find(tool => tool.name === "buscar_productos").parameters.properties.opciones.properties), ["ejeInventado"]);
   assert.equal(dynamic.find(tool => tool.name === "responder").parameters.properties.quoteIdMostrado.type, "string");
+  assert.equal(dynamic.find(tool => tool.name === "responder").parameters.properties.fueraDeAlcance.type, "boolean");
   assert.deepEqual(dynamic.find(tool => tool.name === "crear_pedido").parameters.required, ["quoteId"]);
   assert.deepEqual(Object.keys(dynamic.find(tool => tool.name === "crear_pedido").parameters.properties), ["quoteId"]);
-  for (const future of ["derivar", "registrar_comprobante"]) assert.equal(dynamic.some(tool => tool.name === future), false);
-  assert.deepEqual(registry.definitions({ onlyTerminal: true })[0].functionDeclarations.map(tool => tool.name), ["responder"]);
+  assert.deepEqual(dynamic.find(tool => tool.name === "derivar").parameters.required, ["motivo", "texto"]);
+  assert.equal(dynamic.some(tool => tool.name === "registrar_comprobante"), true);
+  const terminals = registry.definitions({ onlyTerminal: true })[0].functionDeclarations;
+  assert.deepEqual(terminals.map(tool => tool.name), ["responder", "derivar"]);
+  assert.equal(initial.some(tool => tool.name === "registrar_comprobante"), true);
+  assert.equal(terminals.some(tool => tool.name === "registrar_comprobante"), false);
+});
+test("fueraDeAlcance acepta booleanos y su omisión; rechaza otros tipos antes de responder", async () => {
+  const f = await consultationFixture();
+  try {
+    const before = f.world.snapshot();
+    for (const value of ["true", 1, null, {}, []]) {
+      const result = await f.world.invokeTool("responder", { texto: "No enviar", entendido: true, fueraDeAlcance: value });
+      assert.equal(result.code, "ARGUMENTOS_INVALIDOS"); assert.equal(result.field, "fueraDeAlcance");
+      assert.deepEqual(f.world.snapshot(), before); assert.deepEqual(f.transport.getOutgoing(), []);
+      assert.equal(f.world.getEvents().at(-1).handlerInvoked, false);
+    }
+    const registry = createToolRegistry({});
+    for (const args of [{}, { fueraDeAlcance: false }, { fueraDeAlcance: true }]) {
+      assert.equal(registry.check("responder", { texto: "Respuesta de prueba", entendido: true, ...args }), null);
+    }
+  } finally { await f.agent.dispose(); f.close(); }
 });
 test("responder sin estado de cotización ni confirmación funciona antes y durante un turno", async () => {
   for (const withTurn of [false, true]) {

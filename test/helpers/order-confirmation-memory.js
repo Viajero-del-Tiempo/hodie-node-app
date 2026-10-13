@@ -3,7 +3,7 @@ import { normalizeCartSnapshot, fingerprint } from "../../src/services/cart.serv
 import { pdfJobAdmission } from "../../src/services/order-pdf-job.service.js";
 
 // Adaptador de almacenamiento, no otro pricing ni otro creador de pedidos.
-export function createMemoryOrderConfirmationRepository({ catalog, cartRepository, quoteRepository, orders,
+export function createMemoryOrderConfirmationRepository({ catalog, cartRepository, quoteRepository, orders, agentConfig,
   now, assertOpen = () => {}, generateOrderId = randomUUID, faults = {} }) {
   const confirmations = new Map(), jobs = new Map(), alerts = new Map();
   let counter = { lastOrderNumber: Math.max(0, ...orders.list().map(order => {
@@ -48,6 +48,7 @@ export function createMemoryOrderConfirmationRepository({ catalog, cartRepositor
           },
           readOrder: id => read("order", () => orderById(id)), readJob: id => read("job", () => jobs.get(id)),
           readCounter: () => read("counter", () => counter),
+          readAgentConfig: () => read("agentConfig", () => agentConfig.get()),
           catalog: {
             getProductForPricing: id => read("product", () => catalog.getProductForPricing(id)),
             getCategoryForPricing: id => read("category", () => catalog.getCategoryForPricing(id)),

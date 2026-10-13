@@ -8,6 +8,12 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
   if (!Number.isFinite(now) || !Array.isArray(turn?.messages) || !turn.messages.length
       || turn.messages.some(message => typeof message.text !== "string")) throw Object.assign(new Error("Turno inválido"), { code: "INVALID_TURN" });
   const verified = state.phoneVerified === true && normalizePurchasePhone(state.userPhoneNumber) !== null;
+  const agentConfig = await runtime.agentConfig?.get({ signal }) ?? null;
+  signal?.throwIfAborted();
+  const corporateQuantityThreshold = Number.isSafeInteger(agentConfig?.corporateQuantityThreshold)
+    && agentConfig.corporateQuantityThreshold > 0 ? agentConfig.corporateQuantityThreshold : null;
+  const pendingReceipts = await runtime.paymentReceipts?.pending() ?? [];
+  signal?.throwIfAborted();
   const categories = await runtime.catalog.getCategories();
   signal?.throwIfAborted();
   const cart = await runtime.getCart();
@@ -25,6 +31,9 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
       identity: { phoneVerified: verified, userPhoneNumber: verified ? normalizePurchasePhone(state.userPhoneNumber) : null,
         contactName: state.pushname ?? null },
       consecutiveMisunderstandings: state.consecutiveMisunderstandings ?? 0,
+      corporateQuantityThreshold,
+      pendingReceipts,
+      corporateRequest: state.pendingCorporateRequest?.expiresAt > now ? structuredClone(state.pendingCorporateRequest) : null,
       cart: cart ? { lines: (cart.lines ?? []).map(line => ({ ...pick(line, ["id", "productId", "variantId", "quantity", "packagingType"]),
         packaging: pick(line.packaging, ["declined"]),
         customization: pick(line.customization, ["text", "textDraft", "imageUrl", "pending", "declined"]) })),
@@ -37,7 +46,9 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
       // Sin fecha no se presenta esta lista como ordenada por antigüedad.
       orders: orders.filter(order => normalizePurchasePhone(order.userPhoneNumber) === normalizePurchasePhone(state.userPhoneNumber))
         .slice(0, 2).map(order => pick(order, ["orderNumber", "status", "createdAt"])),
-      attachments: (turn.attachments ?? []).map(attachment => ({ attachmentId: attachment.id,
+      attachments: (turn.attachments ?? []).map(attachment => attachment.mimeType === "application/pdf"
+        ? { attachmentId: attachment.id, type: "document", filename: attachment.filename ?? null }
+        : ({ attachmentId: attachment.id,
         ...pick(attachment, ["type", "mode", "description", "filename", "reason"]) })),
       mediaIssues: (turn.mediaIssues ?? []).map(issue => pick(issue, ["attachmentId", "type", "code", "requestText"])),
     },

@@ -7,6 +7,8 @@ import { createGuardianConfig } from "../guardian/config.js";
 import { createGuardianRuntime } from "../guardian/runtime.js";
 import { createPurchaseTools } from "./purchase-tools.js";
 import { ORDER_CONFIRMATION_QUESTION } from "../../services/order-quote.service.js";
+import { createSupportTools } from "./support-tools.js";
+import { createReceiptTools } from "./receipt-tools.js";
 
 // Adaptador exclusivo del runner. Ningún import de Firestore, WhatsApp o grafo
 // productivo: toda lectura y todo envío provienen del mundo de esta repetición.
@@ -18,10 +20,11 @@ export async function createAgent({ world, transport, signal, model = null, prom
   let currentTurn = null;
   let turnAttachments = null;
   const runtime = {
-    catalog: world.catalog, transport,
+    catalog: world.catalog, transport, agentConfig: world.agentConfig, alerts: world.agentAlerts,
     getState: world.getState, setState: world.setState, getCart: world.getCart,
     now: world.now, cartRepository: world.cartRepository, quoteRepository: world.quoteRepository,
     orderRepository: world.orderRepository, bankConfig: world.bankConfig,
+    receiptRepository: world.receiptRepository, receiptStorage: world.receiptStorage,
     uploadCustomizationImage: world.uploadCustomizationImage, getOwnProfile: world.getOwnProfile,
     setExecutionPhase: world.setExecutionPhase, getExecutionPhase: world.getExecutionPhase,
     getTurnContext: () => currentTurn,
@@ -29,6 +32,7 @@ export async function createAgent({ world, transport, signal, model = null, prom
     setTurnAttachments: value => { turnAttachments = value; },
     getTurnAttachment: id => turnAttachments?.get(id) ?? null,
     handoffs: {
+      get: id => world.handoffs.get(id),
       upsert: (id, values) => world.handoffs.set(id, { fecha: world.now(), ...world.handoffs.get(id), ...values }),
       updateLastMessage: (id, values) => world.handoffs.set(id, { ...world.handoffs.get(id), ...values }),
     },
@@ -36,6 +40,7 @@ export async function createAgent({ world, transport, signal, model = null, prom
     setTurnSignal: value => { turnSignal = value; },
     orders: {
       async getByNumber(number) { return world.orders.get(number); },
+      async listByChat(chatId) { return world.orders.list().filter(order => order.whatsappChatId === chatId); },
       async listByPhone(phone) {
         const timestamp = order => {
           const value = order.createdAt;
@@ -57,7 +62,8 @@ export async function createAgent({ world, transport, signal, model = null, prom
   runtime.getCart = () => purchase.carts.read();
   world.orderConfirmationQuestion = ORDER_CONFIRMATION_QUESTION;
   world.recordShownQuote = (quote, turn, context) => purchase.quotes.markShown(quote, turn, context);
-  const registry = createToolRegistry({ ...createReadTools(runtime), ...purchase.handlers,
+  const registry = createToolRegistry({ ...createReadTools(runtime), ...purchase.handlers, ...createSupportTools(runtime),
+    ...createReceiptTools(runtime),
     responder: createResponder({ ...runtime, purchase }) });
   // El gate se ejecuta dentro del interceptor: registra también los intentos
   // inválidos, sin invocar handlers existentes fuera de la lista permitida.

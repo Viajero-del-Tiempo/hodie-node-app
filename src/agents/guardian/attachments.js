@@ -2,10 +2,10 @@ export function createTurnAttachments() {
   const entries = new Map();
   let closed = false;
   return {
-    put(id, { data, mimeType }) {
+    put(id, { data, mimeType, filename = null }) {
       if (closed) throw new Error("Adjuntos del turno cerrados");
       if (!id || !Buffer.isBuffer(data) || !data.length || typeof mimeType !== "string") throw new Error("Adjunto inválido");
-      entries.set(id, { data: Buffer.from(data), mimeType });
+      entries.set(id, { data: Buffer.from(data), mimeType, filename });
     },
     get(id) {
       const item = entries.get(id);

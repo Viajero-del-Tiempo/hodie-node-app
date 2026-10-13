@@ -62,6 +62,12 @@ export async function createConsultationAgent({ runtime, registry, model = null,
       const diagnostics = [];
       runtime.setTurnSignal(signal);
       try {
+        // Acuse durable recuperado tras reinicio/commit interrumpido, antes de
+        // llamar al modelo. Nunca se muestra la ubicación privada del archivo.
+        if (await abortable(() => runtime.getRegisteredReceiptAcknowledgement?.(), signal)) {
+          await runtime.invokeTool("responder", { texto: "Comprobante recibido.", entendido: true });
+          return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics };
+        }
         runtime.setExecutionPhase?.("server_context");
         const prepared = await abortable(() => prepareServerContext({ runtime, history, now, turn, signal }), signal);
         if (prepared.silent) return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics };
@@ -74,7 +80,7 @@ export async function createConsultationAgent({ runtime, registry, model = null,
         for (;;) {
           if (attemptedTools >= MAX_TOOL_CALLS) throw failure("TOOL_LIMIT", "Se agotaron las ocho llamadas sin cerrar el turno.");
           const onlyTerminal = attemptedTools === MAX_TOOL_CALLS - 1;
-          const allowed = onlyTerminal ? ["responder"] : registry.names;
+          const allowed = onlyTerminal ? ["responder", "derivar"] : registry.names;
           const definitions = registry.definitions({ onlyTerminal, optionNames: [...optionNames] });
           const fixedInput = estimateFixedInput({ systemPrompt: prompt, toolSchemas: definitions, serverContext });
           const bound = model.bindTools(definitions,
@@ -95,12 +101,12 @@ export async function createConsultationAgent({ runtime, registry, model = null,
             throw failure("MISSING_TERMINAL", "El modelo no produjo llamadas válidas para continuar o cerrar.");
           }
           if (calls.length > MAX_TOOL_CALLS - attemptedTools) throw failure("TOOL_LIMIT", "El lote supera el máximo de ocho llamadas.");
-          const terminal = calls.filter(call => call.name === "responder");
-          if (terminal.length > 1 || (terminal.length && calls.at(-1).name !== "responder")) {
+          const terminal = calls.filter(call => ["responder", "derivar"].includes(call.name));
+          if (terminal.length > 1 || (terminal.length && calls.at(-1) !== terminal[0])) {
             throw failure("INVALID_TOOL_BATCH", "Solo se permite un cierre, al final del lote.");
           }
           if (attemptedTools + calls.length === MAX_TOOL_CALLS && !terminal.length) {
-            throw failure("TOOL_LIMIT", "La última llamada está reservada para responder.");
+            throw failure("TOOL_LIMIT", "La última llamada está reservada para cerrar.");
           }
           // Validar el lote antes de ejecutar efectos; conservar la respuesta
           // original mantiene las firmas de pensamiento de Gemini.
@@ -121,7 +127,7 @@ export async function createConsultationAgent({ runtime, registry, model = null,
               for (const axis of product?.optionNames ?? []) if (typeof axis === "string" && axis) optionNames.add(axis);
             }
             messages.push(new ToolMessage({ name: call.name, tool_call_id: call.id, content: JSON.stringify(result) }));
-            if (call.name === "responder" && result.code === "OK") return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics };
+            if (["responder", "derivar"].includes(call.name) && result.code === "OK") return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics };
           }
         }
       } catch (error) {
@@ -134,7 +140,9 @@ export async function createConsultationAgent({ runtime, registry, model = null,
           ...(runtime.getExecutionPhase ? { interruptedPhase: runtime.getExecutionPhase() } : {}) });
         // Si el pedido ya se confirmó, cerrar con su mensaje durable en lugar
         // de tratarlo como compra fallida. El PDF sigue independiente.
-        if (runtime.getCommittedReceipt && await runtime.getCommittedReceipt()) {
+        const committedOrder = runtime.getCommittedReceipt && await runtime.getCommittedReceipt();
+        const registeredReceipt = !committedOrder && await runtime.getRegisteredReceiptAcknowledgement?.();
+        if (committedOrder || registeredReceipt) {
           let orderRecovered = false;
           // Si el cierre ya fue la octava llamada, la recuperación continúa
           // por el trabajo durable; no autoriza una novena llamada.
@@ -143,7 +151,8 @@ export async function createConsultationAgent({ runtime, registry, model = null,
             const result = await runtime.invokeTool("responder", { texto: "Pedido registrado.", entendido: true });
             orderRecovered = result.code === "OK";
           }
-          return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics, technicalFailure: true, orderCommitted: true, orderRecovered };
+          return { usage: modelUsageSince(before, tracker.snapshot()), diagnostics, technicalFailure: true,
+            ...(committedOrder ? { orderCommitted: true, orderRecovered } : { receiptRegistered: true, receiptRecovered: orderRecovered }) };
         }
         await handleTechnicalFailure(runtime, error.code ?? "AGENT_ERROR", { signal: parentSignal,
           turnId: runtime.getTurnContext?.()?.id ?? turn.batchId });

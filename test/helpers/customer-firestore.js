@@ -2,14 +2,14 @@ import { assertLocalEnvironment } from "../../scripts/local-catalog.config.js";
 import { randomUUID } from "node:crypto";
 import { createTestScope, openCatalogTestFirestore } from "./catalog-firestore.js";
 
-export async function openCustomerTestApi({ includeAdminOrders = false } = {}) {
+export async function openCustomerTestApi({ includeAdminOrders = false, includeAgentConfig = false, includeReceipts = false } = {}) {
   // Estas suites NO admiten producción, aunque esté ALLOW_PROD_FIRESTORE_TESTS.
   assertLocalEnvironment(process.env);
   const context = await openCatalogTestFirestore();
   const scope = createTestScope(context.db);
   let server;
   try {
-    const [{ default: express }, { default: jwt }, { requireAuth, loadActiveUser }, { JWT_SECRET },
+    const [{ default: express }, { default: jwt }, { requireAuth, loadActiveUser, requireAdmin }, { JWT_SECRET },
       { createProfileService }, { createUserController }, { createCustomerOrderService }, { createCustomerOrderController },
       { createUserRouter }, { createOrderRouter }, { createSendOrderController }, { createOrderPersistence },
       { createOrderProcessor }, { createCatalogRepository }, { createCatalogService }, { createOrderPricingService },
@@ -48,7 +48,24 @@ export async function openCustomerTestApi({ includeAdminOrders = false } = {}) {
     app.use(express.json());
     app.use("/users", createUserRouter({ profile: createUserController(profiles), orders: createCustomerOrderController({ orders }) }));
     app.use("/orders", createOrderRouter(createSendOrderController({ processOrder, profiles: checkoutProfiles, notifyStatus: async () => {} })));
+    let receiptRepository = null, receiptStorage = null;
+    if (includeReceipts) {
+      const [{ createPaymentReceiptRepository }, { createAdminReceiptRouter }, { memoryPrivateReceiptStorage }] = await Promise.all([
+        import("../../src/services/payment-receipt.repository.js"), import("../../src/routes/admin.receipt.routes.js"), import("./receipt-memory.js"),
+      ]);
+      receiptRepository = createPaymentReceiptRepository({ db }); receiptStorage = memoryPrivateReceiptStorage();
+      app.use("/admin", createAdminReceiptRouter({ repository: receiptRepository, storage: receiptStorage, requireAuth, requireAdmin }));
+    }
     if (includeAdminOrders) app.use("/admin", (await import("../../src/routes/admin.order.routes.js")).router);
+    let agentConfig = null;
+    if (includeAgentConfig) {
+      const [{ createAgentConfigRepository }, { createAdminAgentConfigRouter }] = await Promise.all([
+        import("../../src/services/agent-config.repository.js"), import("../../src/routes/admin.agent-config.routes.js"),
+      ]);
+      const documentId = scope.id("agent-config"); scope.track("agent_config", documentId);
+      agentConfig = createAgentConfigRepository({ db, timestampNow, documentId });
+      app.use("/admin", createAdminAgentConfigRouter({ repository: agentConfig, requireAuth, requireAdmin }));
+    }
     // Endpoint de control para probar los middlewares reales y la identidad.
     app.get("/test/identity", requireAuth, loadActiveUser, (req, res) => res.json({ uid: req.user.uid }));
     server = await new Promise((resolve, reject) => {
@@ -61,7 +78,7 @@ export async function openCustomerTestApi({ includeAdminOrders = false } = {}) {
         ...(phone || rawToken ? { Authorization: `Bearer ${rawToken ?? token(phone)}` } : {}) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-      return { status: response.status, body: response.headers.get("content-type")?.includes("application/pdf")
+      return { status: response.status, headers: Object.fromEntries(response.headers), body: /^(application\/pdf|image\/)/.test(response.headers.get("content-type") ?? "")
         ? Buffer.from(await response.arrayBuffer()) : await response.json() };
     }
     async function createUser(suffix, overrides = {}) {
@@ -80,7 +97,7 @@ export async function openCustomerTestApi({ includeAdminOrders = false } = {}) {
         finally { await context.close(); }
       } }
     }
-    return { ...context, scope, profiles, orders, request, token, createUser, close,
+    return { ...context, scope, profiles, orders, request, token, createUser, close, agentConfig, receiptRepository, receiptStorage,
       simulateProfileSaveFailure(value) { failProfileSave = value; } };
   } catch (error) {
     if (server) await new Promise(resolve => server.close(resolve));

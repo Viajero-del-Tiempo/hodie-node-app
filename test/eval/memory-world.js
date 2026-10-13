@@ -6,15 +6,20 @@ import { createVirtualClock } from "../helpers/virtual-clock.js";
 import { assertCheckpointState } from "../../src/agents/guardian/attachments.js";
 import { createMemoryOrderConfirmationRepository } from "../helpers/order-confirmation-memory.js";
 import { createOrderPdfJobService } from "../../src/services/order-pdf-job.service.js";
+import { createAgentAlertService } from "../../src/services/agent-alert.service.js";
+import { createPaymentReceiptRepository } from "../../src/services/payment-receipt.repository.js";
+import { receiptMemoryDatabase, memoryPrivateReceiptStorage } from "../helpers/receipt-memory.js";
 
 export const EVAL_BANK_CONFIG = Object.freeze(JSON.parse(readFileSync(new URL("../fixtures/agent-bank.json", import.meta.url), "utf8")));
+export const EVAL_AGENT_CONFIG = Object.freeze(JSON.parse(readFileSync(new URL("../fixtures/agent-config.json", import.meta.url), "utf8")));
 
 export function createClock(initialTime) {
   return createVirtualClock(initialTime);
 }
 
-export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVAL_BANK_CONFIG, orderFaults = {},
-  generatePdf = async () => null, sendPdf = (...args) => transport.sendPdf(...args) }) {
+export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVAL_BANK_CONFIG,
+  agentConfig = Object.hasOwn(fixtures, "agentConfig") ? fixtures.agentConfig : EVAL_AGENT_CONFIG, orderFaults = {},
+  generatePdf = async () => null, sendPdf = (...args) => transport.sendPdf(...args), receiptFaults = {} }) {
   let closed = false;
   const assertOpen = () => { if (closed) throw new Error("La ejecución ya terminó"); };
   function repository(rows, key) {
@@ -41,6 +46,9 @@ export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVA
   const checkpoints = repository([], "id");
   const uploads = repository([], "id");
   const handoffs = repository([], "id");
+  const alertRequests = repository([], "id");
+  const paymentReceipts = repository([], "id");
+  let configuration = structuredClone(agentConfig);
   const quotes = repository([], "quoteId");
   const profiles = repository([], "phoneNumber");
   const guardianEvents = [];
@@ -59,7 +67,14 @@ export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVA
     },
   });
   const world = {
-    clock, now: clock.now, transport, orders, carts, checkpoints, uploads, handoffs, quotes, profiles,
+    clock, now: clock.now, transport, orders, carts, checkpoints, uploads, handoffs, quotes, profiles, alertRequests, paymentReceipts,
+    agentConfig: { get: async () => { assertOpen(); return structuredClone(configuration); },
+      set: value => { assertOpen(); configuration = structuredClone(value); } },
+    agentAlerts: createAgentAlertService({ repository: { async request(value, { signal } = {}) {
+      signal?.throwIfAborted(); assertOpen();
+      const current = alertRequests.get(value.id); if (current) return current;
+      alertRequests.set(value.id, value); return value;
+    } } }),
     recordGuardianEvent: event => guardianEvents.push({ ...structuredClone(event), time: clock.now() }),
     getGuardianEvents: () => structuredClone(guardianEvents),
     setExecutionPhase: (phase, details = {}) => { executionPhase = { phase, ...details }; },
@@ -69,6 +84,10 @@ export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVA
       "getProductForPricing", "getCategoryForPricing"].map(name => [name, catalog[name]])),
     initialize(initial) {
       assertOpen();
+      // Antes de instalar herramientas o preparar cotizacionMostrada. Cada
+      // caso parte de la configuración base; el contexto solo cambia el umbral.
+      configuration = structuredClone(agentConfig);
+      if (initial.agentConfig) configuration = { ...configuration, ...structuredClone(initial.agentConfig) };
       chatId = initial.state.whatsappChatId;
       checkpoints.set(chatId, initial.state);
       if (initial.cart) carts.set(chatId, initial.cart);
@@ -166,13 +185,19 @@ export function createMemoryWorld(fixtures, { clock, transport, bankConfig = EVA
         catalog: { categories: categories.list(), products: products.list() },
         policies: policies.list(), orders: orders.list(), cart: world.getCart(),
         paymentConfig: structuredClone(bankConfig), orderPersistence: world.orderRepository.inspect(),
+        agentConfig: structuredClone(configuration), alertRequests: alertRequests.list(),
+        paymentReceipts: paymentReceipts.list().map(value => Object.fromEntries(["id", "status", "orderId", "orderNumber", "mimeType", "filename", "createdAt", "expiresAt", "acknowledgementDelivered"]
+          .filter(key => value[key] !== undefined).map(key => [key, value[key]]))),
       };
     },
     close() { world.orderJobs.stop(); closed = true; transport.close(); },
   };
   world.bankConfig = structuredClone(bankConfig);
+  world.receiptStorage = memoryPrivateReceiptStorage({ assertOpen });
+  world.receiptRepository = createPaymentReceiptRepository({ db: receiptMemoryDatabase({ orders,
+    receipts: paymentReceipts, alerts: alertRequests, assertOpen, faults: receiptFaults }), now: clock.now });
   world.orderRepository = createMemoryOrderConfirmationRepository({ catalog: world.catalog, cartRepository: world.cartRepository,
-    quoteRepository: world.quoteRepository, orders, now: clock.now, assertOpen, faults: orderFaults });
+    quoteRepository: world.quoteRepository, orders, agentConfig: world.agentConfig, now: clock.now, assertOpen, faults: orderFaults });
   world.orderJobs = createOrderPdfJobService({ repository: world.orderRepository,
     transport: { sendText: transport.sendText, sendPdf }, generatePdf, now: clock.now, clock });
   world.drainBackgroundJobs = () => world.orderJobs.drain();

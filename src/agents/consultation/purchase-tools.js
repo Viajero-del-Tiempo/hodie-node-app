@@ -10,6 +10,7 @@ import { inspectCartProgress, subtotalVersion } from "./cart-progress.js";
 import { createOrderConfirmationService } from "../../services/order-confirmation.service.js";
 import { createOrderConfirmationConfig } from "./order-confirmation.config.js";
 import { acceptsOrderConfirmation } from "./confirmations.js";
+import { createCorporateQuantityGuard } from "./corporate-quantity.js";
 
 export function createPurchaseTools(runtime, { confirmationConfig = createOrderConfirmationConfig() } = {}) {
   const chatId = runtime.getState().whatsappChatId;
@@ -21,6 +22,7 @@ export function createPurchaseTools(runtime, { confirmationConfig = createOrderC
       && turnDataBlocks.turnSequence === turn.sequence ? turnDataBlocks.blocks : [];
   };
   const calculatePricing = createOrderPricingService({ catalog: runtime.catalog, structuredErrors: true, includeLineSubtotals: true });
+  const corporate = createCorporateQuantityGuard(runtime);
   const verifiedPhone = () => runtime.getState().phoneVerified === true ? normalizePurchasePhone(runtime.getState().userPhoneNumber) : null;
   const inspectData = cart => inspectCartProgress(cart, { catalog: runtime.catalog,
     subtotalPending: runtime.getState().subtotalPending,
@@ -73,7 +75,7 @@ export function createPurchaseTools(runtime, { confirmationConfig = createOrderC
   });
   const quotes = createOrderQuoteService({ carts, repository: runtime.quoteRepository, chatId, calculatePricing, inspectData,
     getState: runtime.getState, setState: runtime.setState, renderSummary: renderQuoteSummary, now: runtime.now,
-    getTurn: runtime.getTurnContext, confirmationRepository: runtime.orderRepository });
+    getTurn: runtime.getTurnContext, confirmationRepository: runtime.orderRepository, assertLines: corporate.quote });
   const orders = createOrderConfirmationService({ repository: runtime.orderRepository, chatId, now: runtime.now,
     getTurn: runtime.getTurnContext, getState: runtime.getState, setState: runtime.setState,
     normalizePhone: normalizePurchasePhone, acceptsConfirmation: (pending, turn) => acceptsOrderConfirmation(pending, turn, confirmationConfig),
@@ -102,7 +104,7 @@ export function createPurchaseTools(runtime, { confirmationConfig = createOrderC
         acknowledgeRucMismatch: ownedAcceptance || (accepted && pending?.kind === "ruc_mismatch") };
     },
   });
-  const handlers = { ...createCartTools({ runtime, carts, calculatePricing, inspectData }),
+  const handlers = { ...createCartTools({ runtime, carts, calculatePricing, inspectData, corporate }),
     async datos_envio(args, context) { const result = await data.shipping(args, context); const progress = await inspectData(result.cart);
       context.signal?.throwIfAborted();
       return { ...result, lines: progress.lines, fields: progress.fields, pendientes: progress.pendientes }; },

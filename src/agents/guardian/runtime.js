@@ -10,6 +10,7 @@ import { handleTechnicalFailure, resetTechnicalFailures } from "../consultation/
 import { modelUsageSince, sumModelUsage, safeErrorDetails } from "../../utils/model-usage.util.js";
 import { normalizePurchasePhone } from "../consultation/order-access.js";
 import { randomUUID } from "node:crypto";
+import { synchronizeAgentAlerts } from "../../services/agent-alert.service.js";
 
 export function createGuardianRuntime({ runtime, agent, config = createGuardianConfig(), clock = systemClock,
   audioModel = null, logger = value => console.info(JSON.stringify(value)), processEvents = null, deadlineClock = MODEL_CLOCK }) {
@@ -53,6 +54,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
     try {
       runtime.setExecutionPhase?.("guardian_admission");
       signal.throwIfAborted();
+      await withSignal(() => synchronizeAgentAlerts(runtime, { signal }), signal);
       let state = runtime.getState();
       if (state.humanHandoffRequired) {
         const last = turn.messages.at(-1);
@@ -71,6 +73,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       if (admission.allowed && runtime.setTurnContext) state.turnSequence = (state.turnSequence ?? 0) + 1;
       await withSignal(() => save(state), signal); // Confirmar persistencia antes de medios/modelo.
       if (!admission.allowed) {
+        await withSignal(() => synchronizeAgentAlerts(runtime, { signal }), signal);
         let noticeIssued = false;
         if (admission.sendNotice) {
           runtime.setExecutionPhase?.("rate_limit_notice");
@@ -108,11 +111,12 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         now: closedAt, signal }), signal);
       signal.throwIfAborted();
       diagnostics.push(...(response?.diagnostics ?? []));
-      if (!response?.technicalFailure || response.orderRecovered) await withSignal(() => resetTechnicalFailures(runtime, { signal }), signal);
+      if (!response?.technicalFailure || response.orderRecovered || response.receiptRecovered) await withSignal(() => resetTechnicalFailures(runtime, { signal }), signal);
       event({ code: "PROCESSED", turn: turn.turn, groupedMessages: turn.messages.length, newSession: session.newSession });
       return finish(response?.technicalFailure ? "technical_error" : "processed", {
         newSession: session.newSession, mediaBytes: processed.mediaBytes,
-        ...(response?.orderCommitted ? { orderCommitted: true, orderRecovered: response.orderRecovered === true } : {}) });
+        ...(response?.orderCommitted ? { orderCommitted: true, orderRecovered: response.orderRecovered === true } : {}),
+        ...(response?.receiptRegistered ? { receiptRegistered: true, receiptRecovered: response.receiptRecovered === true } : {}) });
     } catch (error) {
       if (parentSignal?.aborted) throw parentSignal.reason;
       if (closed) throw error;
@@ -123,6 +127,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       // El commit es irreversible y su trabajo durable recupera el pago/PDF.
       // No reemplazar ese mensaje por el aviso técnico ni escalar esta compra.
       if (runtime.getCommittedReceipt && await runtime.getCommittedReceipt()) return finish("technical_error", { orderCommitted: true });
+      if (await runtime.getRegisteredReceiptAcknowledgement?.()) return finish("technical_error", { receiptRegistered: true });
       await handleTechnicalFailure(runtime, error.code ?? "GUARDIAN_ERROR", { signal: parentSignal, turnId: batchId,
         lastMessage: turn.messages.at(-1)?.text, now: clock.now() });
       return finish("technical_error");

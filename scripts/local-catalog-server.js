@@ -1,4 +1,4 @@
-import { mkdtemp, copyFile, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, copyFile, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -12,7 +12,8 @@ const [
   { router: products }, { router: categories }, { router: policies }, { router: catalog },
   { router: users }, { createAdminImageRouter }, { seedCatalog },
   { createOrderRouter }, { createSendOrderController }, { createOrderProcessor }, { persistOrderSnapshot },
-  { generateOrderPDF }, { requireAdmin }, { getAdminOrders, getAdminOrderById },
+  { generateOrderPDF }, { requireAdmin, requireAuth }, { getAdminOrders, getAdminOrderById },
+  { createAdminAgentConfigRouter }, { createAgentConfigRepository },
 ] = await Promise.all([
   import("express"), import("cors"), import("jsonwebtoken"), import("../src/config/firebase.js"), import("firebase-admin/firestore"),
   import("../src/routes/auth.routes.js"), import("../src/controllers/auth-code.controller.js"),
@@ -23,12 +24,31 @@ const [
   import("../src/routes/order.routes.js"), import("../src/controllers/order.controller.js"),
   import("../src/services/order-processing.service.js"), import("../src/services/order.service.js"),
   import("../src/services/pdf.service.js"), import("../src/middlewares/auth.middleware.js"), import("../src/controllers/admin.order.controller.js"),
+  import("../src/routes/admin.agent-config.routes.js"), import("../src/services/agent-config.repository.js"),
 ]);
 const imageDirectory = await mkdtemp(join(tmpdir(), "hodie-catalog-images-"));
 let server;
+let stopReceiptCleanup;
 try {
   await copyFile(new URL("../test/fixtures/catalog-image.png", import.meta.url), join(imageDirectory, "example.png"));
   const admin = await seedCatalog();
+  const [{ createReceiptInfrastructure }, { createLocalReceiptStorage }, { createAdminReceiptRouter },
+    { createPaymentReceiptService, startReceiptCleanup }] = await Promise.all([
+    import("../src/services/payment-receipt.infrastructure.js"), import("../src/services/payment-receipt.local-storage.js"),
+    import("../src/routes/admin.receipt.routes.js"), import("../src/services/payment-receipt.service.js"),
+  ]);
+  const receipts = createReceiptInfrastructure({ db, storage: createLocalReceiptStorage(new URL("../dev/receipts/", import.meta.url).pathname) });
+  stopReceiptCleanup = startReceiptCleanup(receipts.cleanup);
+  const examples = JSON.parse(await readFile(new URL("../test/fixtures/catalog-emulator.json", import.meta.url), "utf8"));
+  const example = examples.orders.find(order => order.status === "pending");
+  if (example && !(await receipts.repository.listForOrder(example.id)).length) {
+    const customer = examples.customers.find(user => user.uid === example.customerId);
+    const service = createPaymentReceiptService({ ...receipts,
+      getState: () => ({ whatsappChatId: "local-receipt@lid", phoneVerified: true, userPhoneNumber: customer.phoneNumber }),
+      getAttachment: async () => ({ data: await readFile(new URL("../test/eval/media/o02-receipt.png", import.meta.url)), mimeType: "image/png", filename: "comprobante-ficticio.png" }) });
+    const actualOrder = await db.collection("orders").doc(example.id).get();
+    if (actualOrder.data()?.status === "pending") await service.register({ attachmentId: "seed", orderNumber: example.id });
+  }
   const app = express();
   app.use(cors({ origin: "http://localhost:4200", methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"] }));
@@ -59,9 +79,11 @@ try {
   });
   app.use("/orders", createOrderRouter(createSendOrderController({ processOrder, notifyStatus: async () => {} })));
   app.get("/admin/orders", requireAdmin, getAdminOrders);
+  app.use("/admin", createAdminReceiptRouter({ ...receipts, requireAuth, requireAdmin }));
   app.get("/admin/orders/:id", requireAdmin, getAdminOrderById);
   app.use("/catalog", catalog);
   app.use("/admin", categories, policies);
+  app.use("/admin", createAdminAgentConfigRouter({ repository: createAgentConfigRepository({ db, timestampNow: () => Timestamp.now() }), requireAuth, requireAdmin }));
   app.get("/local-health", (_req, res) => res.json({ projectId: localCatalog.projectId, emulator: true }));
   server = await new Promise((resolve, reject) => {
     const listening = app.listen(localCatalog.apiPort, localCatalog.host, () => resolve(listening));
@@ -78,6 +100,7 @@ try {
     process.once("SIGTERM", resolve);
   });
 } finally {
+  await stopReceiptCleanup?.();
   if (server) await new Promise(resolve => server.close(resolve));
   await db.terminate();
   await rm(imageDirectory, { recursive: true, force: true });

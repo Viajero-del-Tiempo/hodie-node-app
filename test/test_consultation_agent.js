@@ -90,7 +90,7 @@ test("contexto del servidor recorta historial, conserva ráfaga en orden y no en
   const conversacion = Array.from({ length: 25 }, (_, i) => ({ cliente: "Anterior " + i }));
   const model = scriptedModel([reply("responder", { texto: "Respuesta", entendido: true })]);
   const f = await consultationFixture({ fixtures, model,
-    context: { telefonoCliente: "595900000001", conversacion, carrito: evalCart() } });
+    context: { telefonoCliente: "595900000001", conversacion, carrito: evalCart(), umbralCorporativo: 5 } });
   try {
     await f.run({ user: "Primero", burst: ["Segundo", "Tercero"] });
     const messages = model.invocations[0].messages;
@@ -101,11 +101,32 @@ test("contexto del servidor recorta historial, conserva ráfaga en orden y no en
     assert.equal(context.identity.phoneVerified, true);
     assert.deepEqual(context.orders, [{ orderNumber: "test-order-a", status: "pending" }]);
     assert.equal(context.cart.lines[0].variantId, "variant-a");
+    assert.equal(context.consecutiveMisunderstandings, 0);
+    assert.equal(context.corporateQuantityThreshold, 5);
     assert.equal(context.orders[0].items, undefined);
     assert.equal(context.timezone, "America/Asuncion");
     assert.equal(f.transport.getOutgoing().length, 1);
     assert.equal(f.world.getState().messages.length, 25); // El runner administra el historial.
   } finally { f.close(); }
+});
+test("contexto lee el umbral vigente en cada turno y no inventa un valor si falta o es inválido", async () => {
+  const f = await consultationFixture({ context: { umbralCorporativo: 5 },
+    model: scriptedModel(Array.from({ length: 4 }, () => reply("responder", { texto: "Respuesta de prueba", entendido: true }))) });
+  try {
+    const values = [{ corporateQuantityThreshold: 5, revision: 1 }, { corporateQuantityThreshold: 17, revision: 2,
+      updatedAt: "Marca interna", privateConfig: "No exponer" }, null, { corporateQuantityThreshold: "17" }];
+    for (const [index, value] of values.entries()) {
+      f.world.agentConfig.set(value);
+      const result = await f.run({ user: "Consulta de prueba " + index }, index + 1);
+      assert.deepEqual(result.diagnostics, []);
+      const context = JSON.parse(f.model.invocations[index].messages[1].content.split("\n").slice(1).join("\n"));
+      assert.equal(context.corporateQuantityThreshold, index < 2 ? value.corporateQuantityThreshold : null);
+      assert.equal(context.revision, undefined); assert.equal(context.updatedAt, undefined); assert.equal(context.privateConfig, undefined);
+      assert.equal(JSON.stringify(context).includes("Marca interna"), false);
+    }
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.transport.getOutgoing().length, values.length);
+  } finally { await f.agent.dispose(); f.close(); }
 });
 test("handoff activo evita modelo y envíos sin importar el tiempo transcurrido", async () => {
   const f = await consultationFixture();
@@ -143,7 +164,7 @@ test("siete lecturas y el cierre usan ocho herramientas pero solo dos invocacion
     const result = await f.run();
     assert.equal(f.world.getEvents().length, 8);
     assert.equal(result.usage.calls, 2);
-    assert.deepEqual(model.bindings[1].options.allowedFunctionNames, ["responder"]);
+    assert.deepEqual(model.bindings[1].options.allowedFunctionNames, ["responder", "derivar"]);
     assert.equal(f.transport.getOutgoing().length, 1);
   } finally { f.close(); }
 });
@@ -188,7 +209,7 @@ test("intentos de herramientas ajenas consumen presupuesto y no modifican catál
     assert.deepEqual(f.world.snapshot().catalog, before.catalog);
     assert.deepEqual(f.world.snapshot().orders, before.orders);
     assert.deepEqual(f.world.getCart(), before.cart);
-    assert.deepEqual(model.bindings.at(-1).options.allowedFunctionNames, ["responder"]);
+    assert.deepEqual(model.bindings.at(-1).options.allowedFunctionNames, ["responder", "derivar"]);
   } finally { f.close(); }
 });
 test("sin cierre o con error del proveedor se avisa una vez; la segunda falla deriva y los turnos siguientes quedan en silencio", async () => {
@@ -228,15 +249,17 @@ test("un cierre válido reinicia la racha técnica aunque entendido sea false", 
   const f = await consultationFixture({ model: scriptedModel([fail,
     reply("responder", { texto: "Repregunta de prueba.", entendido: false }), fail]) });
   try {
-    const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
+    // Mantener este caso debajo del cuarto intento para aislar la racha técnica.
+    // La derivación en el cuarto intento se verifica en su suite propia.
+    const state = f.world.getState(); state.consecutiveMisunderstandings = 2; f.world.setState(state);
     await f.run(); assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
     await f.run({ user: "Lo explico de nuevo" }, 2);
     assert.equal(f.world.getState().consecutiveTechnicalFailures, 0);
     assert.equal(f.world.getState().lastTechnicalFailure, null);
-    assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
     await f.run({ user: "Otro mensaje" }, 3);
     assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
-    assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
     assert.equal(f.world.getState().humanHandoffRequired, false);
     assert.deepEqual(f.world.getState().guardianAlerts, []);
     assert.deepEqual(f.transport.getOutgoing().map(message => message.text),
@@ -320,20 +343,29 @@ test("timeout interno fuerza cierre antes del timeout del runner y no acepta una
     assert.equal(model.invocations.length, 1); assert.equal(clock.pendingTimers(), 0);
   } finally { await f.agent.dispose(); await outcome; f.close(); }
 });
-test("entendido mantiene el contador sin implementar todavía la escalada de cuatro intentos", async () => {
+test("entendido false alcanza el cuarto intento y deriva por código con alerta durable", async () => {
   const f = await consultationFixture({ model: scriptedModel([reply("responder", { texto: "Repregunta", entendido: false })]) });
   try {
     const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
     await f.run();
     assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
-    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.world.getState().humanHandoffRequired, true);
+    assert.equal(f.world.alertRequests.list().length, 1);
+    assert.equal(f.world.alertRequests.list()[0].type, "MISUNDERSTANDING");
   } finally { f.close(); }
 });
-test("prompt habilita 4A, preserva seguridad y restricciones temporales de entrega 5", async () => {
+test("prompt habilita 5B, preserva seguridad y elimina el bloque temporal de comprobantes", async () => {
   const prompt = await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8");
   assert.equal(prompt.includes("TEMPORAL ENTREGA 4"), false);
-  assert.ok(prompt.includes("<!-- TEMPORAL ENTREGA 5:"));
-  assert.ok(prompt.includes("<!-- FIN TEMPORAL ENTREGA 5 -->"));
+  assert.equal(prompt.includes("TEMPORAL ENTREGA 5"), false);
+  assert.equal(prompt.includes("No podés registrar comprobantes."), false);
+  assert.ok(prompt.includes("registrar_comprobante"));
+  assert.ok(prompt.includes("No leas importes como verdad ni confirmes pagos"));
+  assert.equal(prompt.includes("La única herramienta de cierre disponible por ahora"), false);
+  assert.ok(prompt.includes("usá derivar con motivo y texto"));
+  assert.ok(prompt.includes("El cuarto intento consecutivo lo deriva el código"));
+  assert.ok(prompt.includes("CANTIDAD_CORPORATIVA indica el total y umbral del servidor"));
+  assert.ok(prompt.includes("servidor envía el acuse textual"));
   for (const rule of ["sin afirmar que es un producto de HoDie", "confirmarTexto", "Subtotal de productos", "confirmedRuc", "acknowledgeRucMismatch", "responder.quoteIdMostrado", "nunca hagas cuentas", "usá crear_pedido solo con el quoteId vigente"]) assert.ok(prompt.includes(rule), rule);
   assert.equal(prompt.includes("crear_pedido todavía no está disponible"), false);
   for (const rule of ["lote posterior", "pregunta corta sin repetir", "nunca copies ni reformules datos bancarios", "no pidas repetir la compra"]) assert.ok(prompt.includes(rule), rule);
@@ -343,6 +375,26 @@ test("prompt habilita 4A, preserva seguridad y restricciones temporales de entre
     "política vigente consultada y no insistas"]) assert.ok(prompt.includes(rule), rule);
   assert.ok(prompt.includes("no llames a carrito_ver para releerlos"));
   assert.ok(prompt.includes("pendientes empieza con informar_subtotal, llamá a cotizar"));
+});
+test("prompt separa alcance de comprensión, ofrece en el tercero y reserva esa derivación al código", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("entendido:false significa que no comprendiste el mensaje"));
+  assert.ok(prompt.includes("fueraDeAlcance:true indica que pide algo que la tienda no ofrece, aunque lo entendiste"));
+  assert.ok(prompt.includes("Una consulta fuera de rubro no usa derivar: su escalada la hace el código"));
+  assert.ok(prompt.includes("un pedido explícito de una persona sí usa derivar"));
+  assert.ok(prompt.includes("Si vale 2 y este turno también lo es, es el tercero"));
+  assert.ok(prompt.includes("ofrecé hablar con una persona, sin derivar"));
+  assert.ok(prompt.includes("El cuarto intento consecutivo lo deriva el código"));
+});
+test("prompt ofrece atención corporativa desde el umbral del contexto aunque se consulte por diseño y se disculpa ante reclamos", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("cantidad total que pide el cliente supera corporateQuantityThreshold"));
+  assert.ok(prompt.includes("esos pedidos los coordina una persona del equipo"));
+  assert.ok(prompt.includes("ofrecé comunicarlo, aunque también consulte por diseño o logo"));
+  assert.ok(prompt.includes("No omitas la oferta ni derives sin su aceptación"));
+  assert.ok(prompt.includes("las herramientas siguen comprobando la regla"));
+  assert.ok(prompt.includes("Ante un reclamo, pedí disculpas en el texto antes de derivar"));
+  assert.equal(prompt.includes("Producto Alfa"), false);
 });
 
 test("prompt procesa y responde los datos recibidos en el turno antes de usar pendientes para la próxima pregunta", async () => {

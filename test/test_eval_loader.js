@@ -11,6 +11,35 @@ test("lee YAML v2 y cuenta categorías sin fijar el tamaño del archivo del due�
   assert.deepEqual(dataset.categories, { example: 1, other: 1 });
   assert.match(dataset.hash, /^[a-f0-9]{64}$/);
 });
+test("loader acepta umbralCorporativo por caso sin cambiar el formato v2", () => {
+  const dataset = evalDataset([
+    evalCase({ context: { umbralCorporativo: 5 } }),
+    evalCase({ id: "EVAL-2", context: { umbralCorporativo: 12,
+      conversacion: [{ cliente: "Quiero una persona" }, { agente: "¿Te comunico?" }] } }),
+    evalCase({ id: "EVAL-3" }),
+  ]);
+  assert.deepEqual(dataset.errors, []);
+  assert.ok(dataset.cases.every(item => item.diagnostics.length === 0));
+  assert.equal(dataset.cases[0].input.context.umbralCorporativo, 5);
+  assert.equal(dataset.cases[1].input.context.umbralCorporativo, 12);
+  assert.equal(dataset.cases[2].input.context, undefined);
+});
+test("umbral inválido bloquea solo su caso con campo y línea, y no habilita otras claves", () => {
+  for (const value of [null, 0, -1, 1.5, "5", true, Number.MAX_SAFE_INTEGER + 1, Infinity]) {
+    const source = YAML.stringify({ version: 2, fixtures: evalFixtures(), cases: [
+      evalCase({ context: { umbralCorporativo: value } }), evalCase({ id: "EVAL-2" }),
+    ] });
+    const dataset = parseCases(source);
+    assert.deepEqual(dataset.errors, []);
+    const issue = dataset.cases[0].diagnostics.find(item => item.code === "INVALID_CONTEXT");
+    assert.equal(issue?.path, "cases[0].context.umbralCorporativo");
+    assert.equal(issue.line, source.split("\n").findIndex(line => line.includes("umbralCorporativo:")) + 1);
+    assert.deepEqual(dataset.cases[1].diagnostics, []);
+  }
+  const dataset = evalDataset([evalCase({ context: { umbralCorporativo: 5, otroUmbral: 6 } })]);
+  assert.ok(dataset.cases[0].diagnostics.some(issue => issue.code === "UNKNOWN_CONTEXT_KEY"
+    && issue.path === "cases[0].context.otroUmbral"));
+});
 test("informa sintaxis y claves YAML duplicadas con línea", () => {
   const broken = parseCases("version: 2\ncases: [\n");
   assert.ok(broken.errors.length);

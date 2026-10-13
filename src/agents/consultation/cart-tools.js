@@ -1,7 +1,7 @@
 import { cartIssue, pricingInputs } from "../../services/cart.service.js";
 import { acceptsPending } from "./confirmations.js";
 
-export function createCartTools({ runtime, carts, calculatePricing, inspectData }) {
+export function createCartTools({ runtime, carts, calculatePricing, inspectData, corporate }) {
   const customization = () => ({ text: null, textDraft: null, imageUrl: null, declined: false, pending: false });
   async function build(line, args, context) {
     const current = await carts.read(context) ?? carts.blank();
@@ -28,8 +28,11 @@ export function createCartTools({ runtime, carts, calculatePricing, inspectData 
       }
       result.customization = { ...result.customization, text: args.confirmarTexto, textDraft: null, declined: false };
     }
-    // Validar texto, empaque, cantidades y stock ANTES de cualquier subida.
+    // Resolver volumen antes del pricing/stock: una solicitud corporativa
+    // se ofrece al equipo aunque no haya unidades suficientes disponibles.
+    // El pricing restante se valida también antes de cualquier subida.
     const candidate = { ...current, lines: [...current.lines.filter(row => row.id !== line.id), result] };
+    await corporate.mutation(candidate.lines, context);
     await calculatePricing(pricingInputs(candidate, { includeDrafts: true }));
     context.signal?.throwIfAborted();
     if (args.attachmentId) {
@@ -59,6 +62,7 @@ export function createCartTools({ runtime, carts, calculatePricing, inspectData 
       const line = await build({ productId: args.productId, variantId: args.variantId, quantity: args.quantity,
         packagingType: null, packaging: { declined: false }, customization: customization() }, args, context);
       await carts.add(line, context);
+      await corporate.clear(context);
       return view(context);
     },
     async carrito_modificar({ linea, cambios }, context) {
@@ -67,8 +71,9 @@ export function createCartTools({ runtime, carts, calculatePricing, inspectData 
       if (!line) throw cartIssue("LINEA_INEXISTENTE", "linea", "Esta línea ya no está en el carrito.");
       const change = await build(line, cambios, context);
       await carts.modify(linea, change, context);
+      await corporate.clear(context);
       return view(context);
     },
-    async carrito_quitar({ linea }, context) { await carts.remove(linea, context); return view(context); },
+    async carrito_quitar({ linea }, context) { await carts.remove(linea, context); await corporate.clear(context); return view(context); },
   };
 }

@@ -11,6 +11,12 @@ export async function seedCatalog() {
   ]);
   const fixtures = JSON.parse(await readFile(new URL("../test/fixtures/catalog-emulator.json", import.meta.url), "utf8"));
   const timestampNow = () => Timestamp.now();
+  const { createAgentConfigRepository } = await import("../src/services/agent-config.repository.js");
+  const agentConfig = createAgentConfigRepository({ db, timestampNow });
+  if (!await agentConfig.get()) {
+    const example = JSON.parse(await readFile(new URL("../test/fixtures/agent-config.json", import.meta.url), "utf8"));
+    await agentConfig.save({ corporateQuantityThreshold: example.corporateQuantityThreshold, version: null });
+  }
   for (const category of fixtures.categories) {
     const ref = db.collection("categories").doc(category.id);
     if (!(await ref.get()).exists) await createCatalogRepository(db, { timestampNow }).createCategory(category);

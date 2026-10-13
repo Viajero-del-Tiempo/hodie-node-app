@@ -1,5 +1,6 @@
 import { createGeminiModel } from "../../config/llm.js";
 import { createModelUsageTracker } from "../../utils/model-usage.util.js";
+import { validatePaymentReceipt } from "../../validators/payment-receipt.validator.js";
 export async function withSignal(action, signal) {
   signal?.throwIfAborted();
   if (!signal) return action();
@@ -34,6 +35,7 @@ export function createMediaPreparer({ config, getAttachment, model = null, setEx
         const metadata = Object.fromEntries(["id", "type", "mode", "filename", "description", "durationSeconds", "size", "mimeType"]
           .filter(key => descriptor[key] !== undefined).map(key => [key, descriptor[key]]));
         const isAudio = ["audio", "ptt"].includes(metadata.type);
+        const isPdf = metadata.type === "document" && metadata.mimeType?.toLowerCase() === "application/pdf";
         const fail = code => {
           metadata.mode = "unavailable";
           metadata.reason = code;
@@ -44,12 +46,12 @@ export function createMediaPreparer({ config, getAttachment, model = null, setEx
         attachments.push(metadata);
         if (isAudio && metadata.mode === "transcribed") continue; // Fixture del runner, no audio inventado.
         if (metadata.type === "image" && metadata.mode === "described") continue;
-        if (!isAudio && metadata.type !== "image") { metadata.mode = "metadata"; continue; }
+        if (!isAudio && metadata.type !== "image" && !isPdf) { metadata.mode = "metadata"; continue; }
         if (metadata.type === "image" && ++imageCount > config.imagesPerTurn) { fail("IMAGE_COUNT_LIMIT"); continue; }
         const duration = positive(metadata.durationSeconds);
         const reportedSize = positive(metadata.size);
         if (isAudio && duration !== null && duration > config.audioMaxSeconds) { fail("AUDIO_TOO_LONG"); continue; }
-        const maxBytes = isAudio ? (duration === null ? config.audioFallbackBytes : config.totalMediaBytes) : config.imageMaxBytes;
+        const maxBytes = isPdf ? config.pdfMaxBytes : isAudio ? (duration === null ? config.audioFallbackBytes : config.totalMediaBytes) : config.imageMaxBytes;
         if (reportedSize !== null && (reportedSize > maxBytes || totalBytes + reportedSize > config.totalMediaBytes)) {
           fail("MEDIA_SIZE_LIMIT"); continue;
         }
@@ -73,9 +75,16 @@ export function createMediaPreparer({ config, getAttachment, model = null, setEx
         if (bytes.length > maxBytes || totalBytes + bytes.length > config.totalMediaBytes) { fail("MEDIA_SIZE_LIMIT"); continue; }
         totalBytes += bytes.length;
         const mimeType = (attachment.mimeType ?? metadata.mimeType ?? "").toLowerCase();
-        if (!(isAudio ? audioTypes : imageTypes).has(mimeType)) { fail("MEDIA_TYPE_UNSUPPORTED"); continue; }
+        if (!(isPdf ? new Set(["application/pdf"]) : isAudio ? audioTypes : imageTypes).has(mimeType)) { fail("MEDIA_TYPE_UNSUPPORTED"); continue; }
+        if (isPdf) {
+          try { validatePaymentReceipt({ data: bytes, mimeType, filename: metadata.filename }); }
+          catch { fail("PDF_SIGNATURE_INVALID"); continue; }
+          metadata.mimeType = "application/pdf";
+          registry.put(metadata.id, { data: bytes, mimeType, filename: metadata.filename });
+          metadata.mode = "file"; continue; // Sin texto extraído ni entrada multimodal.
+        }
         if (metadata.type === "image") {
-          registry.put(metadata.id, { data: bytes, mimeType });
+          registry.put(metadata.id, { data: bytes, mimeType, filename: metadata.filename });
           imageInputs.push({ id: metadata.id, mimeType, data: bytes });
           metadata.mode = "file";
           continue;
