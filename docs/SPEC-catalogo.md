@@ -76,6 +76,7 @@ El catálogo pasa a tener tres colecciones: `categories`, `products` (con varian
 - **Cada variante tiene su propio precio**, aunque hoy todas valgan lo mismo, para poder cambiarlo más adelante sin tocar el modelo.
 - **Los atributos comunes a todas las variantes** (material, medidas, capacidad) van en `attributes`; lo que distingue a cada variante va en `options`.
 - **Los empaques son propios de cada producto**, porque su precio depende del tamaño del producto. `packagingOptions` es una lista libre: desaparece la lista fija `caja / bolsa / envoltorio` del código. El empaque estándar sin costo no se guarda: se ofrece siempre.
+- **Foto de empaque:** `packagingOptions[].imageUrl` muestra este producto con esa opción. Es opcional: ausencia o cadena vacía significa sin foto. Se carga/reemplaza/quita desde el panel mediante la subida firmada del backend; no se deriva de nombres ni posiciones en Cloudinary. Admite URL HTTP/HTTPS sin credenciales o ruta desde `/` del mismo origen, sin espacios internos ni controles. Los rechazos indican `packagingOptions[n].imageUrl`.
 - **`priceFrom` lo calcula siempre el servidor** al guardar; el cliente nunca lo envía.
 - **`skus` lo calcula siempre el servidor** al guardar, a partir de todas las variantes, incluidas las inactivas. Si viene en el body se ignora. Permite comprobar unicidad con consultas indexadas `array-contains`, sin leer todos los productos. La comparación de SKU es exacta, después de quitar espacios de los extremos.
 
@@ -119,6 +120,7 @@ El backend valida todo al guardar un producto desde el panel; un producto invál
 | `slug`                  | Slug en minúsculas, único en todo el catálogo; la edición excluye el propio producto   |
 | `variants[].id`          | Asignado por el servidor, estable y obligatorio al editar una variante existente; una variante creada nunca se elimina |
 | `packagingOptions[]`     | `type` único dentro del producto, `name` obligatorio, `price` entero mayor o igual a 0 |
+| `packagingOptions[].imageUrl` | Foto opcional del producto con ese empaque; URL válida, subible y editable desde el panel con firma |
 | `customization.maxChars` | Entero entre 1 y 500, solo si `allowsText` es true                                     |
 | `tags`                   | Hasta 20, cada una de 2 a 30 caracteres, guardadas en minúsculas                       |
 | `priceFrom`              | Lo calcula el servidor; si viene en el body se ignora                                  |
@@ -256,6 +258,13 @@ La tienda muestra un producto por modelo con un selector de variantes, y el carr
 - Cada ítem del carrito guarda `productId` + `variantId`. Su identidad es producto + variante + empaque + texto (sin espacios extremos): dos textos diferentes son dos líneas; el mismo texto y las mismas opciones suman cantidad. El mismo producto con dos variantes distintas son dos ítems.
 - Cada línea muestra su texto y permite editarlo o quitarlo. Editar puede fusionar líneas coincidentes, respetando el límite de cantidad por línea y el stock acumulado de la variante entre todos los textos y empaques. Quitar el texto vuelve a dejarlo pendiente si el producto admite texto.
 - El checkout muestra la personalización ya guardada y no vuelve a pedirla. Revisa el catálogo antes de confirmar: si actualiza precios pide revisar el resumen y confirmar nuevamente. Esta lectura pública usa la caché del catálogo y es informativa; el servidor vuelve a validar stock fresco sin reservar al crear el pedido. Los errores 400 conservan el carrito y los textos para corregirlos.
+
+**Fotos al elegir empaque (corrección de regresión de 5C):** el detalle usa
+`packagingOptions[].imageUrl` como imagen principal al seleccionar la opción.
+Cambiar de variante conserva esa foto del empaque, que pertenece al producto;
+elegir una opción sin foto o quitar el empaque restaura la foto de la variante
+actual. El selector mantiene nombres, precios y miniaturas del catálogo. El
+panel ya soportaba subida firmada para este campo y ahora valida también su URL.
 - El payload del checkout envía `productId`, `variantId`, `quantity`, `packagingType` y personalización. El total que muestra el frontend es solo informativo; el que vale es el que calcula el servidor.
 - El carrito guardado usa `schemaVersion: 2`. Los carritos del formato viejo (sin versión o sin `variantId`) y los JSON inválidos se descartan completos con un aviso al cliente, sin intentar deducir variantes. Los totales y las identidades se recalculan al cargar.
 

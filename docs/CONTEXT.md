@@ -1178,13 +1178,34 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
 - Sin asignar: seis horas desde recepción, configurable con
   AGENT_RECEIPT_UNASSIGNED_TTL_MS (1 minuto..7 días). El acceso/selección se corta
   al vencer. Un barrido independiente cada minuto reclama transaccionalmente
-  el archivo vencido, borra almacenamiento y luego documento; reintenta fallos
+  el archivo vencido, borra almacenamiento y luego marca el registro como deleted; reintenta fallos
   y recupera uploading/deleting tras reinicio. El borrado físico puede demorarse
   por la siguiente pasada o un fallo del proveedor; no vuelve a permitir acceso.
   No usar TTL de Firestore que borre metadatos antes de eliminar el archivo.
-- **Retención de asociados pendiente de definir con Arnaldo:** propuesta de
-  90 días tras la verificación manual del pago. Todavía no hay borrado automático
-  de asociados; se requiere acordar el plazo antes de ponerlo en producción.
+- **Retención decidida por Arnaldo: 30 días.** Pago verificado: treinta días desde
+  paymentVerifiedAt del pedido. Nunca verificado (pendiente/abandonado o cancelado):
+  treinta días desde createdAt de la subida. Sin asignar conserva las seis horas.
+  El cambio manual a un estado con pago confirmado guarda paymentVerifiedAt en
+  la misma transacción de estado/stock, solo la primera vez; no cambia pricing,
+  mensajes ni el descuento de stock. La fecha se conserva al preparar/cancelar.
+  Nunca se deduce una verificación de updatedAt ni del archivo: históricos pagados
+  sin fecha fiable se conservan y generan RETENTION_VERIFICATION_DATE_MISSING.
+  Requieren completar la fecha con evidencia antes de poder limpiarlos.
+- Barrido diario de asociados al iniciar y cada 24 h, separado del barrido corto
+  de sin asignar. Configuración validada: AGENT_RECEIPT_ASSOCIATED_RETENTION_MS
+  (por defecto 30 días, rango 1..365 días) y
+  AGENT_RECEIPT_RETENTION_CLEANUP_INTERVAL_MS (por defecto 24 h, rango 1 min..7 días).
+  Candidatos paginados por status/createdAt; se relee el pedido en la transacción
+  de reclamo, antes de escribir. Una verificación concurrente extiende la retención.
+  Archivo -> deleting -> borrado privado idempotente -> deleted con deletedAt.
+  Asociación, metadatos y alerta histórica se conservan; no escribe el pedido.
+  Si cae entre pasos, el siguiente arranque/barrido recupera deleting; fallos
+  del proveedor se reintentan en otra pasada. La eliminación física puede esperar
+  hasta el próximo barrido o la recuperación del almacenamiento.
+  Reenviar bytes de un archivo eliminado crea una generación nueva de comprobante;
+  no sobrescribe el registro histórico ni permite que un borrado atrasado lo afecte.
+  Desplegar el índice payment_receipts(status,createdAt) de firestore.indexes.json
+  en la puesta en marcha conjunta. Pruebas/comandos: VERIFICACION-pendientes-5C.md.
 - Cloudinary: subida firmada raw + type:authenticated, overwrite:false,
   backup:false, sin conversiones ni URL en los contratos. Descarga firmada
   temporal solo dentro del backend, que entrega bytes tras verificar admin real,
@@ -1205,3 +1226,95 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   y conectar los puertos del agente/checkpointer/transportes. El worker de limpieza
   se inicia con server.js y con el servidor local. No conectar ni desplegar el
   agente nuevo por separado del catálogo. Archivos y comandos: VERIFICACION-agente-5B.md.
+
+## Agente nuevo: entrega 5C — fotos automáticas
+
+- Decisión de Arnaldo: listas y recomendaciones muestran como máximo tres
+  productos por mensaje, ofreciendo más cuando hay otras opciones pertinentes.
+  responder recibe productosMostrados opcional (hasta tres IDs distintos),
+  envía primero el texto y después una foto principal por producto. La búsqueda
+  conserva su máximo de cinco resultados para detectar opciones adicionales.
+- Criterio de principal: primera imagen de la primera variante activa con fotos,
+  en el orden del catálogo. No cambia por el stock: una variante activa agotada
+  sigue visible. Si ninguna variante activa tiene fotos, se omite ese producto.
+  El pie se arma en el servidor con nombre y precio menor de las variantes activas;
+  incluye Desde si los precios difieren. No se reciben precios, pies ni URLs del modelo.
+- sentProductImages persiste URL, producto, pie y entrega en el estado de la
+  sesión. Comparación por URL exacta, compartida con enviar_imagenes. Nueva sesión
+  (más de seis horas, señal explícita o reactivación) limpia este registro. Handoff
+  sin reactivación lo conserva. El puerto de checkpoint del grafo nuevo debe
+  persistir este campo en la puesta en marcha.
+- Antes del envío se reserva en el checkpoint: una entrega incierta por caída
+  no se repite automáticamente en esa sesión. Fallo explícito libera la reserva;
+  no hay reintento dentro del turno. Si no se puede guardar la reserva, no se
+  envía. Error de envío/consulta/checkpoint queda por producto en el resultado y
+  en el log/trace, sin contador técnico ni derivación. Cancelaciones y plazo total
+  conservan su comportamiento y evitan efectos posteriores al cierre.
+- responder devuelve productImages.sent (producto/pie), skipped (motivo) y
+  failed (código), y textOnly para las líneas del servidor. El modelo nunca afirma haber enviado una foto. El siguiente
+  contexto solo anuncia IDs con entrega confirmada en productPhotosSent, sin
+  bytes ni una lista completa de URLs. enviar_imagenes sigue disponible para
+  solicitar hasta tres fotos nuevas; salta las URLs ya entregadas/reservadas.
+- No se agregan fotos a resúmenes de cotización completos, incompletos o
+  informativos, mensajes de pedido/pago ni acuses de comprobantes. Consultar
+  políticas o estado de pedido también inhibe fotos automáticas durante ese turno;
+  una recomendación posterior puede enviarlas. Omitir productosMostrados conserva
+  el comportamiento de los cierres anteriores.
+- El transporte falso captura tipo, producto y pie de cada foto. La evidencia
+  pública del juez los incluye con eventId, sin bytes ni instrucciones privadas.
+  imageUrls en variantes de fixtures es opcional: listas HTTP/HTTPS se conservan;
+  ausencia/lista vacía significa sin fotos. Errores de formato señalan campo y línea.
+- No se edita conversations.yaml: C-04 y P-08 usan el parche del dueño. Pensamiento,
+  tiempos, checks y umbrales no cambian. Sin modificaciones a WhatsApp, router,
+  checkout web ni Angular. Pruebas y evaluación las ejecuta Arnaldo; archivos y
+  comandos: VERIFICACION-agente-5C.md.
+- Corrección de listas: con productosMostrados el modelo solo escribe una
+  introducción breve en texto y un cierre opcional en cierre, sin listar productos
+  ni precios. El servidor presenta en el orden de IDs: introducción, foto por
+  producto con nombre/precio o línea textual en su lugar, cierre si existe.
+  Sin foto, foto ya enviada en sesión o envío fallido: línea del catálogo;
+  mantiene la deduplicación de fotos y la presentación completa de la lista.
+  Cotizaciones, pedidos/pago, acuses, políticas y estados no agregan estas
+  líneas ni el cierre de lista. Regla de prompt y tests sin cambiar YAML/checks.
+
+## Entrega 5C: agregado de fotos de empaques
+
+- Verificación histórica: en hodie-tienda, commit 0a0da0f, el detalle usaba
+  product.imageUrls[0] para el producto y [1]/[2]/[3] para la lista fija de
+  empaques. onRadioChange mostraba imageUrl de la opción seleccionada. El
+  servicio leía URLs del catálogo; no construía nombres/URLs de Cloudinary.
+- En feature/catalogo-variantes ya existían packagingOptions[].imageUrl,
+  miniaturas del selector, formulario con subida firmada y edición/reemplazo de
+  esa imagen. Se perdió el cambio de la imagen principal: [(selected)] solo
+  asignaba selectedPackaging. Corregido en ProductDetailPage: elegir un empaque
+  usa su foto, quitarlo o elegir uno sin foto vuelve a la variante actual.
+  Cambiar de variante conserva la foto del empaque, compartida por producto.
+- Imagen opcional por opción: URL HTTP/HTTPS sin credenciales o ruta del mismo
+  origen desde /; vacío/ausente significa sin foto. Backend y formulario validan
+  este campo; upload existente mantiene MIME, firma y límite de 10 MB. Rechazos
+  señalan packagingOptions[n].imageUrl y conservan el borrador. Fixtures Angular
+  usaban una URL data: SVG para ese campo: se reemplazó por una ruta ficticia
+  válida, sin cambiar precios/nombres ni relajar aserciones. Las imágenes de
+  variantes no cambian su validación en este agregado.
+- Bot: responder.empaquesMostrados [{productId,packagingType,variantId?}] ofrece
+  imágenes del producto con cada empaque. Máximo tres presentaciones junto a
+  productosMostrados. El servidor arma el pie con nombre de producto/empaque y
+  precio unitario del producto con ese empaque (variante elegida + adicional, o
+  Desde sin variante si difieren), según decisión confirmada de Arnaldo. Es informativo:
+  el pricing de cotización/pedido y sus mensajes/stock siguen intactos.
+- Sin foto se envía una línea textual del servidor, agrupada en un mensaje
+  adicional antes de las fotos. Resultado packagingImages.sent/skipped/failed/
+  textOnly informa acciones. Errores de medios no derivan ni suman falla técnica;
+  cancelación/plazos existentes cortan efectos. Cotizaciones, mensajes de pedido,
+  comprobantes, políticas y estados inhiben también estas presentaciones.
+- enviar_imagenes admite packagingType para una opción concreta; sin filtro
+  incorpora empaques al conjunto de fotos del catálogo. Deduplicación por URL
+  en sentProductImages compartida con 5C y reiniciada solo con sesión nueva.
+  packagingPhotosSent distingue estas entregas del producto solo en el contexto.
+- Runner: fixtures conservan packagingOptions[].imageUrl y validan formato con
+  campo/línea. Fotos públicas para el juez incluyen producto, packagingType y pie;
+  no bytes. YAML y parche-fotos.py del dueño quedan intactos. Sin cambios a checks,
+  umbrales, pensamiento, tiempos, checkout/pricing/stock ni transportes productivos.
+- Backend en feature/agente y Angular en feature/catalogo-variantes. No se hace
+  commit, push ni deploy. Archivos, comandos y recorrido manual:
+  VERIFICACION-empaques-5C.md; el dueño ejecuta las pruebas/builds/evaluaciones.

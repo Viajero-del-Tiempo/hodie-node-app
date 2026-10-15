@@ -2,16 +2,22 @@ import { purchaseError, cartIssue } from "../../services/cart.service.js";
 import { pendingTextFor, clientAskedQuestion } from "./confirmations.js";
 import { ORDER_CONFIRMATION_QUESTION } from "../../services/order-quote.service.js";
 import { activateAgentHandoff, MISUNDERSTANDING_HANDOFF_MESSAGE } from "../../services/agent-handoff.service.js";
+import { createProductImages } from "./product-images.js";
 
 export function createResponder(runtime) {
   const { getState, setState, transport, purchase = null, getTurnContext = () => null } = runtime;
-  return async ({ texto, entendido, fueraDeAlcance = false, quoteIdMostrado }, { signal } = {}) => {
+  const images = runtime.productImages ??= createProductImages(runtime);
+  return async ({ texto, cierre, entendido, fueraDeAlcance = false, quoteIdMostrado, productosMostrados, empaquesMostrados }, { signal } = {}) => {
     signal?.throwIfAborted();
     // Se mantiene el nombre persistido del contador; ambas causas forman la
     // misma racha. Un cierre normal (entendido y dentro del alcance) la reinicia.
     const nextCounter = state => entendido === false || fueraDeAlcance === true
       ? (state.consecutiveMisunderstandings ?? 0) + 1 : 0;
     const turn = getTurnContext();
+    const imageResults = async allowed => ({
+      ...(productosMostrados === undefined ? {} : { productImages: await images.show(productosMostrados, { signal, allowed }) }),
+      ...(empaquesMostrados === undefined ? {} : { packagingImages: await images.showPackaging(empaquesMostrados, { signal, allowed }) }),
+    });
     const receipt = await purchase?.orders.receiptForTurn();
     signal?.throwIfAborted();
     if (receipt) {
@@ -27,7 +33,7 @@ export function createResponder(runtime) {
       const state = getState();
       state.consecutiveMisunderstandings = nextCounter(state);
       await setState(state);
-      return { code: "OK", entendido, fueraDeAlcance, orderMessageAdded: true };
+      return { code: "OK", entendido, fueraDeAlcance, orderMessageAdded: true, ...await imageResults(false) };
     }
     const receiptAck = await runtime.paymentReceipts?.acknowledgementForTurn();
     signal?.throwIfAborted();
@@ -38,7 +44,7 @@ export function createResponder(runtime) {
       signal?.throwIfAborted();
       const state = getState(); state.consecutiveMisunderstandings = nextCounter(state); await setState(state);
       signal?.throwIfAborted();
-      return { code: "OK", entendido, fueraDeAlcance, receiptAcknowledgementAdded: true };
+      return { code: "OK", entendido, fueraDeAlcance, receiptAcknowledgementAdded: true, ...await imageResults(false) };
     }
     if (nextCounter(getState()) >= 4) {
       const state = getState(); state.consecutiveMisunderstandings = 4;
@@ -46,7 +52,7 @@ export function createResponder(runtime) {
       return activateAgentHandoff(runtime, { motivo: "4 intentos sin encauzar la consulta", texto: MISUNDERSTANDING_HANDOFF_MESSAGE,
         type: "MISUNDERSTANDING", signal });
     }
-    let quote = null, pendingText = null, pendingRuc = null;
+    let quote = null, pendingText = null, pendingRuc = null, hasQuoteSummary = false;
     const parts = [texto];
     const corporatePending = getState().pendingCorporateRequest?.expiresAt > (runtime.now?.() ?? Date.now());
     if (purchase && !corporatePending) {
@@ -63,7 +69,7 @@ export function createResponder(runtime) {
           parts.push(ORDER_CONFIRMATION_QUESTION);
         } else {
           const partial = await purchase.quotes.partialForTurn({ signal });
-          if (partial) parts.push(partial.summary);
+          if (partial) { parts.push(partial.summary); hasQuoteSummary = true; }
         }
         const cart = await purchase.carts.read({ signal });
         pendingText = pendingTextFor(cart);
@@ -91,6 +97,10 @@ export function createResponder(runtime) {
     await setState(state);
     signal?.throwIfAborted();
     if (quote) await purchase.quotes.markShown(quote, turn, { signal });
-    return { code: "OK", entendido, fueraDeAlcance };
+    const allowed = images.canPresent(quoteIdMostrado === undefined && !quote && !hasQuoteSummary);
+    const presented = await imageResults(allowed);
+    if (allowed && cierre) { signal?.throwIfAborted(); await transport.sendText(cierre); signal?.throwIfAborted(); }
+    return { code: "OK", entendido, fueraDeAlcance,
+      ...presented };
   };
 }

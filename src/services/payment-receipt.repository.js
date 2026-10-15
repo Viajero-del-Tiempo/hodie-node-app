@@ -1,6 +1,8 @@
 import { normalizePurchasePhone } from "../agents/consultation/order-access.js";
 import { agentAlertId, prepareDurableAlert } from "./agent-alert.service.js";
 import { cartIssue } from "./cart.service.js";
+import { associatedReceiptRetention } from "./payment-receipt.retention.js";
+import { createPaymentReceiptConfig } from "./payment-receipt.config.js";
 
 export const receiptOwned = (receipt, identity) => receipt.ownerChatId === identity.chatId
   || Boolean(identity.phone && normalizePurchasePhone(receipt.ownerPhone) === identity.phone);
@@ -9,7 +11,7 @@ export const receiptOrderOwned = (order, identity) => order.whatsappChatId === i
 const unavailable = () => cartIssue("PEDIDO_NO_DISPONIBLE", "orderNumber", "No hay un pedido pendiente disponible con esos datos.");
 export const receiptAcknowledgement = number => "Gracias, recibimos el comprobante del pedido #" + number + ". El equipo va a verificar el pago; el envío del comprobante no confirma el pago.";
 
-export function createPaymentReceiptRepository({ db, now = Date.now, receiptsCollection = "payment_receipts", alertsCollection = "agent_alerts", newAlertId = agentAlertId }) {
+export function createPaymentReceiptRepository({ db, now = Date.now, receiptsCollection = "payment_receipts", alertsCollection = "agent_alerts", newAlertId = agentAlertId, logger = console }) {
   const receipts = db.collection(receiptsCollection), orders = db.collection("orders");
   const get = async id => { const doc = await receipts.doc(id).get(); return doc.exists ? { ...doc.data(), id } : null; };
   return {
@@ -89,14 +91,44 @@ export function createPaymentReceiptRepository({ db, now = Date.now, receiptsCol
       const snapshot = await receipts.where("status", "in", ["uploading", "unassigned", "deleting"]).where("expiresAt", "<=", now()).limit(100).get();
       return snapshot.docs.map(doc => doc.id);
     },
-    async claimDelete(id, { signal } = {}) {
-      return db.runTransaction(async tx => { const ref = receipts.doc(id), doc = await tx.get(ref), receipt = doc.data();
-        if (!doc.exists || !["uploading", "unassigned", "deleting"].includes(receipt.status) || receipt.expiresAt > now()) return null;
-        signal?.throwIfAborted(); tx.set(ref, { ...receipt, status: "deleting" }); return { ...receipt, id }; });
+    async * associatedCandidates(retentionMs) {
+      // Paginación estable: un histórico sin fecha de pago no tapa otros vencidos.
+      const query = receipts.where("status", "==", "associated").where("createdAt", "<=", now() - retentionMs).orderBy("createdAt").limit(100);
+      let cursor;
+      for (;;) {
+        const page = await (cursor ? query.startAfter(cursor) : query).get();
+        if (!page.docs.length) return;
+        for (const doc of page.docs) yield doc.id;
+        cursor = page.docs.at(-1);
+      }
+    },
+    async claimDelete(id, { signal, retentionMs = createPaymentReceiptConfig().associatedRetentionMs } = {}) {
+      const outcome = await db.runTransaction(async tx => {
+        const ref = receipts.doc(id), doc = await tx.get(ref), receipt = doc.data();
+        if (!doc.exists || receipt.status === "deleted") return null;
+        let decision;
+        if (receipt.status === "associated") {
+          const orderDoc = await tx.get(orders.doc(receipt.orderId));
+          decision = associatedReceiptRetention(receipt, orderDoc.exists ? orderDoc.data() : null, { now: now(), retentionMs });
+          if (decision.blocked) return { blocked: decision.blocked };
+          if (!decision.expired) return null;
+        } else if (!["uploading", "unassigned", "deleting"].includes(receipt.status) || receipt.expiresAt > now()) return null;
+        signal?.throwIfAborted();
+        const deleting = { ...receipt, status: "deleting", deletionOrigin: receipt.deletionOrigin ?? receipt.status,
+          expiresAt: decision?.expiresAt ?? receipt.expiresAt,
+          ...(decision ? { retentionBasis: decision.basis } : {}) };
+        tx.set(ref, deleting); return { receipt: { ...deleting, id } };
+      });
+      if (outcome?.blocked) logger.warn({ event: "receipt_retention", code: outcome.blocked, receiptId: id });
+      return outcome?.receipt ?? null;
     },
     async finishDelete(id, publicId, { signal } = {}) {
       await db.runTransaction(async tx => { const ref = receipts.doc(id), doc = await tx.get(ref);
-        signal?.throwIfAborted(); if (doc.exists && doc.data().status === "deleting" && doc.data().asset.publicId === publicId) tx.delete(ref); });
+        signal?.throwIfAborted();
+        if (doc.exists && doc.data().status === "deleting" && doc.data().asset.publicId === publicId) {
+          tx.set(ref, { ...doc.data(), status: "deleted", deletedAt: now() });
+        }
+      });
     },
   };
 }

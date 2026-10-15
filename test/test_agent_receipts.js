@@ -86,12 +86,16 @@ test("retención de seis horas: antes permite elegir; al vencer elimina bytes y 
     const pending = await f.call("registrar_comprobante", { attachmentId: "file" });
     f.clock.advance(6 * 60 * 60 * 1000 - 1); assert.equal((await f.runtime.paymentReceipts.pending()).length, 1);
     f.clock.advance(1); await f.runtime.paymentReceipts.cleanup();
-    assert.equal(f.world.receiptStorage.files.size, 0); assert.equal(f.world.paymentReceipts.list().length, 0);
+    assert.equal(f.world.receiptStorage.files.size, 0);
+    assert.equal((await f.world.receiptRepository.get(pending.comprobanteId)).status, "deleted");
     assert.equal((await f.call("registrar_comprobante", { comprobanteId: pending.comprobanteId })).code, "COMPROBANTE_NO_DISPONIBLE");
     f.world.orders.set(order.orderNumber, order);
     const associated = await f.call("registrar_comprobante", { attachmentId: "file" }); assert.equal(associated.code, "OK");
     f.clock.advance(7 * 24 * 60 * 60 * 1000); await f.runtime.paymentReceipts.cleanup();
-    assert.equal(f.world.receiptStorage.files.size, 1); assert.equal(f.world.paymentReceipts.list()[0].status, "associated");
+    assert.equal(f.world.receiptStorage.files.size, 1);
+    assert.equal((await f.world.receiptRepository.get(associated.comprobanteId)).status, "associated");
+    assert.notEqual(associated.comprobanteId, pending.comprobanteId);
+    assert.equal((await f.world.receiptRepository.get(pending.comprobanteId)).status, "deleted");
   } finally { f.close(); }
 });
 test("configuración de retención validada y formatos/tamaño/firma rechazados antes de subir", async () => {
@@ -125,7 +129,8 @@ test("una limpieza atrasada no borra una nueva recepción del mismo archivo ya a
     f.world.orders.set(order.orderNumber, order); f.nextTurn();
     f.attachments.set("file", { data: receiptPng, mimeType: "image/png" });
     const fresh = await f.call("registrar_comprobante", { attachmentId: "file" });
-    assert.equal(fresh.code, "OK"); assert.equal(fresh.comprobanteId, first.comprobanteId);
+    assert.equal(fresh.code, "OK"); assert.notEqual(fresh.comprobanteId, first.comprobanteId);
+    assert.equal((await f.world.receiptRepository.get(first.comprobanteId)).status, "deleted");
     release(); await delayed;
     const saved = await f.world.receiptRepository.get(fresh.comprobanteId); assert.equal(saved.status, "associated");
     assert.deepEqual(await f.world.receiptStorage.read(saved.asset), receiptPng);

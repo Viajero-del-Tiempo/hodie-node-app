@@ -123,6 +123,9 @@ async function runRepetition(item, fixtures, options, number) {
         role: "assistant", turn: number, eventId: message.id,
         content: message.type === "text" ? message.text
           : (message.caption ? message.caption + " " : "") + (message.type === "document" ? "[PDF enviado: " : "[imagen enviada: ") + message.source + "]",
+        ...(message.type === "image" ? { attachment: { type: "image", mode: "sent", caption: message.caption,
+          ...(typeof message.productId === "string" ? { productId: message.productId } : {}),
+          ...(typeof message.packagingType === "string" ? { packagingType: message.packagingType } : {}) } } : {}),
       }));
       conversation.push(...sent);
       const state = world.getState();

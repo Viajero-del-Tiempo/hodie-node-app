@@ -27,6 +27,7 @@ export async function createAgent({ world, transport, signal, model = null, prom
     receiptRepository: world.receiptRepository, receiptStorage: world.receiptStorage,
     uploadCustomizationImage: world.uploadCustomizationImage, getOwnProfile: world.getOwnProfile,
     setExecutionPhase: world.setExecutionPhase, getExecutionPhase: world.getExecutionPhase,
+    recordImageEvent: world.recordGuardianEvent,
     getTurnContext: () => currentTurn,
     setTurnContext: value => { currentTurn = value; },
     setTurnAttachments: value => { turnAttachments = value; },

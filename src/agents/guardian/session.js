@@ -14,6 +14,7 @@ export function prepareSession(state, now, config, { newSession = false } = {}) 
     next.pendingOrderReceipt = null;
     next.pendingTextConfirmation = null;
     next.pendingRucConfirmation = null;
+    next.sentProductImages = [];
     if (resumeRequested) next.resumeAppliedAt = next.resumeRequestedAt;
   }
   return { state: next, newSession: starts };

@@ -185,6 +185,23 @@ test("API de productos nuevos, permisos, stock y unicidad transaccional", { time
       payload.variants[0].sku = scope.id("legacy-sku");
       assert.equal((await request("/products", { method: "POST", body: payload })).body.field, "variants[0].sku");
     });
+    await t.test("foto propia del empaque se crea, publica, reemplaza y quita; URL inválida no cambia el producto", async () => {
+      const payload = input({ packagingOptions: [{ type: "libre-a", name: "Empaque Ficticio", price: 7, imageUrl: "https://example.test/pack-a.png" }] });
+      const created = await request("/products", { method: "POST", body: payload }); assert.equal(created.status, 201);
+      let product = created.body.product;
+      assert.equal((await service.getProduct(product.id)).packagingOptions[0].imageUrl, payload.packagingOptions[0].imageUrl);
+      const invalid = await request("/products/" + product.id, { method: "PUT", body: { ...product,
+        packagingOptions: [{ ...product.packagingOptions[0], imageUrl: "javascript:alert(1)" }] } });
+      assert.equal(invalid.status, 400); assert.equal(invalid.body.field, "packagingOptions[0].imageUrl");
+      assert.equal((await service.getProduct(product.id)).packagingOptions[0].imageUrl, payload.packagingOptions[0].imageUrl);
+      const replaced = await request("/products/" + product.id, { method: "PUT", body: { ...product,
+        packagingOptions: [{ ...product.packagingOptions[0], imageUrl: "https://example.test/pack-b.png" }] } });
+      assert.equal(replaced.status, 200); product = replaced.body.product;
+      assert.equal((await service.getProductBySlug(product.slug)).packagingOptions[0].imageUrl, "https://example.test/pack-b.png");
+      const removed = await request("/products/" + product.id, { method: "PUT", body: { ...product,
+        packagingOptions: [{ ...product.packagingOptions[0], imageUrl: "" }] } });
+      assert.equal(removed.status, 200); assert.equal((await service.getProduct(product.id)).packagingOptions[0].imageUrl, "");
+    });
     await t.test("imágenes: endpoint protegido y validación antes de subir", async () => {
       const base64 = (await readFile(new URL("./fixtures/catalog-image.png", import.meta.url))).toString("base64");
       const valid = await request("/images", { method: "POST", body: { base64, mimetype: "image/png" } });

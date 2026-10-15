@@ -36,6 +36,20 @@ function bool(value, field, fallback) {
   return value;
 }
 
+export function validateOptionalCatalogImageUrl(value, field) {
+  const url = text(value, field, { min: 0 });
+  if (!url) return url;
+  if (/[\s\\\u0000-\u001f\u007f]/u.test(url)) fail(field, "debe ser una URL de imagen válida");
+  // Rutas del mismo origen son válidas para recursos locales; nunca //otro-host.
+  if (url.startsWith("/") && !url.startsWith("//")) return url;
+  let parsed;
+  try { parsed = new URL(url); } catch { fail(field, "debe ser una URL HTTP/HTTPS o una ruta desde / del mismo origen"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password) {
+    fail(field, "debe ser una URL HTTP/HTTPS sin credenciales");
+  }
+  return url;
+}
+
 function integer(value, field, min = 0, max = Number.MAX_SAFE_INTEGER) {
   if (!Number.isSafeInteger(value) || value < min || value > max) {
     fail(field, `debe ser un entero entre ${min} y ${max}`);
@@ -160,7 +174,7 @@ export function validateProductModel(input, { existingProduct = null, generateVa
     return {
       type, name: text(packaging.name, `${field}.name`),
       price: integer(packaging.price, `${field}.price`),
-      ...(packaging.imageUrl === undefined ? {} : { imageUrl: text(packaging.imageUrl, `${field}.imageUrl`, { min: 0 }) }),
+      ...(packaging.imageUrl === undefined ? {} : { imageUrl: validateOptionalCatalogImageUrl(packaging.imageUrl, `${field}.imageUrl`) }),
     };
   });
   const customization = input.customization === undefined ? {} : input.customization;

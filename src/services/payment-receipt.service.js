@@ -13,17 +13,26 @@ export function createPaymentReceiptService({ repository, storage, getState, get
   async function stage(attachmentId, options) {
     const file = validatePaymentReceipt(await getAttachment(attachmentId));
     const owner = identity(), digest = createHash("sha256").update(file.data).digest("hex");
-    const id = newReceiptId(owner.chatId, digest);
+    let id = newReceiptId(owner.chatId, digest);
+    // El registro eliminado es histórico: reenviar los mismos bytes crea una
+    // generación nueva, sin sobrescribir su asociación ni su alerta anterior.
+    for (;;) {
+      options.signal?.throwIfAborted();
+      let previous = await repository.get(id);
+      if (previous && previous.status !== "associated" && previous.status !== "deleted" && previous.expiresAt <= now()) {
+        await service.cleanupOne(id, options); previous = await repository.get(id);
+      }
+      if (previous?.status !== "deleted") break;
+      const nextId = newReceiptId(owner.chatId, fingerprint([digest, "after-deletion", id, previous.deletedAt, previous.asset.publicId]));
+      if (nextId === id) throw new Error("El generador de comprobantes debe distinguir generaciones eliminadas");
+      id = nextId;
+    }
     if (uploads.has(id)) return uploads.get(id);
     const task = (async () => {
       const value = { id, ownerChatId: owner.chatId, ownerPhone: owner.phone, status: "uploading", createdAt: now(),
         expiresAt: now() + config.unassignedTtlMs, filename: file.filename, mimeType: file.mimeType, size: file.size,
         asset: storage.descriptor(fingerprint([id, randomUUID()]), file.extension) };
-      let reserved = await repository.reserve(value, options);
-      if (!reserved.created && reserved.receipt.status !== "associated" && reserved.receipt.expiresAt <= now()) {
-        await service.cleanupOne(id, options);
-        reserved = await repository.reserve(value, options);
-      }
+      const reserved = await repository.reserve(value, options);
       if (!reserved.created) {
         if (reserved.receipt.status !== "uploading") return reserved.receipt;
       }
@@ -38,7 +47,7 @@ export function createPaymentReceiptService({ repository, storage, getState, get
     async register({ attachmentId, comprobanteId, orderNumber }, options = {}) {
       options.signal?.throwIfAborted();
       const receipt = attachmentId ? await stage(attachmentId, options) : await repository.get(comprobanteId);
-      if (!receipt || !receiptOwned(receipt, identity())) throw cartIssue("COMPROBANTE_NO_DISPONIBLE", "comprobanteId", "El comprobante no está disponible.");
+      if (!receipt || receipt.status === "deleted" || !receiptOwned(receipt, identity())) throw cartIssue("COMPROBANTE_NO_DISPONIBLE", "comprobanteId", "El comprobante no está disponible.");
       if (receipt.status !== "associated" && (receipt.expiresAt <= now() || !["unassigned"].includes(receipt.status))) {
         await service.cleanupOne(receipt.id, options);
         throw cartIssue("COMPROBANTE_VENCIDO", "comprobanteId", "El comprobante venció; volvé a enviarlo.");
@@ -73,7 +82,7 @@ export function createPaymentReceiptService({ repository, storage, getState, get
     async pending() { return (await repository.listUnassigned(identity().chatId)).map(item => ({ comprobanteId: item.id,
       type: item.mimeType === "application/pdf" ? "document" : "image", filename: item.filename })); },
     async cleanupOne(id, options = {}) {
-      const receipt = await repository.claimDelete(id, options);
+      const receipt = await repository.claimDelete(id, { ...options, retentionMs: config.associatedRetentionMs });
       if (receipt) { await storage.delete(receipt.asset, options); options.signal?.throwIfAborted(); await repository.finishDelete(id, receipt.asset.publicId, options); }
     },
     async cleanup() {
@@ -81,19 +90,32 @@ export function createPaymentReceiptService({ repository, storage, getState, get
       for (const id of await repository.expired()) { try { await service.cleanupOne(id); } catch (error) { failures.push(error); } }
       if (failures.length) throw new AggregateError(failures, "Quedaron comprobantes vencidos por eliminar");
     },
+    async cleanupAssociated() {
+      const failures = [];
+      for await (const id of repository.associatedCandidates(config.associatedRetentionMs)) {
+        try { await service.cleanupOne(id); } catch (error) { failures.push(error); }
+      }
+      if (failures.length) throw new AggregateError(failures, "Quedaron comprobantes asociados por eliminar");
+    },
+    config,
   };
   return service;
 }
 
-// Recuperable tras reinicio: los registros uploading/unassigned/deleting quedan
-// hasta borrar el archivo privado. Nunca purga comprobantes asociados.
-export function startReceiptCleanup(service, { intervalMs = 60000, logger = console } = {}) {
-  let running = null, stopped = false;
-  const sweep = () => {
-    if (stopped || running) return running;
-    running = service.cleanup().catch(() => logger.error("No se pudo limpiar comprobantes vencidos; se reintentará"))
-      .finally(() => { running = null; }); return running;
-  };
-  const timer = setInterval(sweep, intervalMs); timer.unref?.(); void sweep();
-  return async () => { stopped = true; clearInterval(timer); await running; };
+// Cada arranque recupera borrados a medio completar. El barrido corto conserva
+// las seis horas sin asignar; el diario aplica retención a los asociados.
+export function startReceiptCleanup(service, { intervalMs = 60000,
+  retentionIntervalMs = service.config.retentionCleanupIntervalMs, logger = console, clock = globalThis } = {}) {
+  let stopped = false;
+  const jobs = [ { method: "cleanup", interval: intervalMs }, { method: "cleanupAssociated", interval: retentionIntervalMs } ];
+  for (const job of jobs) {
+    const sweep = () => {
+      if (stopped || job.running) return job.running;
+      job.running = Promise.resolve().then(() => { if (!stopped) return service[job.method](); })
+        .catch(() => logger.error("No se pudo limpiar comprobantes vencidos; se reintentará"))
+        .finally(() => { job.running = null; }); return job.running;
+    };
+    job.timer = clock.setInterval(sweep, job.interval); job.timer?.unref?.(); void sweep();
+  }
+  return async () => { stopped = true; for (const job of jobs) clock.clearInterval(job.timer); await Promise.all(jobs.map(job => job.running)); };
 }

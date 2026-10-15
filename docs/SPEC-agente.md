@@ -129,7 +129,7 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | --- | --- | --- |
 | `buscar_productos` | `consulta`, `categoriaId?`, `opciones?`, `soloDisponibles?` (false), `limite?` (5) | Resultados de `searchProducts`: producto, categoría, `priceFrom`, variantes con precio y `available`, `matchedTerms` |
 | `ver_producto` | `productId` | Producto completo: atributos, variantes, personalización y empaques |
-| `enviar_imagenes` | `productId`, `variantId?` | Envía por WhatsApp hasta 3 imágenes del producto o la variante. Devuelve cuántas envió |
+| `enviar_imagenes` | `productId`, `variantId?`, `packagingType?` | Envía por WhatsApp hasta 3 imágenes adicionales del producto/variante, incluyendo fotos de empaques, omitiendo URLs ya enviadas/reservadas en la sesión. packagingType selecciona un empaque concreto; valida pertenencia. Devuelve cuántas envió |
 | `carrito_ver` | — | Líneas actuales, datos y pendientes ordenados: personalización, empaque, envío, facturación |
 | `carrito_agregar` | `productId`, `variantId`, `quantity`, `packagingType?`, `texto?`, `sinPersonalizacion?`, `attachmentId?` | Valida variante activa, stock (sumando líneas), cantidad, empaque y límites de personalización. Texto como borrador literal; rechazo explícito distinto de pendiente. Si hay `attachmentId`, sube la imagen con firma, solo del turno actual |
 | `carrito_modificar` | `linea`, `cambios` (`variantId?`, `quantity?`, `packagingType?`, `texto?`, `confirmarTexto?`, `sinPersonalizacion?`, `attachmentId?`) | Mismas validaciones que agregar. ID estable; confirmarTexto debe repetir lo mostrado y tener evidencia de aceptación del cliente en un lote posterior |
@@ -142,7 +142,7 @@ Las herramientas son la única fuente de datos del agente y el único camino par
 | `registrar_comprobante` | `attachmentId?` O `comprobanteId?`, `orderNumber?` | Imagen o PDF privado; uno pendiente asocia, varios PEDIDO_AMBIGUO, ninguno PEDIDO_NO_DISPONIBLE. El número explícito revalida dueño y estado en transacción. Guarda archivo sin asignar seis horas para seleccionar después. Asociación y solicitud durable de alerta atómicas; nunca confirma pagos ni modifica el pedido. Acuse textual del servidor al responder |
 | `consultar_politicas` | — | Todas las políticas vigentes de la colección `policies` |
 | `derivar` | `motivo`, `texto` | El modelo escribe el mensaje; el código persiste handoff, contexto y solicitud durable de alerta y cierra el turno. No envía alertas al equipo |
-| `responder` | `texto`, `entendido`, `fueraDeAlcance?`, `quoteIdMostrado?` | Un único envío y cierre. fueraDeAlcance es booleano, false si se omite: señala pedidos de algo que la tienda no ofrece, aunque se entiendan. El servidor agrega el resumen y la pregunta final, y registra lastQuote después del envío exitoso. Ante una consulta sobre la cotización vigente, responde y rearma solo la pregunta de confirmación. Después de crear el pedido, envía exclusivamente el mensaje armado por el servidor; los datos bancarios no están en la respuesta pública de crear_pedido. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
+| `responder` | `texto`, `cierre?`, `entendido`, `fueraDeAlcance?`, `quoteIdMostrado?`, `productosMostrados?`, `empaquesMostrados?` | Cierre de turno. Con productosMostrados: texto es solo introducción, lista del servidor (foto o línea por producto) y cierre opcional; nombres/precios solo del servidor. También admite empaques. Hasta 3 presentaciones en total, sin duplicados. Devuelve productImages/packagingImages con sent/skipped/failed/textOnly; no inventa imágenes, pies ni precios. fueraDeAlcance es booleano, false si se omite: señala pedidos de algo que la tienda no ofrece, aunque se entiendan. El servidor agrega el resumen y la pregunta final, y registra lastQuote después del envío exitoso. Ante una consulta sobre la cotización vigente, responde y rearma solo la pregunta de confirmación. Después de crear el pedido, envía exclusivamente el mensaje armado por el servidor; los datos bancarios no están en la respuesta pública de crear_pedido. Resumen incompleto rotulado Subtotal de productos; sin quoteId ni lastQuote |
 
 ### Reglas comunes
 
@@ -204,9 +204,13 @@ VERDAD
   distintas de las políticas: ofrecé hablar con una persona del equipo.
 
 VENTAS
-- Mostrá como máximo 5 productos por mensaje. Si el cliente busca por ocasión o
-  destinatario, buscá con esos términos.
-- Ofrecé fotos con enviar_imagenes cuando ayuden a decidir.
+- Mostrá como máximo 3 productos por mensaje; si hay más pertinentes ofrecé ver
+  más. Si busca por ocasión o destinatario, buscá con esos términos.
+- Pasá los IDs a presentar en responder.productosMostrados; texto solo introduce
+  y cierre es opcional, sin listar productos ni precios. El servidor arma la lista
+  con foto o línea por producto. Nunca afirmes haber enviado una foto. Reservá
+  enviar_imagenes para más fotos solicitadas; no agregues fotos a cotizaciones,
+  mensajes de pedido, estados ni políticas.
 - Si una variante está agotada, decilo y ofrecé las disponibles.
 - El texto a grabar se toma exactamente como lo escribió el cliente, sin
   corregirlo, y siempre se confirma antes de seguir.
@@ -226,6 +230,68 @@ CIERRE DEL TURNO
 ```
 
 Las reglas de derivación y de seguridad se agregan al prompt tal como están en sus secciones. El prompt se ajusta solo con evidencia de la evaluación: cada cambio se corre contra `conversations.yaml` antes de aceptarse.
+
+### Fotos automáticas (entrega 5C)
+
+- Listas y recomendaciones pasan como máximo tres IDs en responder.productosMostrados.
+  El modelo aporta solo introducción breve en texto y cierre opcional en cierre,
+  sin listar productos/precios. Si hay más opciones pertinentes, ofrece ver más
+  en ese cierre. buscar_productos conserva su límite de cinco para poder detectar
+  opciones adicionales; ese límite de lectura no es el de presentación.
+- Principal: primera imagen de la primera variante activa con imágenes, en el
+  orden guardado del catálogo. Se omiten variantes inactivas; una activa agotada
+  sigue visible. Si ninguna variante activa tiene imágenes, no se envía foto.
+  El pie usa el nombre del producto y el precio menor de sus variantes activas;
+  dice Desde si difieren. No usa precios, nombres ni URLs pasados por el modelo.
+- Servidor: introducción -> foto por producto con nombre/precio -> cierre opcional.
+  Respeta el orden de IDs. Sin foto, foto ya enviada o fallo de envío: línea textual
+  del catálogo en su lugar. productImages devuelve entregadas (productId y caption),
+  omitidas (motivo), fallidas (código) y textOnly para las líneas del servidor. El
+  modelo nunca afirma entrega. El siguiente contexto incluye productPhotosSent
+  con IDs de productos de fotos entregadas, sin bytes ni el historial completo de URLs.
+- sentProductImages se guarda en el checkpoint de la sesión y se reinicia solo
+  con sesión nueva por tiempo, indicación explícita o reactivación. Deduplica por
+  URL exacta y se comparte con enviar_imagenes. Este último sigue disponible para
+  fotos adicionales, hasta tres nuevas por llamada, también de variantes activas.
+  Se reserva antes de enviar: si una caída deja entrega incierta, no se reenvía
+  automáticamente en esa sesión. Un fallo explícito libera la reserva para una
+  petición posterior. Las reservas también se olvidan al empezar otra sesión.
+- No se agregan fotos a resúmenes de cotización (completos o informativos),
+  mensajes de pedido/pago o acuses de comprobantes. Un turno que consulta políticas
+  o estado de pedido también inhibe fotos automáticas, aunque el modelo pase IDs;
+  una recomendación separada en un turno posterior puede mostrarlas.
+- Fallos de consulta, checkpoint o envío de foto quedan registrados por producto
+  y en el resultado, sin derivación ni contador técnico. No hay reintentos de
+  fotos dentro del turno. Las cancelaciones/plazos vigentes siguen cortando efectos.
+- Transporte falso y evidencia pública del juez conservan tipo de envío,
+  producto, pie y eventId; nunca bytes. imageUrls opcional de variantes en fixtures
+  acepta listas de URLs HTTP/HTTPS, incluidas las ficticias; ausente/vacía significa
+  sin fotos. No se editan casos ni criterios del dueño.
+
+#### Fotos de empaques
+
+- responder.empaquesMostrados recibe hasta tres objetos `{ productId,
+  packagingType, variantId? }`, con el mismo límite total de tres junto a
+  productosMostrados. No acepta URLs, nombres ni precios; el tipo de empaque
+  es libre y proviene del catálogo, sin lista común. No se repite producto/tipo.
+- Se consulta packagingOptions[].imageUrl. El pie usa nombre del producto con
+  nombre del empaque y precio por unidad del producto con empaque: variante
+  elegida más precio adicional del empaque; si no hay variante elegida, menor
+  precio activo más empaque, con Desde si varían. Es presentación informativa;
+  no calcula cotización/pedido ni valida/reserva/descuenta stock. La cotización
+  y creación conservan su pricing y validación de stock existentes.
+- Foto inexistente: una línea textual con ese pie, armada por el servidor. Se
+  agrupan las líneas en un mensaje adicional después del texto principal y antes
+  de fotos. Errores de imagen/texto adicional se registran sin activar fallas
+  técnicas. Los mismos cierres excluidos de 5C inhiben fotos y líneas de empaques.
+- Deduplicación por URL compartida con fotos de productos y enviar_imagenes.
+  packagingPhotosSent del contexto solo contiene producto/tipo realmente enviado;
+  productPhotosSent distingue las fotos del producto solo. Ambos se reinician con
+  la sesión. enviar_imagenes con packagingType muestra solo esa opción; sin él
+  incluye empaques después de las imágenes de variantes, hasta tres nuevas.
+- Fixtures admiten imageUrl opcional en cada opción de empaque, con diagnóstico
+  de URL inválida por campo/línea. Transporte/juez incluyen packagingType además
+  de producto/pie, sin bytes. El dueño actualiza el YAML.
 
 ## Derivación y escalada
 
@@ -354,9 +420,10 @@ La evaluación se construye primero, para que el agente se mida desde su primera
 4. **Carrito y pedidos, dividida en dos rondas:**
    - **4A:** carrito_ver/agregar/modificar/quitar, datos_envio, datos_facturacion, cotizar, subtotal incompleto, quoteId y huellas, resumen del servidor con responder(quoteIdMostrado), lastQuote e invalidación, TTL de tres días, subida de imagen por puerto, customization.declined y errores estructurados opt-in del pricing. Runner con cotizacionMostrada real (F-05). Quitar TEMPORAL ENTREGA 4; conservar TEMPORAL ENTREGA 5. Incluir aviso neutro del límite e imágenes del cliente como referencias. Sin crear pedidos ni lógica corporativa.
    - **4B, implementada pendiente de verificación del dueño:** confirmación final posterior con vocabulario y agregados neutros configurables; pregunta corta tras consultas sin cambios; crear_pedido y persistencia transaccional con contador compartido, relación quoteId→pedido e idempotencia; mensaje de pago exclusivo del servidor; PDF independiente con recuperación y alerta de envío incierto; pruebas de concurrencia, rollback y lectura del pedido en admin/Mis pedidos en el emulador. Runner con K-01 a K-05 y decisiones texto:null/empaque:null. Timeout por llamada al modelo y un reintento dentro del plazo total. Conservar TEMPORAL ENTREGA 5. Sin conexión productiva.
-5. **Dividida en dos rondas:**
+5. **Dividida en rondas:**
    - **5A:** derivar(motivo,texto) como segundo cierre, cuarto intento sin entender aplicado por código, configuración única del agente con formulario Angular, cantidad corporativa por total, solicitudes durables de alerta y deduplicación por episodio. O-03/O-04/H-01/H-03. Mantener el bloque TEMPORAL ENTREGA 5 con las restricciones de comprobantes; quitar solamente las negaciones de derivación/escalada. Sin conectar WhatsApp ni el router productivo.
-   - **5B implementada, pendiente de verificación del dueño:** registrar_comprobante, PDF validado en el guardián, almacenamiento raw/authenticated y descarga por backend con admin real/activo; retención configurable de seis horas sin asignar, borrado recuperable, transacción asociación+alerta, acuse del servidor recuperado tras commit/reinicio; panel de comprobantes y O-02 sintético. Se quitó TEMPORAL ENTREGA 5 completo. Retención de asociados y validación de la cuenta Cloudinary pendientes antes de puesta en marcha.
+   - **5B implementada, pendiente de verificación del dueño:** registrar_comprobante, PDF validado en el guardián, almacenamiento raw/authenticated y descarga por backend con admin real/activo; retención configurable de seis horas sin asignar, borrado recuperable, transacción asociación+alerta, acuse del servidor recuperado tras commit/reinicio; panel de comprobantes y O-02 sintético. Se quitó TEMPORAL ENTREGA 5 completo. Retención de asociados definida en treinta días (pago verificado: desde verificación; nunca verificado: desde subida), con barrido diario, registros eliminados conservados y recuperación de borrados. Verificación de la cuenta Cloudinary pendiente antes de puesta en marcha.
+   - **5C implementada, pendiente de verificación del dueño:** listas/recomendaciones de hasta tres productos y fotos principales automáticas con responder.productosMostrados; empaques con responder.empaquesMostrados, precio total del producto con empaque y línea textual sin foto. Campo packagingOptions[].imageUrl validado y editable con subida firmada; corregido el cambio de foto en el detalle web. Pies del catálogo y deduplicación por sesión compartida con enviar_imagenes. Fallos de fotos registrados sin falla técnica. Runner con imágenes de variantes/empaques y evidencia pública por producto/empaque/pie, sin bytes; C-04/P-08 según parche del dueño. Sin cambios a pensamiento, tiempos, checks o umbrales.
 6. **Evaluación completa:** todos los casos, hasta alcanzar los umbrales.
 
 Después viene la puesta en marcha conjunta con el catálogo (entrega 6 de `docs/SPEC-catalogo.md`), en la que también se eliminan el router, el BudgetAgent y el SupportAgent.

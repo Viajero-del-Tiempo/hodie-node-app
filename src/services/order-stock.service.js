@@ -100,7 +100,9 @@ export function createOrderStockService({ db, catalog, timestampNow, warn = mess
         if (wasCommitted !== isCommitted) {
           ({ stockChanged } = await applyStock(transaction, order.items, isCommitted ? -1 : 1));
         }
-        transaction.update(ref, { status, updatedAt: timestampNow() });
+        const changedAt = timestampNow();
+        transaction.update(ref, { status, updatedAt: changedAt,
+          ...(!wasCommitted && isCommitted && order.paymentVerifiedAt == null ? { paymentVerifiedAt: changedAt } : {}) });
         return { order, previousStatus, status, changed: true, stockChanged, stockWarnings };
       });
       // Sin mensajes ni efectos externos dentro del callback que Firestore reintenta.

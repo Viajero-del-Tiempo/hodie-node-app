@@ -119,7 +119,7 @@ export function createPurchaseTools(runtime, { confirmationConfig = createOrderC
       return { ...publicResult, lines: progress.lines, fields: progress.fields,
         pendientes: progress.pendientes, options: progress.options };
     },
-    cotizar: (args, context) => quotes.quote(context, args),
+    cotizar: (args, context) => { runtime.productImages?.excludeForTurn(); return quotes.quote(context, args); },
     crear_pedido: ({ quoteId }, context) => orders.create(quoteId, context),
   };
   return { carts, quotes, orders,

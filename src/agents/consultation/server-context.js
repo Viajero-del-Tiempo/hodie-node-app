@@ -33,6 +33,9 @@ export async function prepareServerContext({ runtime, history, now, turn, signal
       consecutiveMisunderstandings: state.consecutiveMisunderstandings ?? 0,
       corporateQuantityThreshold,
       pendingReceipts,
+      productPhotosSent: [...new Set((state.sentProductImages ?? []).filter(row => row.delivery === "sent" && row.packagingType === undefined).map(row => row.productId))],
+      packagingPhotosSent: [...new Map((state.sentProductImages ?? []).filter(row => row.delivery === "sent" && row.packagingType !== undefined)
+        .map(row => [JSON.stringify([row.productId, row.packagingType]), { productId: row.productId, packagingType: row.packagingType }])).values()],
       corporateRequest: state.pendingCorporateRequest?.expiresAt > now ? structuredClone(state.pendingCorporateRequest) : null,
       cart: cart ? { lines: (cart.lines ?? []).map(line => ({ ...pick(line, ["id", "productId", "variantId", "quantity", "packagingType"]),
         packaging: pick(line.packaging, ["declined"]),

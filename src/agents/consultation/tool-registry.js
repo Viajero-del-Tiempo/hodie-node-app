@@ -1,3 +1,5 @@
+import { MAX_SHOWN_PRODUCTS } from "./product-images.js";
+
 const string = description => ({ type: "string", description });
 const object = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: false });
 const lineChanges = {
@@ -14,7 +16,8 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
     soloDisponibles: { type: "boolean", description: "Por defecto false: incluye variantes agotadas." },
     limite: { type: "integer", minimum: 1, maximum: 5, description: "De uno a cinco; por defecto cinco." } }, ["consulta"]),
   ver_producto: object({ productId: string("ID obtenido del catálogo.") }, ["productId"]),
-  enviar_imagenes: object({ productId: string("ID obtenido del catálogo."), variantId: string("ID de variante del producto; opcional.") }, ["productId"]),
+  enviar_imagenes: object({ productId: string("ID obtenido del catálogo."), variantId: string("ID de variante del producto; opcional."),
+    packagingType: string("Tipo real del empaque obtenido del catálogo; si se indica, muestra solo ese empaque.") }, ["productId"]),
   consultar_politicas: object({}),
   estado_pedido: object({ orderNumber: string("Número de pedido indicado por el cliente."), phone: string("Teléfono de compra indicado por el cliente; no verifica la identidad.") }),
   carrito_ver: object({}),
@@ -37,15 +40,23 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
     orderNumber: string("Número indicado por el cliente; el servidor comprueba dueño y estado pendiente.") }),
   derivar: object({ motivo: string("Motivo de la solicitud humana o del reclamo; sin datos inventados."),
     texto: string("Mensaje al cliente: una persona del equipo seguirá por este chat, sin promesas de tiempo.") }, ["motivo", "texto"]),
-  responder: object({ texto: string("Respuesta final al cliente."), entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
+  responder: object({ texto: string("Respuesta final; con productosMostrados, solo una introducción breve, sin listar productos ni precios."),
+    cierre: string("Cierre opcional de la lista, después de las fotos/líneas del servidor; sin listar productos ni precios."),
+    entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
     fueraDeAlcance: { type: "boolean", description: "true si pide algo que la tienda no ofrece, aunque lo entendiste. Stock insuficiente no implica fuera de alcance. Por defecto false." },
-    quoteIdMostrado: string("ID devuelto por cotizar para que el servidor agregue y registre el resumen completo." ) }, ["texto", "entendido"]),
+    quoteIdMostrado: string("ID devuelto por cotizar para que el servidor agregue y registre el resumen completo." ),
+    productosMostrados: { type: "array", maxItems: MAX_SHOWN_PRODUCTS, items: string("ID de un producto a presentar, obtenido del catálogo."),
+      description: "Hasta tres IDs distintos. El servidor arma la lista: introducción texto, foto o línea por producto con nombre/precio del catálogo, cierre opcional. No listes productos/precios en texto/cierre ni lo uses en cotizaciones, pedidos, estados o políticas; nunca afirmes envíos." },
+    empaquesMostrados: { type: "array", maxItems: MAX_SHOWN_PRODUCTS,
+      items: object({ productId: string("ID del producto del catálogo."), packagingType: string("Tipo real de opción de empaque."),
+        variantId: string("Variante elegida; si se omite, el pie indica desde cuando los precios varían.") }, ["productId", "packagingType"]),
+      description: "Empaques que ofrecés, hasta tres presentaciones en total junto con productosMostrados. El servidor envía foto con precio por unidad del producto con empaque; sin foto agrega una línea textual. Nunca afirmes entrega ni pases precios/URLs." } }, ["texto", "entendido"]),
 });
 export const CONSULTATION_TOOL_NAMES = Object.freeze(Object.keys(CONSULTATION_SCHEMAS));
 const descriptions = {
-  buscar_productos: "Busca productos y variantes, con priceFrom, variants[].price, stock, available y matchedTerms. Máximo cinco productos.",
+  buscar_productos: "Busca productos y variantes, con priceFrom, variants[].price, stock, available y matchedTerms. Hasta cinco resultados para elegir: presentá como máximo tres por mensaje y ofrecé ver más si corresponde.",
   ver_producto: "Obtiene el producto público completo: atributos, variantes, personalización, imágenes y empaques propios.",
-  enviar_imagenes: "Envía hasta tres imágenes existentes del producto o variante. No crea imágenes ni acepta URLs del modelo.",
+  enviar_imagenes: "Envía hasta tres imágenes adicionales del catálogo, incluyendo empaques; packagingType permite pedir un empaque concreto. No crea imágenes ni acepta URLs del modelo.",
   consultar_politicas: "Obtiene todas las políticas vigentes; sus temas son libres.",
   estado_pedido: "Consulta un pedido. Identidad verificada y dueño: estado y productos. Si no, exige número y teléfono coincidentes y muestra solo el estado.",
   carrito_ver: "Lee carrito, IDs y pendientes en orden: personalización, empaque, envío, facturación. No renueva su vencimiento.",
@@ -58,7 +69,7 @@ const descriptions = {
   crear_pedido: "Registra idempotentemente el pedido tras confirmación posterior. Verifica carrito, precios y stock en transacción. El servidor agrega el mensaje de pedido y pago al responder; nunca copies ni reformules datos bancarios.",
   registrar_comprobante: "Registra imagen/PDF como comprobante, sin confirmar pagos ni modificar pedidos. Acepta attachmentId O comprobanteId. Sin número: uno asocia, varios pide elegir, ninguno informa falta de pedido. El acuse lo agrega el servidor al responder.",
   derivar: "Activa el handoff, solicita una alerta durable y cierra. Pedidos explícitos y reclamos derivan directo; ante condiciones fuera de política o cantidad corporativa primero ofrecé y esperá aceptación.",
-  responder: "Envía un único mensaje y cierra. quoteIdMostrado agrega el resumen del servidor y registra lastQuote solo después del envío.",
+  responder: "Cierra el turno. Con productosMostrados, texto solo introduce; el servidor lista fotos o líneas con nombres/precios y luego cierre opcional. Resultados sent/skipped/failed/textOnly. empaquesMostrados presenta empaques del catálogo. quoteIdMostrado agrega el resumen del servidor y registra lastQuote solo después del envío.",
 };
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value)
   && [Object.prototype, null].includes(Object.getPrototypeOf(value));
@@ -78,7 +89,7 @@ function validate(schema, value, path = "") {
       if (error) return error;
     }
   } else if (schema.type === "array") {
-    if (!Array.isArray(value) || value.length < (schema.minItems ?? 0)) return invalid(path, "Debe ser un arreglo no vacío.");
+    if (!Array.isArray(value) || value.length < (schema.minItems ?? 0) || value.length > (schema.maxItems ?? Infinity)) return invalid(path, "Arreglo fuera del tamaño permitido.");
     for (const [index, item] of value.entries()) {
       const error = validate(schema.items, item, path + "[" + index + "]");
       if (error) return error;
@@ -98,7 +109,22 @@ export function createToolRegistry(handlers) {
     if (!Object.hasOwn(CONSULTATION_SCHEMAS, name)) return { code: "HERRAMIENTA_NO_DISPONIBLE", message: "Esta herramienta no está disponible." };
     const error = validate(CONSULTATION_SCHEMAS[name], args);
     if (error) return error;
+    if (args.cierre !== undefined && !(args.productosMostrados?.length || args.empaquesMostrados?.length)) return invalid("cierre", "El cierre corresponde a una lista de productos o empaques.");
     if (name === "registrar_comprobante" && Number(Object.hasOwn(args, "attachmentId")) + Number(Object.hasOwn(args, "comprobanteId")) !== 1) return invalid("attachmentId", "Indicá attachmentId o comprobanteId, uno solo.");
+    if ((args.productosMostrados?.length ?? 0) + (args.empaquesMostrados?.length ?? 0) > MAX_SHOWN_PRODUCTS) return invalid("empaquesMostrados", "Mostrá hasta tres productos o empaques en total.");
+    const packagingKeys = new Set();
+    for (const [index, item] of (args.empaquesMostrados ?? []).entries()) {
+      for (const key of ["productId", "variantId"]) if (item[key] !== undefined
+          && (item[key] !== item[key].trim() || item[key].includes("/") || [".", ".."].includes(item[key]) || item[key].length > 200)) return invalid("empaquesMostrados[" + index + "]." + key, "Identificador inválido.");
+      if (item.packagingType !== item.packagingType.trim()) return invalid("empaquesMostrados[" + index + "].packagingType", "Tipo de empaque inválido.");
+      const key = JSON.stringify([item.productId, item.packagingType]);
+      if (packagingKeys.has(key)) return invalid("empaquesMostrados[" + index + "]", "Empaque repetido.");
+      packagingKeys.add(key);
+    }
+    for (const [index, id] of (args.productosMostrados ?? []).entries()) {
+      if (id !== id.trim() || id.includes("/") || [".", ".."].includes(id) || id.length > 200) return invalid("productosMostrados[" + index + "]", "Identificador inválido.");
+      if (args.productosMostrados.indexOf(id) !== index) return invalid("productosMostrados[" + index + "]", "Producto duplicado.");
+    }
     for (const field of ["productId", "variantId", "categoriaId", "orderNumber", "linea", "billingProfileId", "quoteIdMostrado", "quoteId", "attachmentId", "comprobanteId"]) {
       if (args[field] !== undefined && (args[field] !== args[field].trim() || args[field].includes("/")
           || [".", ".."].includes(args[field]) || args[field].length > 200)) return invalid(field, "Identificador inválido.");
@@ -144,6 +170,7 @@ export function createToolRegistry(handlers) {
           if (item.nullable) clean.nullable = true;
           if (item.items) clean.items = providerSchema(item.items);
           if (item.minItems !== undefined) clean.minItems = item.minItems;
+          if (item.maxItems !== undefined) clean.maxItems = item.maxItems;
           if (item.properties) clean.properties = Object.fromEntries(Object.entries(item.properties).map(([key, value]) => [key, providerSchema(value)]));
           if (item.required?.length) clean.required = item.required;
           return clean;

@@ -36,11 +36,14 @@ rama antes de la puesta en marcha conjunta con el catálogo.
 - Sin asignar: seis horas desde recepción, AGENT_RECEIPT_UNASSIGNED_TTL_MS permite
   1 minuto..7 días. Vencido no se puede seleccionar. Barrido independiente cada
   minuto, sin esperas en tests: reclama estado deleting, borra archivo privado y
-  después documento; recupera interrumpidos y reintenta errores del proveedor.
+  después marca el registro como deleted; recupera interrumpidos y reintenta errores del proveedor.
   El borrado físico puede esperar una pasada o una recuperación del proveedor.
   No habilitar TTL de Firestore sobre estos documentos antes de borrar archivos.
-- Asociados: propuesta pendiente de Arnaldo, 90 días tras verificación manual.
-  No se activa borrado automático de asociados hasta acordar esa política.
+- Asociados: treinta días desde paymentVerifiedAt si se verificó el pago, o desde
+  la subida si nunca se verificó. Barrido diario configurable y recuperación tras
+  reinicio; conserva registro eliminado, asociación y alerta histórica. Históricos
+  pagados sin fecha fiable quedan retenidos con diagnóstico. Detalle y comandos:
+  [VERIFICACION-pendientes-5C.md](VERIFICACION-pendientes-5C.md).
 
 ## Cloudinary: comprobar antes de puesta en marcha
 

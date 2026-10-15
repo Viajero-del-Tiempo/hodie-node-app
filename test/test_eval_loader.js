@@ -11,6 +11,22 @@ test("lee YAML v2 y cuenta categorías sin fijar el tamaño del archivo del due�
   assert.deepEqual(dataset.categories, { example: 1, other: 1 });
   assert.match(dataset.hash, /^[a-f0-9]{64}$/);
 });
+test("loader conserva imageUrls opcionales de variantes, incluidas URLs ficticias y lista vacía", () => {
+  const fixtures = evalFixtures(); fixtures.products[0].variants[0].imageUrls = ["https://example.test/principal.png", "https://example.test/extra.png"];
+  const dataset = evalDataset([evalCase()], fixtures);
+  assert.deepEqual(dataset.errors, []); assert.deepEqual(dataset.cases[0].diagnostics, []);
+  assert.deepEqual(dataset.fixtures.products[0].variants[0].imageUrls, fixtures.products[0].variants[0].imageUrls);
+  fixtures.products[0].variants[0].imageUrls = []; assert.deepEqual(evalDataset([evalCase()], fixtures).errors, []);
+  delete fixtures.products[0].variants[0].imageUrls; assert.deepEqual(evalDataset([evalCase()], fixtures).errors, []);
+});
+test("loader diagnostica imageUrls mal formadas con campo y línea, sin editar fixtures", () => {
+  for (const urls of [null, "https://example.test/image.png", [null], ["no-url"], ["data:image/png;base64,AAAA"], [" https://example.test/a.png"]]) {
+    const fixtures = evalFixtures(); fixtures.products[0].variants[0].imageUrls = urls;
+    const source = YAML.stringify({ version: 2, fixtures, cases: [evalCase()] }); const dataset = parseCases(source);
+    const issue = dataset.errors.find(error => error.path.startsWith("fixtures.products[0].variants[0].imageUrls"));
+    assert.ok(issue); assert.ok(issue.line >= source.split("\n").findIndex(line => line.includes("imageUrls:")) + 1);
+  }
+});
 test("loader acepta umbralCorporativo por caso sin cambiar el formato v2", () => {
   const dataset = evalDataset([
     evalCase({ context: { umbralCorporativo: 5 } }),
@@ -23,6 +39,20 @@ test("loader acepta umbralCorporativo por caso sin cambiar el formato v2", () =>
   assert.equal(dataset.cases[0].input.context.umbralCorporativo, 5);
   assert.equal(dataset.cases[1].input.context.umbralCorporativo, 12);
   assert.equal(dataset.cases[2].input.context, undefined);
+});
+test("fixtures de empaques conservan imagen opcional y diagnostican URL inválida con campo y línea", () => {
+  const fixtures = evalFixtures(); fixtures.products[0].packagingOptions[0].imageUrl = "https://example.test/pack.png";
+  const loaded = evalDataset([evalCase()], fixtures); assert.deepEqual(loaded.errors, []);
+  assert.equal(loaded.fixtures.products[0].packagingOptions[0].imageUrl, fixtures.products[0].packagingOptions[0].imageUrl);
+  for (const value of ["", "/local-images/pack.png"]) {
+    fixtures.products[0].packagingOptions[0].imageUrl = value; assert.deepEqual(evalDataset([evalCase()], fixtures).errors, []);
+  }
+  for (const value of [null, [], 5, "javascript:alert(1)", "data:image/png;base64,AAAA", "//example.test/a.png", "not-url"]) {
+    fixtures.products[0].packagingOptions[0].imageUrl = value;
+    const source = YAML.stringify({ version: 2, fixtures, cases: [evalCase()] }), dataset = parseCases(source);
+    const diagnostic = dataset.errors.find(item => item.path === "fixtures.products[0].packagingOptions[0].imageUrl");
+    assert.ok(diagnostic); assert.equal(diagnostic.line, source.split("\n").findIndex(line => line.includes("imageUrl:")) + 1);
+  }
 });
 test("umbral inválido bloquea solo su caso con campo y línea, y no habilita otras claves", () => {
   for (const value of [null, 0, -1, 1.5, "5", true, Number.MAX_SAFE_INTEGER + 1, Infinity]) {

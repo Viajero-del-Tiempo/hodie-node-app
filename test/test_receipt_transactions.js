@@ -81,5 +81,55 @@ test("5B: asociación, carreras, rollback y descarga protegida con Firestore rea
       await api.db.collection("users").doc(admin.uid).update({ active: false });
       assert.equal((await api.request(download, { phone: admin.phoneNumber })).status, 403);
     });
+    await t.test("retención con reloj inyectado conserva hasta treinta días del pago y después bloquea descarga, sin borrar historia", async () => {
+      const f = await fixture("retention"); await f.service.register({ comprobanteId: f.receipt.id, orderNumber: f.orderId });
+      const day = 24 * 60 * 60 * 1000, createdAt = f.receipt.createdAt;
+      await f.ref.update({ status: "paid", paymentVerifiedAt: api.Timestamp.fromMillis(createdAt + day) });
+      const beforeOrder = (await f.ref.get()).data(), beforeReceipt = await f.repo.get(f.receipt.id);
+      let time = createdAt + 30 * day;
+      const repo = createPaymentReceiptRepository({ db: api.db, now: () => time });
+      const service = createPaymentReceiptService({ repository: repo, storage: api.receiptStorage, now: () => time });
+      await service.cleanupOne(f.receipt.id); assert.equal((await repo.get(f.receipt.id)).status, "associated");
+      assert.deepEqual(await api.receiptStorage.read(beforeReceipt.asset), receiptPng);
+      time += day; await service.cleanupOne(f.receipt.id); const deleted = await repo.get(f.receipt.id);
+      assert.equal(deleted.status, "deleted"); assert.equal(deleted.orderId, f.orderId); assert.equal(deleted.orderNumber, f.orderId);
+      assert.deepEqual((await f.ref.get()).data(), beforeOrder);
+      const alertDoc = (await Promise.all(alerts.map(ref => ref.get()))).find(doc => doc.exists && doc.data().receiptId === f.receipt.id);
+      assert.ok(alertDoc); assert.equal(alertDoc.data().type, "PAYMENT_RECEIPT");
+      await assert.rejects(api.receiptStorage.read(deleted.asset));
+      await service.cleanupOne(f.receipt.id); assert.deepEqual(await repo.get(f.receipt.id), deleted);
+      const localAdmin = await api.createUser("retention-admin", { role: "admin" });
+      assert.equal((await api.request("/admin/orders/" + f.orderId + "/receipts/" + f.receipt.id + "/download", { phone: localAdmin.phoneNumber })).status, 404);
+      const fresh = await f.service.register({ attachmentId: "file" });
+      assert.equal(fresh.code, "PEDIDO_NO_DISPONIBLE"); assert.notEqual(fresh.comprobanteId, f.receipt.id);
+      assert.equal((await f.repo.get(fresh.comprobanteId)).status, "unassigned");
+      assert.deepEqual(await repo.get(f.receipt.id), deleted); assert.deepEqual((await f.ref.get()).data(), beforeOrder);
+    });
+    await t.test("pago concurrente antes del reclamo de borrado conserva el archivo y rollback no elimina bytes", async () => {
+      const f = await fixture("retention-race"); await f.service.register({ comprobanteId: f.receipt.id, orderNumber: f.orderId });
+      const time = f.receipt.createdAt + 30 * 24 * 60 * 60 * 1000;
+      let reachedRead, release, pause = true;
+      const reached = new Promise(resolve => { reachedRead = resolve; }), resume = new Promise(resolve => { release = resolve; });
+      const db = { collection: name => api.db.collection(name), runTransaction: action => api.db.runTransaction(tx => action({
+        get: async ref => { if (ref.path === f.ref.path && pause) { pause = false; reachedRead(); await resume; } return tx.get(ref); },
+        set: tx.set.bind(tx),
+      })) };
+      const repo = createPaymentReceiptRepository({ db, now: () => time });
+      const service = createPaymentReceiptService({ repository: repo, storage: api.receiptStorage, now: () => time });
+      const operation = service.cleanupOne(f.receipt.id);
+      const completed = assert.doesNotReject(operation);
+      await reached; try { await f.ref.update({ status: "paid", paymentVerifiedAt: api.Timestamp.fromMillis(time) }); } finally { release(); }
+      await completed; assert.equal((await repo.get(f.receipt.id)).status, "associated");
+      assert.deepEqual(await api.receiptStorage.read(f.receipt.asset), receiptPng);
+      await f.ref.update({ status: "cancelled", paymentVerifiedAt: api.Timestamp.fromMillis(f.receipt.createdAt) });
+      const rollbackDb = { collection: name => api.db.collection(name), runTransaction: action => api.db.runTransaction(async tx => {
+        await action(tx); throw new Error("Rollback de retención");
+      }) };
+      const rollbackRepo = createPaymentReceiptRepository({ db: rollbackDb, now: () => time });
+      const rollbackService = createPaymentReceiptService({ repository: rollbackRepo, storage: api.receiptStorage, now: () => time });
+      await assert.rejects(rollbackService.cleanupOne(f.receipt.id), /Rollback de retención/);
+      assert.equal((await repo.get(f.receipt.id)).status, "associated");
+      assert.deepEqual(await api.receiptStorage.read(f.receipt.asset), receiptPng);
+    });
   } finally { await api.close(); }
 });

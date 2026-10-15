@@ -12,6 +12,11 @@ export function buildJudgePayload({ criterion, conversation, tools, referenceDat
       ...(item.attachment ? { attachment: {
         type: item.attachment.type, mode: item.attachment.mode,
         description: item.attachment.description ?? null, filename: item.attachment.filename ?? null,
+        ...(item.role === "assistant" && item.attachment.type === "image" && item.attachment.mode === "sent" ? {
+          caption: typeof item.attachment.caption === "string" ? item.attachment.caption : "",
+          ...(typeof item.attachment.productId === "string" ? { productId: item.attachment.productId } : {}),
+          ...(typeof item.attachment.packagingType === "string" ? { packagingType: item.attachment.packagingType } : {}),
+        } : {}),
       } } : {}),
       ...(item.eventId ? { eventId: item.eventId } : {}),
     })),

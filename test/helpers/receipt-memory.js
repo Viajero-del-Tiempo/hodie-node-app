@@ -8,14 +8,19 @@ export function receiptMemoryDatabase({ orders, receipts, alerts, faults = {}, a
   const byId = (name, id) => values(name).find(row => (row.id ?? row.orderNumber) === id) ?? null;
   const ref = (name, id) => ({ id, name, path: name + "/" + id, get: async () => snapshot(name, id) });
   const snapshot = (name, id) => { const value = byId(name, id); return { id, ref: ref(name, id), exists: value !== null, data: () => structuredClone(value ?? undefined) }; };
-  function query(name, conditions = [], limit = Infinity) {
+  function query(name, conditions = [], limit = Infinity, sort = null, cursor = null) {
     return { name, conditions, limitCount: limit,
       doc: id => ref(name, id),
-      where: (key, op, value) => query(name, [...conditions, { key, op, value }], limit),
-      limit: count => query(name, conditions, count),
+      where: (key, op, value) => query(name, [...conditions, { key, op, value }], limit, sort, cursor),
+      limit: count => query(name, conditions, count, sort, cursor),
+      orderBy: key => query(name, conditions, limit, key, cursor),
+      startAfter: doc => query(name, conditions, limit, sort, { id: doc.id, value: doc.data()[sort] }),
       async get() {
-        assertOpen(); const rows = values(name).filter(row => conditions.every(({ key, op, value }) => op === "==" ? row[key] === value
-          : op === "in" ? value.includes(row[key]) : op === "<=" ? row[key] !== null && row[key] <= value : false)).slice(0, limit);
+        assertOpen(); let rows = values(name).filter(row => conditions.every(({ key, op, value }) => op === "==" ? row[key] === value
+          : op === "in" ? value.includes(row[key]) : op === "<=" ? row[key] !== null && row[key] <= value : false));
+        if (sort) rows.sort((a, b) => a[sort] - b[sort] || (a.id ?? a.orderNumber).localeCompare(b.id ?? b.orderNumber));
+        if (cursor) rows = rows.filter(row => row[sort] > cursor.value || row[sort] === cursor.value && (row.id ?? row.orderNumber).localeCompare(cursor.id) > 0);
+        rows = rows.slice(0, limit);
         return { empty: !rows.length, docs: rows.map(row => snapshot(name, row.id ?? row.orderNumber)) };
       },
     };

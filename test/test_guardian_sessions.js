@@ -27,6 +27,16 @@ test("historial de la sesión queda limitado a veinte mensajes", () => {
   const current = { ...state(), messages: Array.from({ length: 30 }, (_, i) => ({ role: "user", content: String(i) })), sessionCutoff: 4 };
   assert.equal(sessionHistory(current).length, 20); assert.equal(sessionHistory(current)[0].content, "10");
 });
+test("fotos entregadas o de envío incierto se conservan en sesión y se olvidan solo al iniciar otra", () => {
+  const current = { ...state(), sentProductImages: [
+    { productId: "test-product", source: "https://example.test/photo.png", caption: "Producto de prueba", delivery: "sent" },
+    { productId: "test-other", source: "https://example.test/other.png", caption: "Otro producto de prueba", delivery: "pending" },
+  ] };
+  assert.deepEqual(prepareSession(current, config.sessionMs, config).state.sentProductImages, current.sentProductImages);
+  assert.deepEqual(prepareSession(current, config.sessionMs + 1, config).state.sentProductImages, []);
+  assert.deepEqual(prepareSession({ ...current, resumeRequestedAt: 1 }, 2, config).state.sentProductImages, []);
+  assert.deepEqual(prepareSession({ ...current, humanHandoffRequired: true }, config.sessionMs + 1, config, { newSession: true }).state.sentProductImages, current.sentProductImages);
+});
 test("puerto de checkpoint restaura estado, distingue namespace y nunca guarda medios", async () => {
   const entries = new Map();
   const graph = { async getState(config) { return { values: entries.get(JSON.stringify(config)) }; },

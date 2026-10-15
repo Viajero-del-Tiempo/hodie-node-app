@@ -13,6 +13,15 @@ test("entrega ráfaga ordenada como un único turno y captura todos los envíos"
     assert.deepEqual(transport.getOutgoing().map(message => [message.turn, message.type]), [[1, "text"], [1, "image"]]);
   } finally { transport.close(); }
 });
+test("transporte registra tipo, producto y pie de foto sin almacenar bytes ni señales internas", async () => {
+  const transport = createFakeWhatsApp();
+  try {
+    transport.beginTurn(1);
+    await transport.sendImage({ source: "https://example.test/photo.png", caption: "Producto Alfa — 100 Gs.", productId: "product-a",
+      data: Buffer.from([1, 2]), signal: new AbortController().signal });
+    assert.deepEqual(transport.getOutgoing(), [{ id: "send-1", turn: 1, type: "image", source: "https://example.test/photo.png", caption: "Producto Alfa — 100 Gs.", productId: "product-a" }]);
+  } finally { transport.close(); }
+});
 test("audio llega como transcripción literal y documentos solo como metadatos", async () => {
   const transport = createFakeWhatsApp();
   try {

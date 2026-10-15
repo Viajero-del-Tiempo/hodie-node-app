@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import YAML from "yaml";
 import { validateContext } from "./initial-state.js";
 import { resolveToolNames } from "./tool-names.js";
+import { validateOptionalCatalogImageUrl } from "../../src/validators/catalog.validator.js";
 
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
 const pathText = path => path.reduce((text, part) => text + (typeof part === "number" ? "[" + part + "]" : (text ? "." : "") + part), "");
@@ -70,6 +71,10 @@ export function parseCases(source, filename = "conversations.yaml") {
                       || !Number.isSafeInteger(pack.price) || pack.price < 0) {
                     fail(["fixtures", key, index, "packagingOptions", packIndex], "Empaque sin tipo, nombre o precio válido");
                   }
+                  if (isObject(pack) && pack.imageUrl !== undefined) {
+                    try { validateOptionalCatalogImageUrl(pack.imageUrl, "imageUrl"); }
+                    catch (error) { fail(["fixtures", key, index, "packagingOptions", packIndex, "imageUrl"], error.message); }
+                  }
                 });
               }
               const ids = new Set();
@@ -84,6 +89,14 @@ export function parseCases(source, filename = "conversations.yaml") {
                 }
                 if (!Number.isSafeInteger(variant.price) || variant.price < 0 || !Number.isSafeInteger(variant.stock) || variant.stock < 0) {
                   fail(path, "Precio y stock deben ser enteros no negativos");
+                }
+                if (variant.imageUrls !== undefined) {
+                  if (!Array.isArray(variant.imageUrls)) fail([...path, "imageUrls"], "Debe ser una lista de URLs de imágenes");
+                  else variant.imageUrls.forEach((url, imageIndex) => {
+                    let valid = false;
+                    try { valid = typeof url === "string" && url === url.trim() && ["http:", "https:"].includes(new URL(url).protocol); } catch { /* Diagnóstico con posición YAML. */ }
+                    if (!valid) fail([...path, "imageUrls", imageIndex], "Debe ser una URL HTTP/HTTPS no vacía");
+                  });
                 }
               });
             }

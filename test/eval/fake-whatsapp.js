@@ -51,10 +51,12 @@ export function createFakeWhatsApp({ mediaResolver = null } = {}) {
       if (typeof text !== "string" || !text.trim()) throw new Error("Mensaje saliente vacío");
       outgoing.push({ id: "send-" + (outgoing.length + 1), turn: currentTurn, type: "text", text });
     },
-    async sendImage({ source, caption = "" }) {
+    async sendImage({ source, caption = "", productId, packagingType }) {
       assertOpen();
       if (typeof source !== "string" || !source) throw new Error("Falta la fuente de la imagen");
-      outgoing.push({ id: "send-" + (outgoing.length + 1), turn: currentTurn, type: "image", source, caption });
+      outgoing.push({ id: "send-" + (outgoing.length + 1), turn: currentTurn, type: "image", source, caption,
+        ...(typeof productId === "string" ? { productId } : {}),
+        ...(typeof packagingType === "string" ? { packagingType } : {}) });
     },
     async sendPdf(_recipient, _path, order) {
       assertOpen();

@@ -36,6 +36,17 @@ test("payload permite solo evidencia pública y excluye prompt, sistema y checkp
   assert.equal(payload.criterion.kind, "must_not");
   assert.equal(payload.snapshots.before.privatePrompt, undefined);
 });
+test("juez recibe tipo, producto, empaque y pie de fotos enviadas, sin bytes ni campos internos", () => {
+  const data = input();
+  data.conversation.push({ role: "assistant", turn: 1, eventId: "send-photo", content: "[imagen enviada]", attachment: {
+    type: "image", mode: "sent", productId: "product-a", packagingType: "pack-a", caption: "Producto Alfa — 100 Gs.", data: Buffer.from([1, 2]), privatePrompt: secret,
+  } });
+  const payload = buildJudgePayload(data), photo = payload.conversation.at(-1);
+  assert.deepEqual(photo.attachment, { type: "image", mode: "sent", description: null, filename: null, productId: "product-a", packagingType: "pack-a", caption: "Producto Alfa — 100 Gs." });
+  assert.equal(JSON.stringify(payload).includes(secret), false); assert.equal(photo.attachment.data, undefined);
+  assert.equal(parseJudgeResponse(JSON.stringify({ verdict: "pass", explanation: "Existe una foto enviada.",
+    evidence: [{ turn: 1, eventId: "send-photo", quote: "Producto Alfa — 100 Gs." }] }), payload).verdict, "pass");
+});
 test("veredictos tienen polaridad clara y rechazan JSON/esquema/evidencia incorrectos", () => {
   const payload = buildJudgePayload(input());
   const valid = { verdict: "pass", explanation: "No ocurrió lo prohibido.", evidence: [] };

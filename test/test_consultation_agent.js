@@ -406,10 +406,16 @@ test("prompt procesa y responde los datos recibidos en el turno antes de usar pe
   assert.ok(prompt.includes("Pedí cédula solo si requiresRecipientDocument:true, sin estimar flete"));
   assert.ok(prompt.includes("Seguí pendientes del servidor en su orden"));
 });
-test("prompt exige precios del resultado al listar y desde para precios que varían entre variantes", async () => {
+test("prompt delega lista y precios al servidor; el modelo solo escribe introducción y cierre opcional", async () => {
   const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
-  assert.ok(prompt.includes("Al listar productos, incluí el precio de cada uno devuelto por buscar_productos"));
-  assert.ok(prompt.includes('si varía entre variantes, indicá "desde" con priceFrom'));
+  assert.ok(prompt.includes('Al listar productos, el servidor informa el precio del catálogo y "desde" cuando varía entre variantes'));
+  assert.ok(prompt.includes("Al listar o recomendar, pasá en responder.productosMostrados los IDs (máximo tres)"));
+  assert.ok(prompt.includes("escribí en texto solo una introducción breve"));
+  assert.ok(prompt.includes("un cierre opcional en cierre; no listes productos ni precios en ninguno"));
+  assert.ok(prompt.includes("El servidor arma introducción, foto o línea por producto con nombre y precio, y cierre"));
+  // La garantía de precio/Desde en el envío real (foto y línea) vive en
+  // test_agent_product_images.js: "principal respeta orden activo, salta
+  // variantes sin fotos y precio desde del servidor en foto o línea".
   assert.equal(prompt.includes("Producto Beta"), false);
 });
 test("prompt explica políticas completas y ofrece una persona ante cualquier condición distinta sin prometer derivación", async () => {

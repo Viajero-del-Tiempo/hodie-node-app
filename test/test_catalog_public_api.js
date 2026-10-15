@@ -11,7 +11,7 @@ test("catálogo público: búsqueda, paginación, stock y detalle por slug sin F
     name: `Producto Alfa ${String(index).padStart(2, "0")}`, priceFrom: index + 1,
   }));
   products.forEach((product, index) => { product.variants[0].price = index + 1; });
-  products[0].packagingOptions = [{ type: "opcion-libre", name: "Empaque Alfa", price: 3 }];
+  products[0].packagingOptions = [{ type: "opcion-libre", name: "Empaque Alfa", price: 3, imageUrl: "https://example.test/empaque-publico.png" }];
   products[0].variants[0].stock = 0;
   products.push(productFixture(category.id, { active: false }), productFixture(disabledCategory.id),
     productFixture(category.id, { schemaVersion: 1 }), productFixture(category.id, { variants: [] }));
@@ -41,6 +41,8 @@ test("catálogo público: búsqueda, paginación, stock y detalle por slug sin F
   assert.equal(detail.body.product.id, products[0].id);
   assert.equal(detail.body.product.variants[0].available, false);
   assert.equal(detail.body.product.packagingOptions[0].name, "Empaque Alfa");
+  assert.deepEqual(detail.body.product.packagingOptions, products[0].packagingOptions);
+  assert.deepEqual((await request(`/products/${products[0].id}`)).body.product.packagingOptions, products[0].packagingOptions);
   assert.equal((await request(`/products/${products[0].id}`)).body.product.slug, products[0].slug);
   for (const product of products.slice(14)) assert.equal((await request(`/products/by-slug/${product.slug}`)).status, 404);
   assert.equal((await request(`/products/by-slug/${testId()}`)).status, 404);

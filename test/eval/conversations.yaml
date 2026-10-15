@@ -85,6 +85,7 @@ fixtures:
       variants:
         - {
             id: km-verde,
+            imageUrls: ["https://example.test/hodie/km-verde.jpg"],
             sku: KM-VER,
             options: { color: "Verde" },
             price: 140000,
@@ -92,6 +93,7 @@ fixtures:
           }
         - {
             id: km-rosa-claro,
+            imageUrls: ["https://example.test/hodie/km-rosa-claro.jpg"],
             sku: KM-RCL,
             options: { color: "Rosa claro" },
             price: 140000,
@@ -99,6 +101,7 @@ fixtures:
           }
         - {
             id: km-blanco,
+            imageUrls: ["https://example.test/hodie/km-blanco.jpg"],
             sku: KM-BLA,
             options: { color: "Blanco" },
             price: 140000,
@@ -106,6 +109,7 @@ fixtures:
           }
         - {
             id: km-rosa-oscuro,
+            imageUrls: ["https://example.test/hodie/km-rosa-oscuro.jpg"],
             sku: KM-ROS,
             options: { color: "Rosa oscuro" },
             price: 140000,
@@ -113,6 +117,7 @@ fixtures:
           }
         - {
             id: km-azul,
+            imageUrls: ["https://example.test/hodie/km-azul.jpg"],
             sku: KM-AZU,
             options: { color: "Azul" },
             price: 140000,
@@ -120,6 +125,7 @@ fixtures:
           }
         - {
             id: km-negro,
+            imageUrls: ["https://example.test/hodie/km-negro.jpg"],
             sku: KM-NEG,
             options: { color: "Negro" },
             price: 140000,
@@ -128,9 +134,9 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 25, allowsImage: true }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 45000 }
-        - { type: bolsa, name: "Bolsa decorativa", price: 20000 }
-        - { type: envoltorio, name: "Envoltorio", price: 10000 }
+        - { type: caja, name: "Caja de regalo", price: 45000, imageUrl: "https://example.test/hodie/empaques/kit-mate-caja.jpg" }
+        - { type: bolsa, name: "Bolsa decorativa", price: 20000, imageUrl: "https://example.test/hodie/empaques/kit-mate-bolsa.jpg" }
+        - { type: envoltorio, name: "Envoltorio", price: 10000, imageUrl: "https://example.test/hodie/empaques/kit-mate-envoltorio.jpg" }
 
     - id: termo-650
       name: "Termo 650 ml"
@@ -146,6 +152,7 @@ fixtures:
       variants:
         - {
             id: t650-rosa,
+            imageUrls: ["https://example.test/hodie/t650-rosa.jpg"],
             sku: T650-ROS,
             options: { color: "Rosa" },
             price: 67000,
@@ -153,6 +160,7 @@ fixtures:
           }
         - {
             id: t650-naranja,
+            imageUrls: ["https://example.test/hodie/t650-naranja.jpg"],
             sku: T650-NAR,
             options: { color: "Naranja" },
             price: 67000,
@@ -160,6 +168,7 @@ fixtures:
           }
         - {
             id: t650-gris,
+            imageUrls: ["https://example.test/hodie/t650-gris.jpg"],
             sku: T650-GRI,
             options: { color: "Gris" },
             price: 67000,
@@ -167,6 +176,7 @@ fixtures:
           }
         - {
             id: t650-verde,
+            imageUrls: ["https://example.test/hodie/t650-verde.jpg"],
             sku: T650-VER,
             options: { color: "Verde" },
             price: 67000,
@@ -174,6 +184,7 @@ fixtures:
           }
         - {
             id: t650-azul,
+            imageUrls: ["https://example.test/hodie/t650-azul.jpg"],
             sku: T650-AZU,
             options: { color: "Azul" },
             price: 67000,
@@ -181,6 +192,7 @@ fixtures:
           }
         - {
             id: t650-negro,
+            imageUrls: ["https://example.test/hodie/t650-negro.jpg"],
             sku: T650-NEG,
             options: { color: "Negro" },
             price: 67000,
@@ -189,8 +201,8 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 20, allowsImage: true }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 35000 }
-        - { type: envoltorio, name: "Envoltorio", price: 5000 }
+        - { type: caja, name: "Caja de regalo", price: 35000, imageUrl: "https://example.test/hodie/empaques/termo-650-caja.jpg" }
+        - { type: envoltorio, name: "Envoltorio", price: 5000, imageUrl: "https://example.test/hodie/empaques/termo-650-envoltorio.jpg" }
 
     - id: vaso-abridor
       name: "Vaso con abridor"
@@ -206,6 +218,7 @@ fixtures:
       variants:
         - {
             id: vaso-negro,
+            imageUrls: ["https://example.test/hodie/vaso-negro.jpg"],
             sku: VASO-NEG,
             options: { color: "Negro" },
             price: 35000,
@@ -214,8 +227,8 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 30, allowsImage: true }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 35000 }
-        - { type: envoltorio, name: "Envoltorio", price: 5000 }
+        - { type: caja, name: "Caja de regalo", price: 35000, imageUrl: "https://example.test/hodie/empaques/vaso-abridor-caja.jpg" }
+        - { type: envoltorio, name: "Envoltorio", price: 5000, imageUrl: "https://example.test/hodie/empaques/vaso-abridor-envoltorio.jpg" }
 
     - id: billetera-femenina
       name: "Billetera femenina Chenson"
@@ -227,6 +240,7 @@ fixtures:
       variants:
         - {
             id: bf-marron-claro,
+            imageUrls: ["https://example.test/hodie/bf-marron-claro.jpg"],
             sku: BF-MCL,
             options: { color: "Marrón claro" },
             price: 55000,
@@ -234,6 +248,7 @@ fixtures:
           }
         - {
             id: bf-marron,
+            imageUrls: ["https://example.test/hodie/bf-marron.jpg"],
             sku: BF-MAR,
             options: { color: "Marrón" },
             price: 55000,
@@ -241,6 +256,7 @@ fixtures:
           }
         - {
             id: bf-negro,
+            imageUrls: ["https://example.test/hodie/bf-negro.jpg"],
             sku: BF-NEG,
             options: { color: "Negro" },
             price: 55000,
@@ -249,9 +265,9 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 20, allowsImage: false }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 25000 }
-        - { type: bolsa, name: "Bolsa decorativa", price: 10000 }
-        - { type: envoltorio, name: "Envoltorio", price: 5000 }
+        - { type: caja, name: "Caja de regalo", price: 25000, imageUrl: "https://example.test/hodie/empaques/billetera-femenina-caja.jpg" }
+        - { type: bolsa, name: "Bolsa decorativa", price: 10000, imageUrl: "https://example.test/hodie/empaques/billetera-femenina-bolsa.jpg" }
+        - { type: envoltorio, name: "Envoltorio", price: 5000, imageUrl: "https://example.test/hodie/empaques/billetera-femenina-envoltorio.jpg" }
 
     - id: billetera-masculina
       name: "Billetera masculina Chenson"
@@ -263,6 +279,7 @@ fixtures:
       variants:
         - {
             id: bm-negro,
+            imageUrls: ["https://example.test/hodie/bm-negro.jpg"],
             sku: BM-NEG,
             options: { color: "Negro" },
             price: 59000,
@@ -271,8 +288,8 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 20, allowsImage: false }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 25000 }
-        - { type: bolsa, name: "Bolsa decorativa", price: 10000 }
+        - { type: caja, name: "Caja de regalo", price: 25000, imageUrl: "https://example.test/hodie/empaques/billetera-masculina-caja.jpg" }
+        - { type: bolsa, name: "Bolsa decorativa", price: 10000, imageUrl: "https://example.test/hodie/empaques/billetera-masculina-bolsa.jpg" }
         - { type: envoltorio, name: "Envoltorio", price: 5000 }
 
     - id: neceser
@@ -284,6 +301,7 @@ fixtures:
       variants:
         - {
             id: nec-negro,
+            imageUrls: ["https://example.test/hodie/nec-negro.jpg"],
             sku: NEC-NEG,
             options: { color: "Negro" },
             price: 35000,
@@ -292,7 +310,7 @@ fixtures:
       customization:
         { allowed: true, allowsText: true, maxChars: 20, allowsImage: true }
       packagingOptions:
-        - { type: caja, name: "Caja de regalo", price: 35000 }
+        - { type: caja, name: "Caja de regalo", price: 35000, imageUrl: "https://example.test/hodie/empaques/neceser-caja.jpg" }
 
     - id: joyero
       name: "Joyero cuadrado"
@@ -303,6 +321,7 @@ fixtures:
       variants:
         - {
             id: joy-negro,
+            imageUrls: ["https://example.test/hodie/joy-negro.jpg"],
             sku: JOY-NEG,
             options: { color: "Negro" },
             price: 47000,
@@ -446,8 +465,8 @@ cases:
     expect:
       tools_called: [buscar_productos]
       must:
-        - Muestra pocas opciones (como máximo 5) relacionadas con graduación o regalo para él, con su precio.
-        - Ofrece mostrar fotos o dar más detalles.
+        - Muestra como máximo 3 opciones relacionadas con graduación o regalo para él, con su precio.
+        - Cada opción mostrada tiene su foto en la conversación, enviada en este mensaje o antes.
       must_not:
         - Lista todo el catálogo.
         - Recomienda productos que no existen en el catálogo.
@@ -1429,3 +1448,36 @@ cases:
       tools_called: [derivar]
       tools_not_called: [crear_pedido]
       handoff: "si"
+
+  # ------------------------------------------------------------------
+  # Fotos automáticas (entrega 5C)
+  # ------------------------------------------------------------------
+  - id: P-08
+    category: producto
+    turns:
+      - user: "¿Tienen caja para regalar un termo de mate? ¿Me pasás una foto?"
+    expect:
+      tools_called: [buscar_productos]
+      must:
+        - Informa la caja para termo de mate con su precio y medidas.
+        - Aclara que por ahora no tiene una foto para enviar.
+      must_not:
+        - Envía o promete una foto que no existe.
+      handoff: "no"
+
+  - id: Q-06
+    category: personalizacion
+    context:
+      carrito:
+        lineas:
+          - { producto: billetera-masculina, variante: bm-negro, cantidad: 1, texto: "AG" }
+    turns:
+      - user: "¿Cómo queda la billetera con cada empaque? Mandame fotos"
+    expect:
+      tools_not_called: [crear_pedido]
+      must:
+        - Envía la foto de la billetera con la caja y con la bolsa, cada una con su precio.
+        - Menciona el envoltorio con su precio, aunque no tenga foto.
+      must_not:
+        - Afirma haber enviado una foto del envoltorio.
+      handoff: "no"

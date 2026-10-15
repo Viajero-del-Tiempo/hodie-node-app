@@ -76,15 +76,18 @@ test("estado y stock atómicos; transiciones repetidas son idempotentes", async 
   const readOrder = () => f.documents.get(`orders/${f.order.id}`);
   await f.service.transitionOrderStatus(f.order.id, "paid");
   assert.equal(readOrder().status, "paid");
+  assert.equal(readOrder().paymentVerifiedAt, 123);
   assert.equal(f.product().variants[0].stock, 6);
   assert.equal((await f.service.transitionOrderStatus(f.order.id, "paid")).changed, false);
   await f.service.transitionOrderStatus(f.order.id, "preparing");
+  assert.equal(readOrder().paymentVerifiedAt, 123);
   assert.equal(f.product().variants[0].stock, 6);
   await f.service.transitionOrderStatus(f.order.id, "pending");
   assert.equal(f.product().variants[0].stock, 8);
   await f.service.transitionOrderStatus(f.order.id, "shipped");
   assert.equal(f.product().variants[0].stock, 6);
   await f.service.transitionOrderStatus(f.order.id, "cancelled");
+  assert.equal(readOrder().paymentVerifiedAt, 123);
   assert.equal(f.product().variants[0].stock, 8);
   assert.equal((await f.service.transitionOrderStatus(f.order.id, "cancelled")).changed, false);
   await assert.rejects(f.service.transitionOrderStatus(f.order.id, "paid"), error => error.statusCode === 400);
