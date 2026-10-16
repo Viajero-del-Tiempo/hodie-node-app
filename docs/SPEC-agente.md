@@ -258,8 +258,15 @@ Las reglas de derivación y de seguridad se agregan al prompt tal como están en
   petición posterior. Las reservas también se olvidan al empezar otra sesión.
 - No se agregan fotos a resúmenes de cotización (completos o informativos),
   mensajes de pedido/pago o acuses de comprobantes. Un turno que consulta políticas
-  o estado de pedido también inhibe fotos automáticas, aunque el modelo pase IDs;
-  una recomendación separada en un turno posterior puede mostrarlas.
+  o estado de pedido inhibe fotos automáticas hasta una lectura válida posterior
+  del catálogo; así una consulta de política seguida de búsqueda puede presentar
+  la lista y su cierre en ese mismo turno. Sin contenido válido no se envía su
+  introducción: LISTA_NO_DISPONIBLE permite corregir la respuesta. Introducción con
+  dos puntos sin IDs, o cierre sin lista: LISTA_FALTANTE. Ambos son datos, no cierres.
+  Para un precio puntual de un solo producto se permite el precio de la herramienta
+  en texto, sin productosMostrados. Al rechazar condiciones distintas, terminar con
+  una pregunta ofreciendo una persona, en cierre si hay lista. Al pedir comprobante,
+  aclarar siempre que el equipo verifica el pago manualmente.
 - Fallos de consulta, checkpoint o envío de foto quedan registrados por producto
   y en el resultado, sin derivación ni contador técnico. No hay reintentos de
   fotos dentro del turno. Las cancelaciones/plazos vigentes siguen cortando efectos.

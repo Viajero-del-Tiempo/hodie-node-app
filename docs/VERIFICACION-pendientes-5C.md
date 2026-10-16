@@ -16,9 +16,76 @@ productImages.textOnly informa esas líneas junto a sent/skipped/failed.
 
 El esquema conserva máximo tres IDs distintos y el máximo combinado de tres
 productos/empaques. Rechaza más de tres antes de enviar. Cierre solo corresponde
-a listas; cotizaciones, pedidos/pagos, acuses, políticas y estados inhiben fotos,
-líneas adicionales y cierre de lista. Los mensajes de pago siguen exclusivos del
+a listas; cotizaciones, pedidos/pagos y acuses inhiben fotos, líneas adicionales
+y cierre de lista. Políticas/estados bloquean hasta una lectura válida posterior
+del catálogo. Los mensajes de pago siguen exclusivos del
 servidor. El runner/juez ya registran los mensajes y las fotos en ese orden.
+
+## Corrección de seguridad de entrega 6
+
+Diagnóstico de la corrida 2026-10-15T16-49-11-216Z-c804003c, sin nueva evaluación:
+trace.jsonl, líneas 1600..1602, registra consultar_politicas, buscar_productos y
+responder. Este último sí incluye productosMostrados y una pregunta de oferta
+humana en cierre. El resultado indica CONTENIDO_NO_APLICA y ninguna foto/línea:
+el bloqueo de la consulta de política anterior anulaba también el cierre.
+
+Una búsqueda con resultados o un detalle válido posterior permite presentar la
+lista en ese turno. Consultas vacías/fallidas y lecturas canceladas no habilitan
+presentaciones. Cotizaciones, mensajes de pedido/pago y acuses siguen excluidos.
+La introducción se difiere hasta resolver una fila válida del catálogo: si la
+lista sigue bloqueada o no tiene elementos válidos, LISTA_NO_DISPONIBLE vuelve
+al modelo sin introducción ni cierre. La reserva durable anterior a cada imagen,
+la deduplicación y el fallback textual por foto ausente/fallida no cambian.
+
+Introducción que termina en dos puntos sin IDs (incluido Markdown/arrays vacíos),
+o cierre sin lista: LISTA_FALTANTE. Ningún error cuenta como cierre exitoso: el
+modelo puede corregirlo dentro del mismo turno, con los límites vigentes. Los
+resúmenes/preguntas del servidor completan sus propias introducciones y los
+mensajes durables de pedido/pago conservan prioridad. Un precio puntual de un
+solo producto puede responderse directamente con el dato de la herramienta.
+
+Prompt: terminar el rechazo de una condición distinta con una pregunta concreta
+ofreciendo una persona; en cierre si hay lista. Mencionar quién decide no basta.
+Siempre que se pide un comprobante se aclara la verificación manual del equipo.
+
+Pruebas: política -> búsqueda/detalle -> introducción/foto/cierre; lista omitida
+corregida por el modelo en el mismo turno; IDs inexistentes/lecturas fallidas sin
+introducción huérfana; lectura vacía o cancelada sin levantar bloqueo; precio
+puntual permitido; exclusiones de políticas/estados/quotes/pago mantenidas; reglas
+de prompt de oferta y verificación manual. Las expectativas anteriores que
+admitían introducciones sin lista se reemplazan por error sin ningún envío y
+corrección explícita del modelo, manteniendo las comprobaciones de exclusión.
+
+Archivos de esta corrección:
+
+```text
+src/agents/consultation/read-tools.js
+src/agents/consultation/product-images.js
+src/agents/consultation/terminal.js
+src/agents/consultation/tool-registry.js
+src/agents/prompts/agente.md
+test/test_consultation_agent.js
+test/test_agent_product_images.js
+test/test_agent_packaging_images.js
+docs/CONTEXT.md
+docs/SPEC-agente.md
+docs/VERIFICACION-agente-5C.md
+docs/VERIFICACION-pendientes-5C.md
+```
+
+Desde /home/arnaldoguerrero/Hodie/hodie-node-app:
+
+```bash
+npm run test:agent:unit
+node --test test/test_agent_product_images.js test/test_agent_product_images_runner.js test/test_agent_packaging_images.js test/test_agent_packaging_images_runner.js
+npm run test:agent:purchase:unit
+node --test test/test_agent_receipts.js test/test_receipt_runner.js
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json --cases SEC-01,SEC-05,C-04,P-08
+npm run test:eval -- --agent real --judge llm --media test/eval/media/guardian-manifest.json
+```
+
+No se ejecutan tests ni evaluaciones por el asistente. No se editan YAML, checks,
+umbrales, pensamiento ni límites de tiempo.
 
 ## Retención decidida
 

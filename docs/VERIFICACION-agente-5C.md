@@ -43,9 +43,10 @@ caption. El juez recibe esa evidencia pública por evento, sin bytes. El loader
 conserva imageUrls opcional en variantes y diagnostica listas/URLs mal formadas.
 No se editan YAML, checks, umbrales, pensamiento ni tiempos.
 
-La cobertura incluye cotización completa, incompleta e informativa; un turno de
-política/estado inhibe fotos en ese turno, pero permite recomendaciones en el
-siguiente. Incluye cancelación durante un envío: no acepta la respuesta tardía,
+La cobertura incluye cotización completa, incompleta e informativa; consultar
+política/estado inhibe fotos hasta una lectura válida posterior del catálogo.
+Sin elementos válidos devuelve un error antes de enviar introducción/cierre.
+Incluye cancelación durante un envío: no acepta la respuesta tardía,
 no inicia otra foto ni escribe después del cierre.
 
 ## Comandos

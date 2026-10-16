@@ -59,8 +59,9 @@ export function createProductImages(runtime) {
   }
   const service = {
     excludeForTurn() { excludedTurn = turnId(); },
+    allowForTurn() { excludedTurn = undefined; },
     canPresent(allowed = true) { return allowed && excludedTurn !== turnId(); },
-    async show(productIds, { signal, allowed = true } = {}) {
+    async show(productIds, { signal, allowed = true, beforePresentation } = {}) {
       const result = { sent: [], skipped: [], failed: [], textOnly: [] };
       for (const productId of productIds.slice(0, MAX_SHOWN_PRODUCTS)) {
         signal?.throwIfAborted();
@@ -73,6 +74,8 @@ export function createProductImages(runtime) {
           caption = productImageCaption(product);
         } catch { signal?.throwIfAborted(); record("PRODUCT_IMAGE_LOOKUP_FAILED", productId);
           result.failed.push({ productId, code: "PRODUCT_IMAGE_LOOKUP_FAILED" }); continue; }
+        // El cierre envía la introducción recién cuando hay una fila válida.
+        await beforePresentation?.(); signal?.throwIfAborted();
         if (source) {
           const outcome = await sendOne(productId, source, caption, signal);
           for (const key of ["sent", "skipped", "failed"]) if (outcome[key]) result[key].push(outcome[key]);
@@ -85,7 +88,7 @@ export function createProductImages(runtime) {
       }
       return result;
     },
-    async showPackaging(requests, { signal, allowed = true } = {}) {
+    async showPackaging(requests, { signal, allowed = true, beforePresentation } = {}) {
       const result = { sent: [], skipped: [], failed: [], textOnly: [] }, pictures = [];
       for (const request of requests.slice(0, MAX_SHOWN_PRODUCTS)) {
         signal?.throwIfAborted();
@@ -104,6 +107,7 @@ export function createProductImages(runtime) {
           else { record("PACKAGING_IMAGE_LOOKUP_FAILED", productId, metadata); result.failed.push({ productId, ...metadata, code: "PACKAGING_IMAGE_LOOKUP_FAILED" }); }
         }
       }
+      if (result.textOnly.length || pictures.length) { await beforePresentation?.(); signal?.throwIfAborted(); }
       if (result.textOnly.length) {
         try { await transport.sendText(result.textOnly.map(row => row.caption).join("\n")); signal?.throwIfAborted(); }
         catch { signal?.throwIfAborted();

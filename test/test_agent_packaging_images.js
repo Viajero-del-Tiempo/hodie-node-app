@@ -78,27 +78,41 @@ test("contexto distingue foto del producto solo y del empaque; opciones inexiste
     const context = JSON.parse(messages[1].content.split("\n").slice(1).join("\n"));
     assert.deepEqual(context.productPhotosSent, []); assert.deepEqual(context.packagingPhotosSent, [{ productId: "product-a", packagingType: "pack/a" }]);
     return reply("responder", response([request("missing"), request("pack-b", "not-this-product")]));
+  }, messages => {
+    assert.equal(JSON.parse(messages.at(-1).content).code, "LISTA_NO_DISPONIBLE");
+    return reply("responder", { texto: "Esas opciones no están disponibles.", entendido: true });
   }]);
   const f = await consultationFixture({ fixtures: packagingImagesFixtures(), model });
   try {
-    await f.run(); await f.run({ user: "Otras opciones" }, 2);
+    await f.run(); const result = await f.run({ user: "Otras opciones" }, 2);
+    assert.deepEqual(result.diagnostics, []);
     assert.equal(f.transport.getOutgoing().filter(item => item.type === "image").length, 1);
-    assert.deepEqual(f.world.getEvents().at(-1).result.packagingImages.skipped.map(item => item.reason), ["EMPAQUE_INEXISTENTE", "VARIANTE_INACTIVA"]);
+    const rejected = f.world.getEvents().find(event => event.result?.code === "LISTA_NO_DISPONIBLE");
+    assert.deepEqual(rejected.result.packagingImages.skipped.map(item => item.reason), ["EMPAQUE_INEXISTENTE", "VARIANTE_INACTIVA"]);
   } finally { await close(f); }
 });
 test("cotización, políticas y estado de pedido inhiben fotos/líneas de empaque aunque el modelo incluya empaquesMostrados", async () => {
   for (const [tool, args] of [["cotizar", {}], ["consultar_politicas", {}], ["estado_pedido", { orderNumber: "test-order-a" }]]) {
     const f = await consultationFixture({ fixtures: packagingImagesFixtures(), context: readyContext(),
       model: scriptedModel([reply(tool, args), messages => { const data = JSON.parse(messages.at(-1).content);
-        return reply("responder", { ...response([request("pack/a"), request("pack-c")]), ...(data.quoteId ? { quoteIdMostrado: data.quoteId } : {}) }); }]) });
+        return reply("responder", { ...response([request("pack/a"), request("pack-c")]), ...(data.quoteId ? { quoteIdMostrado: data.quoteId } : {}) }); }, messages => {
+        assert.equal(JSON.parse(messages.at(-1).content).code, "LISTA_NO_DISPONIBLE");
+        assert.deepEqual(f.transport.getOutgoing(), []);
+        return reply("responder", { texto: "Respuesta de la política o estado solicitado.", entendido: true });
+      }]) });
     try {
       await f.run(); assert.deepEqual(f.transport.getOutgoing().map(item => item.type), ["text"]);
-      assert.equal(f.world.getEvents().at(-1).result.packagingImages.textOnly.length, 0);
-      assert.ok(f.world.getEvents().at(-1).result.packagingImages.skipped.every(item => item.reason === "CONTENIDO_NO_APLICA"));
+      if (tool === "cotizar") {
+        assert.equal(f.world.getEvents().at(-1).result.packagingImages.textOnly.length, 0);
+        assert.ok(f.world.getEvents().at(-1).result.packagingImages.skipped.every(item => item.reason === "CONTENIDO_NO_APLICA"));
+      } else {
+        assert.equal(f.world.getEvents()[1].result.code, "LISTA_NO_DISPONIBLE");
+        assert.equal(f.transport.getOutgoing()[0].text, "Respuesta de la política o estado solicitado.");
+      }
     } finally { await close(f); }
   }
 });
-test("pedido/pago y acuse de comprobante solo envían el mensaje del servidor, sin fotos ni líneas de empaques", async () => {
+test("pedido/pago y acuse de comprobante registran cierre descartado y solo envían el mensaje del servidor", async () => {
   for (const kind of ["order", "receipt"]) {
     let state = { messages: [], consecutiveMisunderstandings: 0 };
     const transport = createFakeWhatsApp(), customerMessage = "Mensaje exclusivo del servidor de prueba.";
@@ -108,9 +122,10 @@ test("pedido/pago y acuse de comprobante solo envían el mensaje del servidor, s
         : { paymentReceipts: { acknowledgementForTurn: () => ({ id: "test-receipt", text: customerMessage }), markAcknowledged: () => {} } }),
     };
     try {
-      const result = await createResponder(runtime)(response([request("pack/a"), request("pack-c")]));
+      const result = await createResponder(runtime)({ ...response([request("pack/a"), request("pack-c")]), cierre: "¿Querés agregar otro empaque?" });
       assert.equal(result.code, "OK"); assert.equal(result[kind === "order" ? "orderMessageAdded" : "receiptAcknowledgementAdded"], true);
       assert.deepEqual(transport.getOutgoing().map(item => [item.type, item.text]), [["text", customerMessage]]);
+      assert.deepEqual(result.descartados, [{ campo: "cierre", motivo: "MENSAJE_SERVIDOR" }]);
       assert.deepEqual(result.packagingImages.sent, []); assert.deepEqual(result.packagingImages.failed, []);
       assert.deepEqual(result.packagingImages.textOnly, []);
       assert.deepEqual(result.packagingImages.skipped, ["pack/a", "pack-c"].map(packagingType => ({ productId: "product-a", packagingType, reason: "CONTENIDO_NO_APLICA" })));

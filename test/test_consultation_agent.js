@@ -155,6 +155,31 @@ test("errores de argumentos se devuelven al modelo; responder inválido no cuent
     assert.equal(checks.find(check => check.kind === "turn_end").pass, true);
   } finally { f.close(); }
 });
+test("LISTA_FALTANTE vuelve como dato al modelo y permite completar la lista en el mismo turno sin enviar la introducción incompleta", async () => {
+  for (const args of [
+    { texto: "Estas son las opciones:" },
+    { texto: "Opciones:", cierre: "¿Querés elegir?" },
+    { texto: "**Opciones:**  ", productosMostrados: [] },
+    { texto: "Opciones：", productosMostrados: [], empaquesMostrados: [] },
+  ]) {
+    const model = scriptedModel([reply("ver_producto", { productId: "product-a" }),
+      reply("responder", { ...args, entendido: true }), messages => {
+        const error = JSON.parse(messages.at(-1).content);
+        assert.equal(error.code, "LISTA_FALTANTE"); assert.equal(error.field, args.cierre ? "cierre" : "productosMostrados");
+        assert.deepEqual(f.transport.getOutgoing(), []);
+        return reply("responder", { texto: "Esta es la opción:", entendido: true, productosMostrados: ["product-a"], cierre: "¿Querés seguir?" });
+      }]);
+    const f = await consultationFixture({ model });
+    try {
+      const result = await f.run();
+      assert.deepEqual(result.diagnostics, []); assert.equal(f.model.invocations.length, 3);
+      assert.deepEqual(f.world.getEvents().map(event => [event.name, event.result.code]),
+        [["ver_producto", "OK"], ["responder", "LISTA_FALTANTE"], ["responder", "OK"]]);
+      assert.deepEqual(f.transport.getOutgoing().map(item => item.text), ["Esta es la opción:", "Producto Alfa — 100 Gs.", "¿Querés seguir?"]);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+    } finally { await f.agent.dispose(); f.close(); }
+  }
+});
 test("siete lecturas y el cierre usan ocho herramientas pero solo dos invocaciones al modelo", async () => {
   const calls = Array.from({ length: 7 }, (_, i) => ({ id: "read-" + i, name: "ver_producto", args: { productId: "product-a" }, type: "tool_call" }));
   const model = scriptedModel([new AIMessage({ content: "", tool_calls: calls,
@@ -413,6 +438,8 @@ test("prompt delega lista y precios al servidor; el modelo solo escribe introduc
   assert.ok(prompt.includes("escribí en texto solo una introducción breve"));
   assert.ok(prompt.includes("un cierre opcional en cierre; no listes productos ni precios en ninguno"));
   assert.ok(prompt.includes("El servidor arma introducción, foto o línea por producto con nombre y precio, y cierre"));
+  assert.ok(prompt.includes("productosMostrados es para listas y recomendaciones"));
+  assert.ok(prompt.includes("Para el precio de un solo producto puntual podés escribir en texto el precio devuelto por la herramienta"));
   // La garantía de precio/Desde en el envío real (foto y línea) vive en
   // test_agent_product_images.js: "principal respeta orden activo, salta
   // variantes sin fotos y precio desde del servidor en foto o línea".
@@ -429,5 +456,16 @@ test("prompt explica políticas completas y ofrece una persona ante cualquier co
   assert.ok(prompt.includes("lo vigente consultado y ofrecé hablar con una persona del equipo sin afirmar derivación"));
   assert.ok(prompt.includes("desde el chat no podés modificarlos e informá el precio vigente de las herramientas"));
   assert.ok(prompt.includes("solo afirmá que son fijos si lo indica consultar_politicas"));
+  assert.ok(prompt.includes("Al rechazar un descuento o una condición distinta, terminá el mensaje ofreciendo hablar con una persona mediante una pregunta concreta"));
+  assert.ok(prompt.includes("¿Querés que te comunique con alguien del equipo?"));
+  assert.ok(prompt.includes("Si usás una lista, poné esa pregunta en cierre"));
+  assert.ok(prompt.includes("Mencionar que una persona decide no es ofrecer; no afirmes derivación"));
   assert.equal(prompt.includes("Condición ficticia Alfa"), false);
+});
+test("prompt exige aclarar verificación manual cada vez que pide un comprobante", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  const receipts = prompt.split("COMPROBANTES")[1];
+  assert.ok(receipts.includes("Siempre que pidas un comprobante, aclarale que el equipo verifica el pago manualmente"));
+  assert.ok(receipts.includes("decir solo que es para registrarlo no alcanza"));
+  assert.ok(receipts.includes("No leas importes como verdad ni confirmes pagos"));
 });

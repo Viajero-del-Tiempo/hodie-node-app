@@ -40,7 +40,7 @@ export const CONSULTATION_SCHEMAS = Object.freeze({
     orderNumber: string("Número indicado por el cliente; el servidor comprueba dueño y estado pendiente.") }),
   derivar: object({ motivo: string("Motivo de la solicitud humana o del reclamo; sin datos inventados."),
     texto: string("Mensaje al cliente: una persona del equipo seguirá por este chat, sin promesas de tiempo.") }, ["motivo", "texto"]),
-  responder: object({ texto: string("Respuesta final; con productosMostrados, solo una introducción breve, sin listar productos ni precios."),
+  responder: object({ texto: string("Respuesta final; con productosMostrados, solo introducción breve, sin listar productos ni precios. Para un precio puntual sin lista, podés escribir el precio de la herramienta."),
     cierre: string("Cierre opcional de la lista, después de las fotos/líneas del servidor; sin listar productos ni precios."),
     entendido: { type: "boolean", description: "Si se entendió el mensaje del cliente." },
     fueraDeAlcance: { type: "boolean", description: "true si pide algo que la tienda no ofrece, aunque lo entendiste. Stock insuficiente no implica fuera de alcance. Por defecto false." },
@@ -109,7 +109,10 @@ export function createToolRegistry(handlers) {
     if (!Object.hasOwn(CONSULTATION_SCHEMAS, name)) return { code: "HERRAMIENTA_NO_DISPONIBLE", message: "Esta herramienta no está disponible." };
     const error = validate(CONSULTATION_SCHEMAS[name], args);
     if (error) return error;
-    if (args.cierre !== undefined && !(args.productosMostrados?.length || args.empaquesMostrados?.length)) return invalid("cierre", "El cierre corresponde a una lista de productos o empaques.");
+    if (args.cierre !== undefined && !(args.productosMostrados?.length || args.empaquesMostrados?.length)) return {
+      code: "LISTA_FALTANTE", field: "cierre",
+      message: "El cierre corresponde a una lista: pasá productosMostrados o empaquesMostrados. Para responder un precio puntual sin lista, escribí la respuesta completa en texto.",
+    };
     if (name === "registrar_comprobante" && Number(Object.hasOwn(args, "attachmentId")) + Number(Object.hasOwn(args, "comprobanteId")) !== 1) return invalid("attachmentId", "Indicá attachmentId o comprobanteId, uno solo.");
     if ((args.productosMostrados?.length ?? 0) + (args.empaquesMostrados?.length ?? 0) > MAX_SHOWN_PRODUCTS) return invalid("empaquesMostrados", "Mostrá hasta tres productos o empaques en total.");
     const packagingKeys = new Set();

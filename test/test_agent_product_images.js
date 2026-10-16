@@ -11,6 +11,8 @@ import { prepareSession } from "../src/agents/guardian/session.js";
 import { createGuardianConfig } from "../src/agents/guardian/config.js";
 import { readyContext } from "./helpers/purchase-fixtures.js";
 import { createProductImages } from "../src/agents/consultation/product-images.js";
+import { createReadTools } from "../src/agents/consultation/read-tools.js";
+import { ORDER_CONFIRMATION_QUESTION } from "../src/services/order-quote.service.js";
 
 const presented = ["product-a", "product-b", "product-c"];
 const response = (productosMostrados = presented) => ({ texto: "Opciones del catálogo de prueba.", entendido: true, productosMostrados });
@@ -142,7 +144,7 @@ test("resultado del cierre informa fotos enviadas y el siguiente contexto del mo
     assert.equal(model.invocations.length, 2); assert.equal(f.transport.getOutgoing().filter(item => item.type === "image").length, 1);
   } finally { await close(f); }
 });
-test("consulta/checkpoint fallidos de fotos no invalidan texto y no envían sin reserva durable", async () => {
+test("lectura fallida devuelve error sin introducción; checkpoint fallido conserva lista textual sin enviar foto sin reserva", async () => {
   for (const failure of ["lookup", "checkpoint"]) {
     let state = { messages: [], consecutiveMisunderstandings: 0 }; const events = [], transport = createFakeWhatsApp();
     const product = { ...productsWithImages().products[0], variants: productsWithImages().products[0].variants.map(row => ({ ...row, active: true })) };
@@ -150,8 +152,8 @@ test("consulta/checkpoint fallidos de fotos no invalidan texto y no envían sin 
       setState: next => { if (failure === "checkpoint" && next.sentProductImages?.length) throw new Error("Checkpoint fallido de prueba"); state = next; },
       catalog: { getProduct: () => { if (failure === "lookup") throw new Error("Lectura fallida de prueba"); return product; } } });
     try {
-      const result = await respond(response(["product-a"])); assert.equal(result.code, "OK");
-      assert.deepEqual(transport.getOutgoing().map(item => item.type), failure === "lookup" ? ["text"] : ["text", "text"]);
+      const result = await respond(response(["product-a"])); assert.equal(result.code, failure === "lookup" ? "LISTA_NO_DISPONIBLE" : "OK");
+      assert.deepEqual(transport.getOutgoing().map(item => item.type), failure === "lookup" ? [] : ["text", "text"]);
       if (failure === "checkpoint") assert.equal(transport.getOutgoing()[1].text, "Producto de prueba 1 — 100 Gs.");
       const code = failure === "lookup" ? "PRODUCT_IMAGE_LOOKUP_FAILED" : "PRODUCT_IMAGE_CHECKPOINT_FAILED";
       assert.deepEqual(result.productImages.failed, [{ productId: "product-a", code }]); assert.equal(events[0].code, code);
@@ -187,32 +189,94 @@ test("productosMostrados valida tope, tipo, IDs y unicidad antes de enviar texto
     assert.equal(schema.required.includes("productosMostrados"), false);
   } finally { await close(f); }
 });
-test("políticas y estado de pedido inhiben fotos incluso con IDs aportados por el modelo", async () => {
+test("políticas y estado rechazan listas sin lectura posterior de catálogo, antes de enviar introducción o cierre", async () => {
   for (const [name, args] of [["consultar_politicas", {}], ["estado_pedido", { orderNumber: "test-order-a" }]]) {
     const f = await consultationFixture({ fixtures: productsWithImages(), context: { telefonoCliente: "595900000001" },
-      model: scriptedModel([reply(name, args), reply("responder", { ...response(["product-a"]), cierre: "Este cierre no corresponde a la política o estado." }), reply("responder", response(["product-a"]))]) });
+      model: scriptedModel([reply(name, args), reply("responder", { ...response(["product-a"]), cierre: "Este cierre no corresponde a la política o estado." }), messages => {
+        assert.equal(JSON.parse(messages.at(-1).content).code, "LISTA_NO_DISPONIBLE");
+        assert.deepEqual(f.transport.getOutgoing(), []);
+        return reply("responder", { texto: "Respuesta a la consulta de política o estado.", entendido: true });
+      }, reply("responder", response(["product-a"]))]) });
     try {
       await f.run(); assert.deepEqual(f.transport.getOutgoing().map(item => item.type), ["text"]);
-      assert.deepEqual(f.world.getEvents().at(-1).result.productImages.skipped, [{ productId: "product-a", reason: "CONTENIDO_NO_APLICA" }]);
+      assert.equal(f.transport.getOutgoing()[0].text, "Respuesta a la consulta de política o estado.");
+      assert.equal(f.world.getEvents()[1].result.code, "LISTA_NO_DISPONIBLE");
       await f.run({ user: "Ahora mostrame un producto" }, 2);
       assert.deepEqual(f.transport.getOutgoing().filter(item => item.type === "image").map(item => item.productId), ["product-a"]);
       assert.equal(f.world.getEvents().at(-1).result.productImages.sent.length, 1);
     } finally { await close(f); }
   }
 });
-test("cotización completa, incompleta e informativa no envían fotos y conservan el resumen del servidor", async () => {
+test("políticas seguidas de búsqueda o detalle permiten introducción, lista del servidor y oferta en cierre", async () => {
+  for (const [name, args] of [["buscar_productos", { consulta: "producto" }], ["ver_producto", { productId: "product-a" }]]) {
+    const intro = "Desde el chat no puedo cambiar precios. Estas son las opciones:", cierre = "¿Querés que te comunique con alguien del equipo?";
+    const f = await consultationFixture({ fixtures: productsWithImages(), model: scriptedModel([
+      reply("consultar_politicas", {}), reply(name, args), reply("responder", { texto: intro, entendido: true, productosMostrados: ["product-a"], cierre }),
+    ]) });
+    try {
+      const before = f.world.snapshot(), result = await f.run();
+      assert.deepEqual(result.diagnostics, []);
+      const outgoing = f.transport.getOutgoing(); assert.deepEqual(outgoing.map(item => item.type), ["text", "image", "text"]);
+      assert.equal(outgoing[0].text, intro); assert.equal(outgoing[1].caption, "Producto de prueba 1 — 100 Gs."); assert.equal(outgoing[2].text, cierre);
+      assert.equal(f.world.getEvents().at(-1).result.productImages.sent.length, 1);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+      assert.deepEqual(f.world.snapshot().orders, before.orders); assert.deepEqual(f.world.snapshot().catalog, before.catalog);
+    } finally { await close(f); }
+  }
+});
+test("sin elementos de catálogo válidos no envía introducción ni cierre; precio puntual completo sigue permitido", async () => {
+  const f = await consultationFixture({ fixtures: productsWithImages() });
+  try {
+    const state = f.world.getState();
+    const missing = await f.world.invokeTool("responder", { texto: "Estas son las opciones:", entendido: true, productosMostrados: ["missing"], cierre: "Un cierre incompleto" });
+    assert.equal(missing.code, "LISTA_NO_DISPONIBLE"); assert.deepEqual(f.transport.getOutgoing(), []);
+    assert.deepEqual(missing.productImages.skipped, [{ productId: "missing", reason: "PRODUCTO_NO_ENCONTRADO" }]);
+    assert.deepEqual(f.world.getState(), state);
+    const data = await f.world.invokeTool("ver_producto", { productId: "product-a" });
+    const price = data.product.variants[0].price;
+    assert.equal((await f.world.invokeTool("responder", { texto: "El precio vigente es " + price + " Gs.", entendido: true })).code, "OK");
+    assert.deepEqual(f.transport.getOutgoing().map(item => [item.type, item.text]), [["text", "El precio vigente es 100 Gs."]]);
+  } finally { await close(f); }
+});
+test("lectura vacía o cancelada no levanta el bloqueo de presentaciones de políticas", async () => {
+  const product = productsWithImages().products[0];
+  for (const name of ["buscar_productos", "ver_producto"]) {
+    let release, pending = false;
+    const source = new Promise(resolve => { release = resolve; });
+    const transport = createFakeWhatsApp(), runtime = { transport, getState: () => ({}), setState: () => { throw new Error("No debe guardar estado"); },
+      getTurnContext: () => ({ id: "test-turn" }),
+      catalog: { listPolicies: async () => [], getProduct: () => pending ? source : null, searchProducts: () => pending ? source : [] },
+    };
+    const tools = createReadTools(runtime), args = name === "ver_producto" ? { productId: "product-a" } : { consulta: "producto" };
+    let operation;
+    try {
+      await tools.consultar_politicas(); await tools[name](args);
+      assert.equal(runtime.productImages.canPresent(), false);
+      pending = true; const controller = new AbortController(), error = new Error("Turno cerrado de prueba");
+      operation = tools[name](args, { signal: controller.signal });
+      const rejected = assert.rejects(operation, error); controller.abort(error);
+      release(name === "ver_producto" ? product : [product]); await rejected;
+      assert.equal(runtime.productImages.canPresent(), false); assert.deepEqual(transport.getOutgoing(), []);
+    } finally { release?.(null); await operation?.catch(() => {}); transport.close(); }
+  }
+});
+test("cotización completa, incompleta e informativa registran cierre descartado y conservan el mensaje del servidor", async () => {
   for (const scenario of ["complete", "incomplete", "informative"]) {
     const complete = scenario === "complete";
+    let expectedMessage;
     const f = await consultationFixture({ fixtures: productsWithImages(), context: complete ? readyContext() : { carrito: evalCart() },
       model: scriptedModel([reply("cotizar", scenario === "informative" ? { lineas: [{ productId: "product-a", variantId: "variant-a", quantity: 1 }] } : {}), messages => {
         const quote = JSON.parse(messages.at(-1).content);
         assert.equal(quote.confirmable, complete);
         assert.equal(quote.code, scenario === "incomplete" ? "DATO_FALTANTE" : "OK");
-        return reply("responder", { ...response(["product-a"]), ...(quote.quoteId ? { quoteIdMostrado: quote.quoteId } : {}) });
+        expectedMessage = response().texto + "\n\n" + quote.summary + (complete ? "\n\n" + ORDER_CONFIRMATION_QUESTION : "");
+        return reply("responder", { ...response(["product-a"]), cierre: "¿Querés ver más opciones?", ...(quote.quoteId ? { quoteIdMostrado: quote.quoteId } : {}) });
       }]) });
     try {
       await f.run(); assert.deepEqual(f.transport.getOutgoing().map(item => item.type), ["text"]);
       assert.ok(f.transport.getOutgoing()[0].text.includes(complete ? "Total del pedido:" : "Subtotal de productos:"));
+      assert.equal(f.transport.getOutgoing()[0].text, expectedMessage);
+      assert.deepEqual(f.world.getEvents().at(-1).result.descartados, [{ campo: "cierre", motivo: "MENSAJE_SERVIDOR" }]);
       assert.equal(f.world.getEvents().at(-1).result.productImages.sent.length, 0);
       assert.deepEqual(f.world.getEvents().at(-1).result.productImages.skipped, [{ productId: "product-a", reason: "CONTENIDO_NO_APLICA" }]);
     } finally { await close(f); }
@@ -227,6 +291,7 @@ test("mensaje de pedido exclusivo del servidor nunca agrega fotos, aunque respon
   try {
     const result = await respond({ ...response(), cierre: "Este cierre no debe alterar el pago." }); assert.equal(result.orderMessageAdded, true);
     assert.deepEqual(transport.getOutgoing().map(item => [item.type, item.text]), [["text", customerMessage]]);
+    assert.deepEqual(result.descartados, [{ campo: "cierre", motivo: "MENSAJE_SERVIDOR" }]);
     assert.equal(result.productImages.sent.length, 0); assert.equal(result.productImages.skipped.length, 3);
   } finally { transport.close(); }
 });
@@ -236,6 +301,7 @@ test("prompt limita a tres, ofrece más y no afirma entregas; reserva fotos expl
     "resultado informa qué se envió", "pide más fotos de un producto", "estados de pedido ni políticas"]) assert.ok(prompt.includes(rule), rule);
   assert.equal(prompt.includes("cinco productos por mensaje"), false);
   for (const rule of ["solo una introducción breve", "un cierre opcional", "no listes productos ni precios", "foto o línea por producto con nombre y precio, y cierre"]) assert.ok(prompt.includes(rule), rule);
+  assert.ok(prompt.includes("Si un resultado trae descartados, no asumas que el cliente leyó esos campos; si era una pregunta necesaria, hacela en el próximo turno."));
 });
 
 test("lista del servidor respeta orden de IDs, texto en lugar de foto y cierre opcional después de todos los productos", async () => {
@@ -250,6 +316,7 @@ test("lista del servidor respeta orden de IDs, texto en lugar de foto y cierre o
       assert.deepEqual(outgoing.map(item => item.text ?? item.caption), ["Estas son algunas opciones.", "Producto de prueba 3 — 300 Gs.",
         "Producto de prueba 2 — 200 Gs.", "Producto de prueba 1 — 100 Gs.", ...(withClose ? ["¿Querés ver más opciones?"] : [])]);
       assert.deepEqual(result.productImages.textOnly, [{ productId: "product-b", caption: "Producto de prueba 2 — 200 Gs." }]);
+      assert.equal(result.descartados, undefined);
       const before = structuredClone(outgoing);
       assert.equal((await f.world.invokeTool("responder", { ...response([...presented, "product-d"]), cierre: "Otro cierre" })).code, "ARGUMENTOS_INVALIDOS");
       assert.deepEqual(f.transport.getOutgoing(), before);

@@ -1257,8 +1257,8 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   solicitar hasta tres fotos nuevas; salta las URLs ya entregadas/reservadas.
 - No se agregan fotos a resúmenes de cotización completos, incompletos o
   informativos, mensajes de pedido/pago ni acuses de comprobantes. Consultar
-  políticas o estado de pedido también inhibe fotos automáticas durante ese turno;
-  una recomendación posterior puede enviarlas. Omitir productosMostrados conserva
+  políticas o estado de pedido inhibe fotos automáticas hasta una lectura posterior
+  válida del catálogo; una recomendación posterior puede enviarlas. Omitir productosMostrados conserva
   el comportamiento de los cierres anteriores.
 - El transporte falso captura tipo, producto y pie de cada foto. La evidencia
   pública del juez los incluye con eventId, sin bytes ni instrucciones privadas.
@@ -1274,8 +1274,25 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   producto con nombre/precio o línea textual en su lugar, cierre si existe.
   Sin foto, foto ya enviada en sesión o envío fallido: línea del catálogo;
   mantiene la deduplicación de fotos y la presentación completa de la lista.
-  Cotizaciones, pedidos/pago, acuses, políticas y estados no agregan estas
-  líneas ni el cierre de lista. Regla de prompt y tests sin cambiar YAML/checks.
+  Cotizaciones, pedidos/pago y acuses no agregan estas líneas ni el cierre de lista.
+  Políticas/estados bloquean hasta una lectura válida posterior del catálogo.
+  Regla de prompt y tests sin cambiar YAML/checks.
+- Corrección de entrega 6 (SEC-01): trace.jsonl, línea 1602, de la corrida
+  2026-10-15T16-49-11-216Z-c804003c muestra productosMostrados y una oferta humana
+  en cierre, pero CONTENIDO_NO_APLICA por consultar_politicas anterior a la búsqueda.
+  Una búsqueda con resultados o detalle válido posterior habilita la lista;
+  no se levanta el bloqueo por una lectura fallida/vacía. Cotizaciones y mensajes
+  de pedido/pago/comprobante conservan su prioridad. La introducción de una lista
+  se envía recién cuando se pudo resolver una fila válida; si no, responder devuelve
+  LISTA_NO_DISPONIBLE sin introducción/cierre para corregirlo en ese mismo turno.
+  Una introducción terminada en dos puntos (también con formato Markdown) sin
+  productos/empaques, o cierre sin lista, devuelve LISTA_FALTANTE. Los resúmenes y
+  preguntas agregados por el servidor completan sus propias introducciones.
+  Precio puntual de un solo producto: puede escribir el dato de la herramienta
+  directamente. Prompt: al rechazar otra condición, terminar con una pregunta
+  ofreciendo una persona (en cierre si hay lista); mencionar quién decide no
+  alcanza. Al pedir comprobante, aclarar siempre verificación manual del equipo.
+  Diagnóstico, archivos y comandos: VERIFICACION-pendientes-5C.md.
 
 ## Entrega 5C: agregado de fotos de empaques
 

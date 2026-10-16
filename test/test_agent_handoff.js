@@ -84,16 +84,30 @@ test("una cotización no mostrada, ajena o con huellas distintas no aporta un to
     } finally { f.close(); }
   }
 });
-test("cuarto turno false deriva por código con un solo mensaje, sin confiar en el texto del modelo", async () => {
-  const f = await consultationFixture({ model: scriptedModel(Array.from({ length: 4 }, () => reply("responder", { texto: "Repregunta de prueba", entendido: false }))), context: { carrito: evalCart() } });
+test("cuarto turno false registra campos descartados al escalar y conserva el único mensaje de derivación", async () => {
+  const f = await consultationFixture({ model: scriptedModel(Array.from({ length: 4 }, (_, index) => reply("responder", {
+    texto: "Repregunta de prueba", entendido: false,
+    ...(index === 3 ? { productosMostrados: ["product-a"], empaquesMostrados: [{ productId: "product-a", packagingType: "pack-a" }], cierre: "¿Querés ver más opciones?" } : {}),
+  }))), context: { carrito: evalCart() } });
   try {
     const cart = f.world.getCart();
     for (let number = 1; number <= 4; number++) {
       await f.run({ user: "Mensaje de prueba " + number }, number);
       assert.equal(f.world.getState().consecutiveMisunderstandings, number);
       assert.equal(f.world.getState().humanHandoffRequired, number === 4);
+      const event = f.world.getEvents().at(-1);
+      assert.equal(event.name, "responder");
+      assert.deepEqual(event.result.descartados, number === 4 ? [
+        { campo: "productosMostrados", motivo: "ESCALADA_AUTOMATICA" },
+        { campo: "empaquesMostrados", motivo: "ESCALADA_AUTOMATICA" },
+        { campo: "cierre", motivo: "ESCALADA_AUTOMATICA" },
+      ] : undefined);
     }
     assert.equal(f.transport.getOutgoing().length, 4); assert.equal(f.transport.getOutgoing()[3].text, MISUNDERSTANDING_HANDOFF_MESSAGE);
+    assert.deepEqual(f.transport.getOutgoing().map(item => [item.type, item.text]), [
+      ...Array.from({ length: 3 }, () => ["text", "Repregunta de prueba"]), ["text", MISUNDERSTANDING_HANDOFF_MESSAGE],
+    ]);
+    assert.equal(f.world.getState().sentProductImages, undefined);
     assert.equal(f.world.getState().consecutiveTechnicalFailures, 0); assert.deepEqual(f.world.getCart(), cart);
     assert.equal(f.world.alertRequests.list().length, 1); assert.equal(f.world.alertRequests.list()[0].type, "MISUNDERSTANDING");
   } finally { await f.agent.dispose(); f.close(); }

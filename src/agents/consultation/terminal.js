@@ -14,10 +14,15 @@ export function createResponder(runtime) {
     const nextCounter = state => entendido === false || fueraDeAlcance === true
       ? (state.consecutiveMisunderstandings ?? 0) + 1 : 0;
     const turn = getTurnContext();
-    const imageResults = async allowed => ({
-      ...(productosMostrados === undefined ? {} : { productImages: await images.show(productosMostrados, { signal, allowed }) }),
-      ...(empaquesMostrados === undefined ? {} : { packagingImages: await images.showPackaging(empaquesMostrados, { signal, allowed }) }),
+    const imageResults = async (allowed, beforePresentation) => ({
+      ...(productosMostrados === undefined ? {} : { productImages: await images.show(productosMostrados, { signal, allowed, beforePresentation }) }),
+      ...(empaquesMostrados === undefined ? {} : { packagingImages: await images.showPackaging(empaquesMostrados, { signal, allowed, beforePresentation }) }),
     });
+    const discarded = (motivo, fields = { cierre }) => {
+      const descartados = Object.entries(fields).filter(([, value]) => value !== undefined)
+        .map(([campo]) => ({ campo, motivo }));
+      return descartados.length ? { descartados } : {};
+    };
     const receipt = await purchase?.orders.receiptForTurn();
     signal?.throwIfAborted();
     if (receipt) {
@@ -33,7 +38,7 @@ export function createResponder(runtime) {
       const state = getState();
       state.consecutiveMisunderstandings = nextCounter(state);
       await setState(state);
-      return { code: "OK", entendido, fueraDeAlcance, orderMessageAdded: true, ...await imageResults(false) };
+      return { code: "OK", entendido, fueraDeAlcance, orderMessageAdded: true, ...await imageResults(false), ...discarded("MENSAJE_SERVIDOR") };
     }
     const receiptAck = await runtime.paymentReceipts?.acknowledgementForTurn();
     signal?.throwIfAborted();
@@ -44,13 +49,14 @@ export function createResponder(runtime) {
       signal?.throwIfAborted();
       const state = getState(); state.consecutiveMisunderstandings = nextCounter(state); await setState(state);
       signal?.throwIfAborted();
-      return { code: "OK", entendido, fueraDeAlcance, receiptAcknowledgementAdded: true, ...await imageResults(false) };
+      return { code: "OK", entendido, fueraDeAlcance, receiptAcknowledgementAdded: true, ...await imageResults(false), ...discarded("MENSAJE_SERVIDOR") };
     }
     if (nextCounter(getState()) >= 4) {
       const state = getState(); state.consecutiveMisunderstandings = 4;
       await setState(state);
-      return activateAgentHandoff(runtime, { motivo: "4 intentos sin encauzar la consulta", texto: MISUNDERSTANDING_HANDOFF_MESSAGE,
+      const handoff = await activateAgentHandoff(runtime, { motivo: "4 intentos sin encauzar la consulta", texto: MISUNDERSTANDING_HANDOFF_MESSAGE,
         type: "MISUNDERSTANDING", signal });
+      return { ...handoff, ...discarded("ESCALADA_AUTOMATICA", { productosMostrados, empaquesMostrados, cierre }) };
     }
     let quote = null, pendingText = null, pendingRuc = null, hasQuoteSummary = false;
     const parts = [texto];
@@ -80,12 +86,32 @@ export function createResponder(runtime) {
           ? "¿Tu RUC es " + pendingRuc.value + "? Confirmalo antes de guardarlo completo."
           : "El dígito verificador no coincide. ¿Querés corregir el RUC “" + pendingRuc.input + "” o continuar con él como lo ingresaste?");
       } catch (error) { signal?.throwIfAborted(); return purchaseError(error); }
-      // Desactivar antes de enviar: incluso si no podemos registrar después
-      // del envío, un sí a otra pregunta no autoriza crear el pedido anterior.
-      await purchase.quotes.clearConfirmation({ signal });
     }
-    await transport.sendText(parts.join("\n\n"));
-    signal?.throwIfAborted();
+    const requestedList = (productosMostrados?.length ?? 0) + (empaquesMostrados?.length ?? 0) > 0;
+    // Señal de formato general, sin vocabulario del negocio. Los resúmenes y
+    // preguntas agregados por el servidor ya completan sus propias introducciones.
+    if (!requestedList && parts.length === 1 && /[:：](?:[\s*_~"'”’])*$/u.test(texto)) return {
+      code: "LISTA_FALTANTE", field: "productosMostrados",
+      message: "El texto anuncia una lista sin sus elementos. Pasá productosMostrados o empaquesMostrados; para un precio puntual, completá el texto con el dato de la herramienta.",
+    };
+    const allowed = images.canPresent(quoteIdMostrado === undefined && !quote && !hasQuoteSummary);
+    const missingList = () => ({ code: "LISTA_NO_DISPONIBLE", field: "productosMostrados",
+      message: "La lista no puede mostrarse y no se envió la introducción. Consultá el producto/catálogo y usá sus IDs vigentes, o respondé sin anunciar una lista." });
+    const listResponse = requestedList && !quote && !hasQuoteSummary;
+    if (listResponse && !allowed) return missingList();
+    let textSent = false, presented;
+    const sendResponseText = async () => {
+      if (textSent) return;
+      signal?.throwIfAborted();
+      // Desactivar antes de enviar: un sí a otra pregunta no autoriza el pedido.
+      if (purchase && !corporatePending) await purchase.quotes.clearConfirmation({ signal });
+      await transport.sendText(parts.join("\n\n"));
+      signal?.throwIfAborted(); textSent = true;
+    };
+    if (listResponse) {
+      presented = await imageResults(allowed, sendResponseText);
+      if (!textSent) return { ...missingList(), ...presented };
+    } else await sendResponseText();
     const state = getState();
     state.consecutiveMisunderstandings = nextCounter(state);
     if (turn && pendingText) {
@@ -97,10 +123,9 @@ export function createResponder(runtime) {
     await setState(state);
     signal?.throwIfAborted();
     if (quote) await purchase.quotes.markShown(quote, turn, { signal });
-    const allowed = images.canPresent(quoteIdMostrado === undefined && !quote && !hasQuoteSummary);
-    const presented = await imageResults(allowed);
+    presented ??= await imageResults(allowed);
     if (allowed && cierre) { signal?.throwIfAborted(); await transport.sendText(cierre); signal?.throwIfAborted(); }
     return { code: "OK", entendido, fueraDeAlcance,
-      ...presented };
+      ...presented, ...(!allowed ? discarded("MENSAJE_SERVIDOR") : {}) };
   };
 }
