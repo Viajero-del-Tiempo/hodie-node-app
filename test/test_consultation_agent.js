@@ -439,7 +439,13 @@ test("prompt delega lista y precios al servidor; el modelo solo escribe introduc
   assert.ok(prompt.includes("un cierre opcional en cierre; no listes productos ni precios en ninguno"));
   assert.ok(prompt.includes("El servidor arma introducción, foto o línea por producto con nombre y precio, y cierre"));
   assert.ok(prompt.includes("productosMostrados es para listas y recomendaciones"));
-  assert.ok(prompt.includes("Para el precio de un solo producto puntual podés escribir en texto el precio devuelto por la herramienta"));
+  assert.ok(prompt.includes("Si preguntan por un solo producto puntual, no hace falta productosMostrados: escribí en texto el precio devuelto por la herramienta"));
+  assert.ok(prompt.includes("Respondé todo lo que preguntó (medidas, stock, etc.)"));
+  assert.ok(prompt.includes("si mencionó una cantidad, llamá a cotizar y comunicá el total devuelto por el servidor, sin calcularlo"));
+  assert.ok(prompt.includes("Respetá la regla de cantidad corporativa"));
+  assert.ok(prompt.includes("Usá cotizar para cualquier subtotal o total; nunca hagas cuentas"));
+  assert.ok(prompt.includes("Para consultar importes sin armar un carrito, usá cotizar con lineas"));
+  assert.ok(prompt.includes("no cotices ni crees esa solicitud automáticamente"));
   // La garantía de precio/Desde en el envío real (foto y línea) vive en
   // test_agent_product_images.js: "principal respeta orden activo, salta
   // variantes sin fotos y precio desde del servidor en foto o línea".
