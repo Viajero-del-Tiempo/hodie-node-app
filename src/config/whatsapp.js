@@ -5,6 +5,31 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { Timestamp } from "firebase-admin/firestore";
 import { compiledGraph } from "../agents/graph.js";
 import { db } from "./firebase.js";
+import { createAgentWhatsAppConfig } from "./agent-whatsapp.config.js";
+
+const agentWhatsAppConfig = createAgentWhatsAppConfig(process.env);
+let agentPilotPromise = null;
+let agentPilotClosed = false;
+const getAgentPilot = () => {
+  if (agentPilotClosed) throw Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" });
+  if (!agentPilotPromise) {
+    agentPilotPromise = (async () => {
+      const [{ createWhatsAppPilotInfrastructure }, { BANK_CONFIG }] = await Promise.all([
+        import("../services/whatsapp-agent.bootstrap.js"), import("./bank.config.js"),
+      ]);
+      return createWhatsAppPilotInfrastructure({ config: agentWhatsAppConfig, client: whatsappClient, MessageMedia, db,
+        timestampNow: () => Timestamp.now(), timestampFromMillis: value => Timestamp.fromMillis(value),
+        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG });
+    })();
+    agentPilotPromise.catch(() => { agentPilotPromise = null; });
+  }
+  return agentPilotPromise;
+};
+
+export const shutdownAgentPilot = async () => {
+  agentPilotClosed = true;
+  if (agentPilotPromise) await (await agentPilotPromise).shutdown();
+};
 
 /**
  * Tipos de mensajes permitidos para procesamiento.
@@ -285,6 +310,11 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
 };
 
 export const handleIncomingWhatsAppMessage = async (mensaje) => {
+  if (agentWhatsAppConfig.enabled) {
+    try { await (await getAgentPilot()).handle(mensaje); }
+    catch (error) { console.error(JSON.stringify({ code: error.code ?? "PILOT_ERROR" })); }
+    return; // Con el piloto activo, ningún rechazo/error cae al router legacy.
+  }
   // Ignorar mensajes enviados por el propio bot (fromMe)
   if (mensaje.fromMe) return;
 

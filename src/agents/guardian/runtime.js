@@ -52,6 +52,8 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       processedMessages: processed.messages.map(message => ({ text: message.text, type: message.type,
         ...(message.attachmentId ? { attachmentId: message.attachmentId } : {}) })) });
     try {
+      runtime.setDeliverySignal?.(signal);
+      await runtime.onTurnStart?.({ signal });
       runtime.setExecutionPhase?.("guardian_admission");
       signal.throwIfAborted();
       await withSignal(() => synchronizeAgentAlerts(runtime, { signal }), signal);
@@ -121,6 +123,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       if (parentSignal?.aborted) throw parentSignal.reason;
       if (closed) throw error;
       controller.abort(error);
+      runtime.setDeliverySignal?.(parentSignal ?? null); // El aviso técnico usa la misma vía de recuperación existente.
       diagnostics.push({ code: error.code ?? "GUARDIAN_ERROR", message: "Falla técnica al preparar el turno.", technicalFailure: true,
         ...safeErrorDetails(error),
         ...(runtime.getExecutionPhase ? { interruptedPhase: runtime.getExecutionPhase() } : {}) });
@@ -132,15 +135,19 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         lastMessage: turn.messages.at(-1)?.text, now: clock.now() });
       return finish("technical_error");
     } finally {
-      clock.clearTimeout(timer);
-      deadlineClock.clearTimeout(deadlineTimer);
-      controller.abort(Object.assign(new Error("Turno cerrado"), { code: "TURN_CLOSED" }));
-      controllers.delete(controller);
-      parentSignal?.removeEventListener("abort", abort);
-      registry.close();
-      runtime.setTurnAttachments?.(null);
-      runtime.setTurnContext?.(null);
-      if (processed !== turn) processed.imageInputs.length = 0;
+      try { await runtime.onTurnEnd?.(processed); }
+      finally {
+        clock.clearTimeout(timer);
+        deadlineClock.clearTimeout(deadlineTimer);
+        controller.abort(Object.assign(new Error("Turno cerrado"), { code: "TURN_CLOSED" }));
+        controllers.delete(controller);
+        parentSignal?.removeEventListener("abort", abort);
+        registry.close();
+        runtime.setTurnAttachments?.(null);
+        runtime.setTurnContext?.(null);
+        if (processed !== turn) processed.imageInputs.length = 0;
+        runtime.setDeliverySignal?.(null);
+      }
     }
   }
   function enqueue(input) {
