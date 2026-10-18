@@ -3,6 +3,10 @@ import { initializeApp, getApps, cert } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import fs from "fs";
 import path from "path";
+import { isFirebaseTestProcess, requireTestFirestore } from "./firebase-test-environment.js";
+
+// También protege `node test/archivo.js`, sin depender del runner/preload.
+if (isFirebaseTestProcess()) requireTestFirestore();
 
 let app;
 

@@ -175,8 +175,9 @@ La batería general existente también incluye las tres suites unitarias nuevas:
 AGENT_ENABLED=false npm run test:unit
 ```
 
-Esa batería general conserva suites históricas con acceso a Firestore real bajo
-su autorización existente; no confundirla con los tres tests nuevos en memoria.
+Esa batería general contiene solo suites en memoria. Las históricas que usan
+Firebase se trasladaron a integración o `test:legacy`, siempre con emulador;
+la guarda común rechaza producción. Ver `AUDITORIA-tests-firestore.md`.
 
 Regresión completa del agente en el runner, independiente del cliente real:
 

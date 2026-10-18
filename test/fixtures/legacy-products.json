@@ -1,0 +1,5 @@
+[
+  { "id": "test-legacy-termo", "name": "Termo de prueba legacy", "sku": "TEST-LEGACY-A", "price": 1000, "stock": 20, "active": true, "packagingPrices": { "caja": 100, "bolsa": 50, "estandar": 0 } },
+  { "id": "test-legacy-taza", "name": "Taza de prueba legacy", "sku": "TEST-LEGACY-B", "price": 2000, "stock": 20, "active": true, "packagingPrices": { "caja": 100, "bolsa": 50, "estandar": 0 } },
+  { "id": "test-legacy-mate", "name": "Mate de prueba legacy", "sku": "TEST-LEGACY-C", "price": 3000, "stock": 20, "active": true, "packagingPrices": { "caja": 100, "bolsa": 50, "estandar": 0 } }
+]

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const memorySuites = [
+  "test/test_firestore_safety.js",
   "test/test_whatsapp_human_control.js",
   "test/test_whatsapp_alert_dispatcher.js",
   "test/test_admin_agent_chats.js",
@@ -64,20 +65,7 @@ const memorySuites = [
   "test/test_order_variant_pricing.js",
   "test/test_order_variant_stock.js",
 ];
-const existingSuites = [
-  "test/test_budget_agent_v2.js",
-  "test/test_handoff_alert_transition.js",
-  "test/test_lid_resolution.js",
-  "test/test_order_pdf_decoupling.js",
-  "test/test_order_security.js",
-  "test/test_whatsapp_chat_id.js",
-  "test/test_multi_agent_graph.js",
-  "test/test_bot_resume_and_filters.js",
-];
-const suites = [
-  ...memorySuites.map(file => ({ file, args: ["--test", file], env: process.env })),
-  ...existingSuites.map(file => ({ file, args: [file], env: { ...process.env, ALLOW_PROD_FIRESTORE_TESTS: "1" } })),
-];
+const suites = memorySuites.map(file => ({ file, args: ["--import", "./test/firebase-bootstrap.js", "--test", file], env: process.env }));
 
 let anyFailed = false;
 // Secuenciales y en procesos separados: los mocks de una suite no afectan otra.

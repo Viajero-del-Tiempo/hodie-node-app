@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { runIsolatedEmulatorSuite } from "../test/emulator-suite.js";
 import { makeLocalEnvironment, assertLocalEnvironment, assertLocalCatalogTarget, localCatalog, projectDirectory } from "./local-catalog.config.js";
 
 assertLocalCatalogTarget(process.env);
@@ -14,13 +15,21 @@ const agentTests = ["test/test_agent_order_transactions.js"];
 const receiptTests = ["test/test_receipt_transactions.js"];
 const supportTests = ["test/test_agent_support_transactions.js", ...agentTests, ...receiptTests];
 const whatsappTests = ["test/test_whatsapp_delivery_emulator.js", "test/test_whatsapp_control_emulator.js"];
-const tests = process.argv.includes("--agent-whatsapp-only") ? whatsappTests : process.argv.includes("--agent-receipts-only") ? receiptTests : process.argv.includes("--agent-support-only") ? supportTests : process.argv.includes("--agent-orders-only") ? agentTests : process.argv.includes("--customer-only") ? customerTests : [
+const legacyIntegrationTests = ["test/test_order_security.js", "test/test_whatsapp_chat_id.js"];
+const isolatedOnly = process.argv.includes("--legacy-orders-only");
+const tests = isolatedOnly ? [] : process.argv.includes("--agent-whatsapp-only") ? whatsappTests : process.argv.includes("--agent-receipts-only") ? receiptTests : process.argv.includes("--agent-support-only") ? supportTests : process.argv.includes("--agent-orders-only") ? agentTests : process.argv.includes("--customer-only") ? customerTests : [
   "test/test_catalog_crud.js", "test/test_catalog_admin_api.js", "test/test_catalog_products_api.js",
   "test/test_order_variant_orders.js", "test/test_order_variant_transactions.js",
   ...customerTests,
   ...supportTests,
   ...whatsappTests,
 ];
-const child = spawn(process.execPath, ["--test", ...tests], { cwd: projectDirectory, env, stdio: "inherit" });
-child.once("error", error => { console.error(error.message); process.exitCode = 1; });
-child.once("exit", code => { process.exitCode = code ?? 1; });
+let anyFailed = tests.length ? await new Promise(resolve => {
+  const child = spawn(process.execPath, ["--import", "./test/firebase-bootstrap.js", "--test", ...tests], { cwd: projectDirectory, env, stdio: "inherit" });
+  child.once("error", error => { console.error(error.message); resolve(true); });
+  child.once("exit", code => resolve(code !== 0));
+}) : false;
+if (isolatedOnly || !process.argv.some(value => value.endsWith("-only"))) {
+  for (const file of legacyIntegrationTests) if (await runIsolatedEmulatorSuite(file, { env }) !== 0) anyFailed = true;
+}
+process.exitCode = anyFailed ? 1 : 0;

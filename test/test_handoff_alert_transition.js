@@ -1,7 +1,4 @@
-if (process.env.ALLOW_PROD_FIRESTORE_TESTS !== "1") {
-  console.error("❌ ERROR: Este test interactúa con Firestore de producción. Debe ejecutarse con ALLOW_PROD_FIRESTORE_TESTS=1 (ej: npm run test:unit).");
-  process.exit(1);
-}
+import "./firebase-bootstrap.js";
 
 import http from "http";
 import jwt from "jsonwebtoken";

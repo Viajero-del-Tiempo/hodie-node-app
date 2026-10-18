@@ -1,7 +1,4 @@
-if (process.env.ALLOW_PROD_FIRESTORE_TESTS !== "1") {
-  console.error("❌ ERROR: Este test interactúa con Firestore de producción. Debe ejecutarse con ALLOW_PROD_FIRESTORE_TESTS=1 (ej: npm run test:unit).");
-  process.exit(1);
-}
+import "./firebase-bootstrap.js";
 
 import app from "../src/app.js";
 import { db } from "../src/config/firebase.js";
@@ -888,12 +885,9 @@ async function runOrderSecurityTests() {
       for (const d of remainingOrdersSnap.docs) {
         const odata = d.data();
         if (
-          d.id.startsWith("test-") ||
-          odata.userId === testUserAId ||
-          odata.userId === testUserBId ||
-          odata.userId === testUserAdminId ||
-          (odata.userId && odata.userId.startsWith("test-")) ||
-          (Array.isArray(odata.items) && odata.items.some(i => i.productId && String(i.productId).startsWith("test-")))
+          createdOrderIds.includes(d.id) ||
+          createdUserIds.includes(odata.userId) ||
+          (Array.isArray(odata.items) && odata.items.some(item => createdProductIds.includes(item.productId)))
         ) {
           await d.ref.delete();
           console.log(`  🗑️ Pedido residual eliminado en barrido: orders/${d.id}`);

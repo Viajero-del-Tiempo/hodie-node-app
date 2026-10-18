@@ -93,11 +93,13 @@ en el código. Leé todo antes de actuar.
    generales, validadas con variantes que no estén en ningún conjunto de
    casos. Si una solución depende de listas de palabras, explicá qué
    frases reales podrían fallar.
-4. FIRESTORE ES PRODUCCIÓN: cualquier borrado o modificación masiva va
-   primero en modo dry-run y espera mi confirmación. Los tests crean sus
-   propios datos (con prefijo test-), nunca tocan productos, pedidos ni
-   usuarios reales, y limpian todo en un finally (incluidos los
-   langgraph_checkpoint_writes).
+4. FIRESTORE: ningún test inicializa Firebase con credenciales reales.
+   Los tests que usan Firebase exigen FIRESTORE_EMULATOR_HOST local y un
+   proyecto demo-*; sin emulador fallan antes de cargar credenciales.
+   ALLOW_PROD_FIRESTORE_TESTS no autoriza producción. Los tests en memoria
+   no inicializan Firebase. La limpieza de fixtures es solo en el emulador.
+   Cualquier borrado o modificación masiva productiva requiere primero
+   dry-run y mi confirmación; el inventario administrativo es solo lectura.
 5. NO INVENTES DATOS DEL NEGOCIO: productos, materiales, colores, precios
    y políticas salen de Firestore o de este documento. Si falta algo,
    preguntame.
@@ -192,8 +194,8 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   `test_catalog_service.js`, `test_catalog_crud.js` y
   `test_catalog_admin_api.js`, con helpers de fixtures y Firestore dentro
   de `test/helpers/`. Los tres primeros son en memoria. Los dos últimos
-  admiten emulador; sin emulador exigen `ALLOW_PROD_FIRESTORE_TESTS=1`
-  antes de cargar Firebase. IDs por ejecución con prefijo `test-`, limpieza
+  exigen emulador antes de cargar Firebase (regla actual, que reemplaza
+  la autorización productiva original). IDs por ejecución con prefijo `test-`, limpieza
   en `finally`, sin barridos ni escrituras sobre datos reales. El caso de
   búsqueda usa datos ficticios en `test/`, sin leer SPEC en runtime. No se
   invoca el LLM ni se inicializa WhatsApp en los tests nuevos.
@@ -201,8 +203,9 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   aplica a `src/`; los tests pueden usar datos ficticios independientes
   de los documentos. Los tres tests de catálogo en memoria se agregan
   a `test:unit`, conservando los tests preexistentes. Los de CRUD y API
-  se agregan a `test:integration` con `ALLOW_PROD_FIRESTORE_TESTS=1`.
-  Los tests preexistentes de `test:unit` pueden acceder a Firestore.
+  se ejecutan en `test:integration`, solo con emulador. Los tests
+  preexistentes con Firebase pasan a integración o a `test:legacy`;
+  `test:unit` queda en memoria.
 - No se cambian dependencias. El dueño ejecuta los
   tests, `git diff --stat` y `git diff`; el asistente no afirma resultados
   sin salida real de consola. No se hace commit, push ni deploy.
@@ -275,7 +278,7 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   (API real con middlewares, persistencia y reprocesamiento) y
   `test_order_variant_transactions.js` (pagos/cancelaciones simultáneos,
   variantes distintas, rollback y notificación posterior), en
-  `test:integration` con `ALLOW_PROD_FIRESTORE_TESTS=1`. IDs `test-` únicos
+  `test:integration`, solo con emulador. IDs `test-` únicos
   registrados antes de escribir y limpiados en `finally`, guardia antes
   del SDK, sin mensajes reales, invocaciones LLM ni escrituras al contador
   real. La concurrencia se comprueba contra Firestore, no con el doble en
@@ -292,9 +295,10 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
 - `test:unit` usa `test/run-unit.js`: ejecuta las mismas suites una por una
   en procesos separados, continúa aunque una falle y termina con código 1
   si hubo algún fallo (también si un proceso no arranca o termina por señal).
-  Las salidas de los procesos se muestran directamente. Las cinco suites
-  en memoria usan `node --test`; las ocho preexistentes mantienen
-  `ALLOW_PROD_FIRESTORE_TESTS=1`. No cambia `test:integration` ni `test:llm`.
+  Las salidas de los procesos se muestran directamente. Todas las suites
+  actuales de `test:unit` son en memoria y usan `node --test`. Las ocho
+  preexistentes con Firebase se separaron posteriormente según la auditoría
+  de aislamiento; ningún script permite producción.
 
 # CAMBIO DE PLAN DEL CATÁLOGO (2 de octubre de 2026)
 
@@ -1429,3 +1433,31 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   siguen pendientes de 7C; 7B ya despacha las solicitudes de alerta. No se toca el stock ni
   la confirmación manual de pagos. Guía, inventario y comandos del dueño:
   VERIFICACION-agente-7A.md.
+
+# AISLAMIENTO DE TESTS FIREBASE (18 de octubre de 2026)
+
+- La regla obligatoria de emulador reemplaza cualquier autorización histórica
+  de tests contra producción. `src/config/firebase-test-environment.js` valida
+  host loopback y proyecto demo-*; `test/firebase-bootstrap.js` se precarga
+  antes de los imports ESM y prohíbe cert/ADC y credenciales explícitas.
+  El singleton Firebase y el helper comparten esa validación. No hay fallback
+  productivo, ni siquiera con ALLOW_PROD_FIRESTORE_TESTS=1.
+- `test:unit` ejecuta solo suites en memoria, mantiene procesos separados y
+  continúa todas aunque alguna falle. Seguridad de pedidos y destinatarios
+  pasan a `test:integration` con el emulador levantado por `catalog:local`.
+  Los seis tests restantes del grafo/BudgetAgent viejo quedan en `test:legacy`,
+  que exige emulador; varios siguen usando Gemini real.
+- Cada una de esas ocho suites usa un proyecto demo aleatorio propio, catálogo
+  ficticio cuando corresponde, JWT local y configuración bancaria ficticia.
+  La limpieza final solo vacía ese proyecto aislado del emulador. No se borra
+  el catálogo compartido, no se restaura ni modifica el contador productivo.
+- El inventario estático por suite, residuos posibles, archivos y comandos
+  están en `docs/AUDITORIA-tests-firestore.md`. Borrar un pedido de test no
+  deshace el avance de `counters/orderNumber`; no retrocederlo a ciegas.
+- `scripts/list-test-orders.js` es una herramienta administrativa de solo
+  lectura, independiente de tests y agentes. Lista candidatos por teléfono,
+  marca o fechas, sus referencias y el contador sin escribir ni borrar nada.
+  El dueño decide cualquier limpieza productiva posterior. Si el listado se
+  trunca lo indica y termina con código 2. No se ejecutó contra producción.
+- No cambia conversations.yaml ni código del agente. El dueño corre suites,
+  evaluaciones y diff; no se reconstruyen salidas ni se afirma que pasaron.

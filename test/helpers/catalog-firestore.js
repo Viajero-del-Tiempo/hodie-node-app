@@ -1,18 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { requireTestFirestore } from "../../src/config/firebase-test-environment.js";
 
 export async function openCatalogTestFirestore() {
-  await import("dotenv/config");
-  const emulator = Boolean(process.env.FIRESTORE_EMULATOR_HOST);
-  if (!emulator && process.env.ALLOW_PROD_FIRESTORE_TESTS !== "1") {
-    throw new Error("Sin emulador, estos tests requieren ALLOW_PROD_FIRESTORE_TESTS=1. No se cargó Firebase ni se accedió a Firestore.");
-  }
+  const { projectId } = requireTestFirestore();
   // La protección anterior se ejecuta antes de cargar el SDK o la configuración.
   const [{ initializeApp, deleteApp }, { getFirestore, Timestamp }] = await Promise.all([
     import("firebase-admin/app"), import("firebase-admin/firestore"),
   ]);
-  const app = emulator
-    ? initializeApp({ projectId: process.env.CATALOG_TEST_PROJECT_ID || "demo-catalog-tests" }, `test-${randomUUID()}`)
-    : (await import("../../src/config/firebase.js")).app;
+  const app = initializeApp({ projectId }, `test-${randomUUID()}`);
   const db = getFirestore(app);
   return { db, Timestamp, async close() { try { await db.terminate(); } finally { await deleteApp(app); } } };
 }
