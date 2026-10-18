@@ -63,12 +63,30 @@ test("envío incierto corta la secuencia sin reintentar ni enviar el cierre; otr
   try {
     await f.transport.sendText(chat, "Introducción");
     await assert.rejects(f.transport.sendImage(chat, { source: "https://example.test/image.png", caption: "Foto" }), { code: "SEND_UNCERTAIN" });
-    await assert.rejects(f.transport.sendText(chat, "Cierre"), { code: "SEND_UNCERTAIN" });
+    await assert.rejects(f.transport.sendText(chat, "Cierre"), { code: "SEND_SEQUENCE_STOPPED" });
     assert.deepEqual(f.outgoing.map(row => row.content), ["Introducción"]);
     assert.ok([...f.db.rows.values()].some(row => row.status === "uncertain"));
     fail = false; f.transport.beginTurn(chat);
     await f.transport.sendText(chat, "Nueva respuesta");
     assert.deepEqual(f.outgoing.map(row => row.content), ["Introducción", "Nueva respuesta"]);
+  } finally { f.transport.close(); }
+});
+
+test("foto con entrega incierta conserva su reserva; las siguientes no intentadas se liberan y otro turno no la reenvía", async () => {
+  const f = deliveryFixture({ send: async (_chat, content) => { if (content instanceof FakeMessageMedia) throw new Error("Resultado incierto"); } });
+  const products = productsWithImages().products.map(product => ({ ...product, variants: product.variants.map(variant => ({ ...variant, active: true })) }));
+  let state = { messages: [] }; const events = [];
+  const respond = createResponder({ getState: () => structuredClone(state), setState: value => { state = value; },
+    catalog: { getProduct: async id => products.find(row => row.id === id) }, recordImageEvent: value => events.push(value),
+    transport: { sendText: text => f.transport.sendText(chat, text), sendImage: value => f.transport.sendImage(chat, value) } });
+  try {
+    await assert.rejects(respond({ texto: "Opciones", cierre: "Cierre", entendido: true, productosMostrados: ["product-a", "product-b"] }), { code: "SEND_SEQUENCE_STOPPED" });
+    assert.deepEqual(state.sentProductImages.map(row => [row.productId, row.delivery]), [["product-a", "pending"]]);
+    assert.ok(events.some(row => row.code === "PRODUCT_IMAGE_DELIVERY_UNCERTAIN"));
+    f.transport.beginTurn(chat);
+    const result = await respond({ texto: "La misma opción", entendido: true, productosMostrados: ["product-a"] });
+    assert.deepEqual(result.productImages.skipped, [{ productId: "product-a", reason: "YA_ENVIADA" }]);
+    assert.ok(f.outgoing.every(row => !(row.content instanceof FakeMessageMedia)));
   } finally { f.transport.close(); }
 });
 

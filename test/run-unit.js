@@ -3,6 +3,9 @@ import { fileURLToPath } from "node:url";
 
 const projectDirectory = fileURLToPath(new URL("../", import.meta.url));
 const memorySuites = [
+  "test/test_whatsapp_agent_routing.js",
+  "test/test_whatsapp_transport.js",
+  "test/test_whatsapp_production.js",
   "test/test_receipt_retention.js",
   "test/test_agent_packaging_images.js",
   "test/test_agent_packaging_images_runner.js",

@@ -9,7 +9,10 @@ export function createAgentWhatsAppConfig(env = {}) {
   const raw = env.AGENT_ENABLED ?? "false";
   if (![true, false, "true", "false", "1", "0"].includes(raw)) throw new Error("AGENT_ENABLED debe ser true o false");
   const enabled = [true, "true", "1"].includes(raw);
-  // Apagado: ninguna otra variable del piloto altera el camino legacy.
+  const maintenanceMode = env.AGENT_MAINTENANCE_MODE === undefined ? "message" : env.AGENT_MAINTENANCE_MODE;
+  if (!["message", "silent"].includes(maintenanceMode)) throw new Error("AGENT_MAINTENANCE_MODE debe ser message o silent");
+  if (maintenanceMode === "silent" && !enabled) throw new Error("AGENT_MAINTENANCE_MODE=silent exige AGENT_ENABLED=true y AGENT_ALLOWLIST definida y no vacía");
+  // Apagado: salvo la validación del modo, las otras variables no alteran el camino legacy.
   if (!enabled) return Object.freeze({ enabled: false, allowlist: null });
   let allowlist = null;
   if (Object.hasOwn(env, "AGENT_ALLOWLIST")) {
@@ -19,11 +22,12 @@ export function createAgentWhatsAppConfig(env = {}) {
     if (phones.some(value => value === null)) throw new Error("AGENT_ALLOWLIST contiene un teléfono inválido; no acepta LID");
     allowlist = Object.freeze([...new Set(phones)]);
   }
+  if (maintenanceMode === "silent" && !allowlist?.length) throw new Error("AGENT_MAINTENANCE_MODE=silent exige AGENT_ENABLED=true y AGENT_ALLOWLIST definida y no vacía");
   const maintenanceMessage = env.AGENT_MAINTENANCE_MESSAGE ?? DEFAULT_MAINTENANCE_MESSAGE;
   if (typeof maintenanceMessage !== "string" || !maintenanceMessage.trim() || maintenanceMessage.length > 4000) {
     throw new Error("AGENT_MAINTENANCE_MESSAGE debe ser texto no vacío de hasta 4000 caracteres");
   }
-  return Object.freeze({ enabled, allowlist, maintenanceMessage });
+  return Object.freeze({ enabled, allowlist, maintenanceMode, maintenanceMessage });
 }
 
 export function allowsAgentPhone(config, phone) {

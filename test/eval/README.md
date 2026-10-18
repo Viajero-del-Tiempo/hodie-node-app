@@ -838,3 +838,48 @@ O-02 y el resto de TEMPORAL ENTREGA 5 quedan para 5B. No se modifican YAML,
 checks, umbrales, pensamiento ni tiempos. Guía completa de archivos, regresión,
 emulador y Angular: ../../docs/VERIFICACION-agente-5A.md.
 
+## Entrega 7A: piloto real, separado del runner
+
+El runner y el piloto usan consultation/runtime-factory.js para componer las
+mismas herramientas, agente y guardián. eval-adapter conserva el interceptor,
+los datos en memoria y el contrato del runner. No importa WhatsApp/Firebase.
+
+El piloto real tiene su propio launcher contra el emulador, sesión WhatsApp
+separada, allowlist obligatoria para la prueba local, banco ficticio y
+almacenamiento local de medios. Consume Gemini real; no corre evaluaciones.
+
+```bash
+node --test test/test_whatsapp_agent_routing.js test/test_whatsapp_transport.js test/test_whatsapp_production.js
+AGENT_ENABLED=false npm run test:guardian:unit
+AGENT_ENABLED=false npm run test:agent:unit
+```
+
+Para levantar el piloto (número del cliente de prueba, no el de la cuenta del QR):
+
+```bash
+read -r -p 'Número de prueba habilitado: ' PILOT_PHONE
+AGENT_ENABLED=true AGENT_ALLOWLIST="$PILOT_PHONE" node scripts/dev-agent-whatsapp.js
+```
+
+Con emulador/API ya levantados, --attach conecta solo el piloto y no detiene esos
+procesos al cerrar. Con AGENT_MAINTENANCE_MODE=message (default), el resto de los
+números recibe mantenimiento, sin modelo y una vez por chat cada seis horas.
+Para una cuenta personal, agregar AGENT_MAINTENANCE_MODE=silent al comando:
+fuera de la lista solo queda un log enmascarado, sin respuestas ni escrituras.
+Este modo exige interruptor activo y lista definida no vacía; otros valores del
+modo rechazan la configuración. AGENT_ENABLED=false en el backend habitual
+conserva el camino legacy; el launcher local exige true y lista no vacía.
+
+Contra el emulador levantado, la suite nueva de concurrencia/checkpoints:
+
+```bash
+AGENT_ENABLED=false node scripts/test-catalog-emulator.js --agent-whatsapp-only
+```
+
+El registro durable de IDs vence a los siete días; la política TTL y las
+limitaciones de reinicio/envío incierto están documentadas en
+../../docs/VERIFICACION-agente-7A.md. No hay salida de tests ni evaluaciones en
+esta documentación. Se conserva conversations.yaml, checks y umbrales.
+7B y 7C siguen pendientes: toma humana/reactivación por motor y alertas; luego
+eventos de conexión, trabajador PDF y telemetría con caché de tokens.
+

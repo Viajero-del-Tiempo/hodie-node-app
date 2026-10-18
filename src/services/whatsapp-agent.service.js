@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { acceptsMessage } from "../agents/guardian/filters.js";
 import { allowsAgentPhone } from "../config/agent-whatsapp.config.js";
 
@@ -10,13 +11,27 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
   async function admit(message) {
     lifetime.signal.throwIfAborted();
     const chatId = message.from;
+    let phone = null;
+    const silent = config.maintenanceMode === "silent";
+    if (silent) {
+      // Resolver antes de reclamar el ID: un chat excluido no deja escrituras.
+      // El receptor real respeta sideEffectFree también para la caché de LID.
+      try { phone = await resolvePhone(chatId, { sideEffectFree: true }); }
+      catch { /* Identidad desconocida: permanece fuera de la lista, con un único log. */ }
+      lifetime.signal.throwIfAborted();
+      if (!allowsAgentPhone(config, phone)) {
+        logger({ code: "MAINTENANCE_SILENT", chat: "chat-" + createHash("sha256").update(chatId).digest("hex").slice(0, 12) });
+        return {};
+      }
+    }
     const id = await repository.claimMessage(chatId, message.id?._serialized);
     if (!id) return {};
     let completion;
     try {
-      let phone = null;
-      try { phone = await resolvePhone(chatId); }
-      catch { logger({ code: "PHONE_RESOLUTION_FAILED" }); }
+      if (!silent) {
+        try { phone = await resolvePhone(chatId); }
+        catch { logger({ code: "PHONE_RESOLUTION_FAILED" }); }
+      }
       lifetime.signal.throwIfAborted();
       if (!allowsAgentPhone(config, phone)) {
         const notify = await repository.claimMaintenance(chatId);
@@ -55,6 +70,7 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
     },
     async shutdown() {
       if (closed) return;
+      if (!config.enabled) { closed = true; return; }
       closed = true; lifetime.abort(Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" })); transport.close();
       await Promise.allSettled([...runtimes.values()].map(async pending => (await pending).shutdown()));
     },

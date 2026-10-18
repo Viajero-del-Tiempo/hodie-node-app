@@ -46,10 +46,13 @@ export function createProductImages(runtime) {
     catch { signal?.throwIfAborted(); record("PRODUCT_IMAGE_CHECKPOINT_FAILED", productId, metadata);
       return { failed: { productId, ...metadata, code: "PRODUCT_IMAGE_CHECKPOINT_FAILED" } }; }
     try { await transport.sendImage({ source, caption, productId, ...metadata, signal }); signal?.throwIfAborted(); }
-    catch {
+    catch (error) {
       signal?.throwIfAborted();
-      try { await save(rows => rows.filter(entry => entry.source !== source), signal); }
-      catch { signal?.throwIfAborted(); record("PRODUCT_IMAGE_CHECKPOINT_FAILED", productId, metadata); }
+      if (error?.code === "SEND_UNCERTAIN") record("PRODUCT_IMAGE_DELIVERY_UNCERTAIN", productId, metadata);
+      else {
+        try { await save(rows => rows.filter(entry => entry.source !== source), signal); }
+        catch { signal?.throwIfAborted(); record("PRODUCT_IMAGE_CHECKPOINT_FAILED", productId, metadata); }
+      }
       record("PRODUCT_IMAGE_SEND_FAILED", productId, metadata);
       return { failed: { productId, ...metadata, code: "PRODUCT_IMAGE_SEND_FAILED" } };
     }

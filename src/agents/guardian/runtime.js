@@ -53,7 +53,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         ...(message.attachmentId ? { attachmentId: message.attachmentId } : {}) })) });
     try {
       runtime.setDeliverySignal?.(signal);
-      await runtime.onTurnStart?.({ signal });
+      if (runtime.onTurnStart) await withSignal(() => runtime.onTurnStart({ signal }), signal);
       runtime.setExecutionPhase?.("guardian_admission");
       signal.throwIfAborted();
       await withSignal(() => synchronizeAgentAlerts(runtime, { signal }), signal);
@@ -135,7 +135,7 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
         lastMessage: turn.messages.at(-1)?.text, now: clock.now() });
       return finish("technical_error");
     } finally {
-      try { await runtime.onTurnEnd?.(processed); }
+      try { if (runtime.onTurnEnd && !signal.aborted) await withSignal(() => runtime.onTurnEnd(processed), signal); }
       finally {
         clock.clearTimeout(timer);
         deadlineClock.clearTimeout(deadlineTimer);

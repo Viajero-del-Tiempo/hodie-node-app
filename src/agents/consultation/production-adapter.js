@@ -33,20 +33,27 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
   let state = await store.read();
   signal?.throwIfAborted();
   const handoffRef = db.collection("handoff_threads").doc(chatId);
-  if (!state) {
-    state = initialAgentState(chatId);
-    const handoff = await handoffRef.get();
-    if (handoff.exists && handoff.data().active !== false) {
-      state.humanHandoffRequired = true;
-      state.humanHandoffReason = handoff.data().motivo ?? "Atención humana";
-    }
+  const missing = !state;
+  state ??= initialAgentState(chatId);
+  const handoff = await handoffRef.get(); signal?.throwIfAborted();
+  if (handoff.exists && handoff.data().active !== false) {
+    state.humanHandoffRequired = true;
+    state.humanHandoffReason = handoff.data().motivo ?? "Atención humana";
+  }
+  if (missing || handoff.exists && handoff.data().active !== false) {
     await store.write(state);
   }
   let closed = false, deliverySignal = null, outgoing = [], turnStarted = false;
+  let persistence = Promise.resolve();
   const clone = value => structuredClone(value);
-  const setState = async next => {
-    if (closed) throw Object.assign(new Error("Agente cerrado"), { code: "PILOT_CLOSED" });
-    await store.write(assertCheckpointState(next)); state = clone(next);
+  const setState = next => {
+    const snapshot = clone(assertCheckpointState(next));
+    const write = persistence.catch(() => {}).then(async () => {
+      if (closed) throw Object.assign(new Error("Agente cerrado"), { code: "PILOT_CLOSED" });
+      await store.write(snapshot); state = clone(snapshot);
+    });
+    persistence = write.catch(() => {});
+    return write;
   };
   const adapter = createWhatsAppAdapter({ chatId, resolvePhone,
     sendText: async (_chat, text) => { await transport.sendText(chatId, text, { signal: deliverySignal }); outgoing.push({ role: "assistant", content: text }); },
@@ -58,7 +65,8 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
     async listByPhone(phone) { return documents(await db.collection("orders").where("userPhoneNumber", "==", phone).orderBy("createdAt", "desc").get()); },
     async listByChat(id) { return documents(await db.collection("orders").where("whatsappChatId", "==", id).get()); },
   };
-  const uploader = uploadCustomizationImage ?? ((file, { signal } = {}) => createSignedImageUploader()({ ...file, signal }));
+  const signedUploader = createSignedImageUploader();
+  const uploader = uploadCustomizationImage ?? ((file, options) => signedUploader(file, options));
   const ports = { transport: adapter, now, getState: () => clone(state), setState,
     catalog: createCatalogService({ repository: createCatalogRepository(db, { timestampNow }), now }), orders,
     cartRepository: createCartRepository({ db, timestampFromMillis, now }), quoteRepository: createOrderQuoteRepository({ db }),
@@ -77,7 +85,8 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
     recordImageEvent: logger,
     setDeliverySignal: value => { deliverySignal = value; },
     async onTurnStart({ signal }) {
-      signal.throwIfAborted(); const current = await store.read();
+      signal.throwIfAborted(); await persistence; signal.throwIfAborted();
+      const current = await store.read(); signal.throwIfAborted();
       if (!current) throw Object.assign(new Error("Checkpoint desaparecido"), { code: "CHECKPOINT_MISSING" });
       state = current; outgoing = []; transport.beginTurn(chatId); turnStarted = true;
     },

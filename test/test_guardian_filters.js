@@ -11,14 +11,16 @@ test("filtro nuevo tiene paridad con el código actual sin importar ni iniciar W
   const filters = source.match(/export const handleIncomingWhatsAppMessage = async \(mensaje\) => \{([\s\S]*?)\/\/ 3\./);
   const empty = source.match(/if \(!mensaje.body && !mensaje.hasMedia && mensaje.type !== "location"\) return;/);
   assert.ok(types && filters && empty, "Si cambia el filtro productivo hay que revisar explícitamente la paridad");
-  const current = vm.runInNewContext("(mensaje) => { const ALLOWED_MESSAGE_TYPES = new Set(" + types[1] + ");"
-    + filters[1] + empty[0] + " return true; }");
+  // La paridad legacy se conserva con el interruptor apagado. El receptor
+  // ahora espera la puerta del piloto antes de ejecutar sus filtros originales.
+  const current = vm.runInNewContext("async (mensaje) => { const ALLOWED_MESSAGE_TYPES = new Set(" + types[1] + ");"
+    + filters[1] + empty[0] + " return true; }", { agentWhatsAppConfig: { enabled: false } });
   const base = { from: "test@lid", body: "Hola", type: "chat", fromMe: false, hasMedia: false };
   const variants = [{}, { fromMe: true }, { from: "" }, { from: undefined }, { from: "0@c.us" }, { from: "test@g.us" },
     { from: "status@broadcast" }, { type: "e2e_notification" }, { type: "call_log" }, { type: undefined },
     { body: "", hasMedia: false }, { body: "", type: "location" }, { body: "", hasMedia: true },
     ...["chat", "image", "document", "audio", "video", "sticker", "ptt", "location"].map(type => ({ type }))];
-  for (const variant of variants) { const message = { ...base, ...variant }; assert.equal(acceptsMessage(message), Boolean(current(message)), JSON.stringify(variant)); }
+  for (const variant of variants) { const message = { ...base, ...variant }; assert.equal(acceptsMessage(message), Boolean(await current(message)), JSON.stringify(variant)); }
 });
 test("duplicados no forman otro lote y el registro libera identificadores viejos", () => {
   const seen = createMessageDeduplicator(100);

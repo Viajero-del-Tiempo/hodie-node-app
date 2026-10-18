@@ -1335,3 +1335,69 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
 - Backend en feature/agente y Angular en feature/catalogo-variantes. No se hace
   commit, push ni deploy. Archivos, comandos y recorrido manual:
   VERIFICACION-empaques-5C.md; el dueño ejecuta las pruebas/builds/evaluaciones.
+
+## Agente, entrega 7: conexión dividida en 7A, 7B y 7C
+
+- Solo 7A implementada para revisión del dueño; sin resultados de tests ni
+  evaluaciones afirmados. La tienda sigue en mantenimiento. No se despliega,
+  no se elimina legacy y no se modifican YAML, checks, umbrales, pensamiento ni
+  plazos del agente. No hay dependencias nuevas ni cambios a package.json.
+- AGENT_ENABLED ausente/false conserva el receptor y grafo anteriores, sin
+  acceder a los puertos del piloto. AGENT_MAINTENANCE_MODE se valida siempre;
+  las demás variables del piloto no alteran el camino apagado.
+  Activado: AGENT_ALLOWLIST ausente habilita todos; presente vacía, ninguno;
+  con números, solo sus teléfonos normalizados resueltos desde WhatsApp. Un
+  teléfono escrito por el cliente o un LID sin resolver no habilitan la lista.
+- AGENT_MAINTENANCE_MODE acepta exactamente message (default) o silent; otro
+  valor rechaza el arranque. silent solo es válido con AGENT_ENABLED=true y
+  AGENT_ALLOWLIST definida y no vacía. Fuera de la lista: solo un log con chat
+  enmascarado por evento, sin modelo, descarga, escritura de IDs, mantenimiento,
+  envíos ni checkpoints. La resolución LID tampoco escribe caché ni advierte.
+  El launcher imprime modo y cantidad de números únicos habilitados al arrancar.
+- Fuera de la lista, únicamente con interruptor activo y modo message: mantenimiento
+  configurable con AGENT_MAINTENANCE_MESSAGE, por defecto «¡Hola! Estamos
+  renovando nuestra tienda y volvemos muy pronto. Gracias por escribirnos 🎁».
+  Reserva durable por chat cada seis horas antes del envío, sin modelos. Se
+  registra como envío propio con ID de WhatsApp. Fallo/incertidumbre no liberan
+  la cuota; ningún error del piloto permite caer al router viejo.
+- Runtime-factory compartida entre eval-adapter y production-adapter; conserva
+  las herramientas y límites existentes. Checkpoints nuevos en agent_checkpoints
+  y agent_checkpoint_writes, thread_id real. El saver compartido tiene opciones
+  de colecciones y modo de lectura estricto opt-in; sus defaults legacy siguen
+  intactos. Una lectura fallida no se trata como estado nuevo. Historial por
+  lote con mensajes enviados y sin bytes/attachmentId en estado.
+- IDs de entrada reclamados transaccionalmente en agent_whatsapp_messages antes
+  de la ráfaga: expiresAt Timestamp = recepción + siete días. Deduplica entre
+  receptores concurrentes y reinicios. No guarda el cuerpo ni los medios. El
+  vencimiento lógico se aplica aunque TTL todavía no haya borrado la fila;
+  un registro inválido es error explícito. Otro ID con igual texto es otro mensaje.
+- Transporte FIFO por chat, pausa cancelable de 500 ms entre envíos, descarga
+  acotada de fotos y caption del servidor. Un fallo de descarga permite el
+  reemplazo textual existente y continuar. Si el envío externo queda incierto,
+  se corta esa secuencia y no se reintenta a ciegas. agent_whatsapp_deliveries
+  guarda metadatos e IDs propios, sin contenido, con expiresAt a siete días.
+  agent_whatsapp_maintenance conserva la próxima hora habilitada por chat.
+- **Pendiente de puesta en marcha:** habilitar política TTL sobre expiresAt de
+  los collection groups agent_whatsapp_messages y agent_whatsapp_deliveries.
+  No agregar otros siete días de offset: ya están incluidos en expiresAt.
+  La política es independiente de firestore:indexes. Comandos/fuente oficial en
+  VERIFICACION-agente-7A.md. No se ejecutó ninguna operación de administración.
+- Las ráfagas continúan en RAM. El apagado ordenado registra cuántas descarta;
+  SIGKILL/reinicio abrupto puede perderlas. Los IDs reclamados no se reprocesan
+  dentro de los siete días. No se promete entrega exactamente una vez entre
+  Firestore y WhatsApp. No se reenvía automáticamente una entrega incierta.
+- scripts/dev-agent-whatsapp.js exige lista no vacía y configuración demo antes
+  de importar SDKs/revisar puertos; inicia el entorno local o se conecta a él con
+  --attach. Usa sesión WhatsApp separada, banco ficticio del runner, fotos y
+  personalización locales y comprobantes privados en dev/receipts. El modelo
+  sí es real. Mantiene el JWT local independiente y los guardas existentes.
+- 7B pendiente: message_create, envoltorio global de envíos propios, toma humana,
+  resume-bot por motor y despacho de agent_alerts/order_alerts. El panel debe
+  listar todos los chats pausados por derivación o toma manual, con motivo y
+  fecha, y reactivarlos con un clic. En 7A escribir desde la tienda aún no pausa
+  automáticamente el bot, y el panel todavía reactiva solo el grafo legacy.
+- 7C pendiente: auth_failure/disconnected/message_ack, trabajador PDF sobre el
+  transporte real, telemetría y cachedContentTokenCount. En 7A se conservan los
+  trabajos PDF y alertas pendientes, sin despacharlos. No se toca el stock ni
+  la confirmación manual de pagos. Guía, inventario y comandos del dueño:
+  VERIFICACION-agente-7A.md.

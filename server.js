@@ -30,13 +30,15 @@ const startServer = async () => {
       if (stopping) return;
       stopping = true;
       const deadline = setTimeout(() => process.exit(1), 5000);
+      let code = 0;
       try {
         await shutdownAgentPilot();
         await stopReceiptCleanup();
         await whatsappClient.destroy();
         httpServer.closeAllConnections();
         await new Promise(resolve => httpServer.close(resolve));
-      } finally { clearTimeout(deadline); process.exit(0); }
+      } catch { code = 1; console.error(JSON.stringify({ code: "PILOT_SHUTDOWN_FAILED" })); }
+      finally { clearTimeout(deadline); process.exit(code); }
     };
     process.once("SIGINT", () => { void stop(); });
     process.once("SIGTERM", () => { void stop(); });

@@ -29,7 +29,7 @@ export function createWhatsAppTransport({ client, MessageMedia, repository, getS
     const signal = AbortSignal.any([options.signal ?? getSignal(), lifetime.signal].filter(Boolean));
     const task = (queues.get(chatId) ?? Promise.resolve()).catch(() => {}).then(async () => {
       if (closed) throw deliveryError("TRANSPORT_CLOSED");
-      if (uncertainChats.has(chatId)) throw deliveryError("SEND_UNCERTAIN");
+      if (uncertainChats.has(chatId)) throw deliveryError("SEND_SEQUENCE_STOPPED");
       signal?.throwIfAborted();
       const elapsed = now() - (lastSentAt.get(chatId) ?? -Infinity);
       if (elapsed < WHATSAPP_SEND_PAUSE_MS) await pause(WHATSAPP_SEND_PAUSE_MS - elapsed, signal);
@@ -48,12 +48,13 @@ export function createWhatsAppTransport({ client, MessageMedia, repository, getS
       } catch (error) {
         lastSentAt.set(chatId, now()); uncertainChats.add(chatId);
         // La API no permite demostrar que un rechazo no llegó a enviar.
-        await repository.finishOutgoing(id, { status: "uncertain", code: error.code ?? "SEND_FAILED" });
+        try { await repository.finishOutgoing(id, { status: "uncertain", code: error.code ?? "SEND_FAILED" }); }
+        catch { logger({ code: "WHATSAPP_DELIVERY_RECORD_FAILED", type }); }
         logger({ code: "WHATSAPP_SEND_UNCERTAIN", type });
         throw deliveryError("SEND_UNCERTAIN", error);
       }
       try { await repository.finishOutgoing(id, { status: "accepted", whatsappMessageId: sent.id._serialized }); }
-      catch (error) { uncertainChats.add(chatId); throw deliveryError("SEND_UNCERTAIN", error); }
+      catch (error) { uncertainChats.add(chatId); logger({ code: "WHATSAPP_DELIVERY_RECORD_FAILED", type }); throw deliveryError("SEND_UNCERTAIN", error); }
       signal?.throwIfAborted();
       if (closed) throw deliveryError("TRANSPORT_CLOSED");
       await onSent(chatId, { type, ...metadata });

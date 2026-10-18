@@ -14,6 +14,7 @@ import { createAgentWhatsAppConfig } from "../src/config/agent-whatsapp.config.j
 assertLocalCatalogTarget(process.env);
 const config = createAgentWhatsAppConfig(process.env);
 if (!config.enabled || !config.allowlist?.length) throw new Error("El piloto local exige AGENT_ENABLED=true y AGENT_ALLOWLIST no vacía");
+if (!process.argv.includes("--worker")) console.info(`Piloto WhatsApp: mantenimiento=${config.maintenanceMode}; números habilitados=${config.allowlist.length}`);
 
 if (process.argv.includes("--worker")) {
   assertLocalEnvironment(process.env);
@@ -49,6 +50,7 @@ if (process.argv.includes("--worker")) {
     allowLocalImages: true, receiptStorage: createLocalReceiptStorage(join(projectDirectory, "dev", "receipts")),
     uploadCustomizationImage: async ({ base64, mimetype }, { signal } = {}) => {
       signal?.throwIfAborted();
+      if (!["image/jpeg", "image/jpg", "image/png", "image/webp"].includes(mimetype?.toLowerCase())) throw new Error("Formato de personalización no admitido");
       const file = validatePaymentReceipt({ data: Buffer.from(base64, "base64"), mimeType: mimetype, filename: "imagen" });
       if (!file.mimeType.startsWith("image/")) throw new Error("Se requiere una imagen");
       const name = createHash("sha256").update(file.data).digest("hex") + "." + file.extension;
@@ -75,7 +77,10 @@ if (process.argv.includes("--worker")) {
   try { values = parse(await readFile(new URL("../.env", import.meta.url))); } catch (error) { if (error.code !== "ENOENT") throw error; }
   const inherited = { ...process.env };
   for (const name of ["GEMINI_API_KEY", "GEMINI_MODEL", "AGENT_THINKING_BUDGET", "AGENT_MODEL_CALL_TIMEOUT_MS"]) if (inherited[name] === undefined && values[name] !== undefined) inherited[name] = values[name];
-  const env = makeLocalEnvironment({ inherited }); assertLocalEnvironment(env);
+  const bank = JSON.parse(await readFile(new URL("../test/fixtures/agent-bank.json", import.meta.url), "utf8"));
+  const env = { ...makeLocalEnvironment({ inherited }), BANK_NAME: bank.bankName, BANK_ACCOUNT_HOLDER: bank.accountHolder,
+    BANK_DOCUMENT_ID: bank.documentId, BANK_ACCOUNT_NUMBER: bank.accountNumber, BANK_CURRENCY: bank.currency, BANK_ALIAS: bank.alias };
+  assertLocalEnvironment(env);
   if (!env.GEMINI_API_KEY) throw new Error("Falta GEMINI_API_KEY para el piloto real");
   await new Promise((resolve, reject) => { const probe = probeServer(); probe.once("error", reject); probe.listen(3001, "127.0.0.1", () => probe.close(resolve)); });
   const children = []; let stopping = false;
@@ -83,11 +88,13 @@ if (process.argv.includes("--worker")) {
   const stop = () => { stopping = true; for (const child of children) if (child.exitCode === null && child.signalCode === null) child.kill("SIGINT"); };
   process.once("SIGINT", stop); process.once("SIGTERM", stop);
   try {
-    const catalog = spawn(process.execPath, [fileURLToPath(new URL("./dev-catalog.js", import.meta.url))], { cwd: projectDirectory, env, stdio: "inherit" });
-    children.push(catalog); const catalogEnded = ended(catalog);
+    const attach = process.argv.includes("--attach");
+    const catalog = attach ? null : spawn(process.execPath, [fileURLToPath(new URL("./dev-catalog.js", import.meta.url))], { cwd: projectDirectory, env, stdio: "inherit" });
+    if (catalog) children.push(catalog);
+    const catalogEnded = catalog ? ended(catalog) : new Promise(() => {});
     let ready = false;
-    for (let attempt = 0; attempt < 150 && !stopping; attempt++) {
-      if (catalog.exitCode !== null || catalog.signalCode !== null) throw new Error("El entorno local terminó antes de iniciar");
+    for (let attempt = 0; attempt < (attach ? 1 : 150) && !stopping; attempt++) {
+      if (catalog && (catalog.exitCode !== null || catalog.signalCode !== null)) throw new Error("El entorno local terminó antes de iniciar");
       try {
         const response = await fetch("http://127.0.0.1:3000/local-health", { signal: AbortSignal.timeout(1000) });
         const health = await response.json();
@@ -95,7 +102,7 @@ if (process.argv.includes("--worker")) {
       } catch { /* Esperar al servidor que valida y carga los fixtures locales. */ }
       await delay(1000);
     }
-    if (!ready) { if (!stopping) throw new Error("El entorno local no inició a tiempo"); }
+    if (!ready) { if (!stopping) throw new Error(attach ? "Levantá primero npm run catalog:local" : "El entorno local no inició a tiempo"); }
     else {
       const worker = spawn(process.execPath, [fileURLToPath(import.meta.url), "--worker"], { cwd: projectDirectory, env, stdio: "inherit" });
       children.push(worker); const code = await Promise.race([catalogEnded, ended(worker)]);

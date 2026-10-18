@@ -230,9 +230,11 @@ export const runInThreadQueue = async (queueKey, taskFn, timeoutMs = 60000) => {
  * - Si falla o no hay 'pn': devuelve "" y loguea una advertencia. NUNCA devuelve el LID como si fuera teléfono.
  *
  * @param {string} whatsappChatId
+ * @param {{sideEffectFree?: boolean}} options Sin escrituras de caché ni advertencias para la admisión silent.
  * @returns {Promise<string>} Número de teléfono resuelto o cadena vacía "" si no se puede resolver.
  */
-export const resolvePhoneFromChatId = async (whatsappChatId) => {
+export const resolvePhoneFromChatId = async (whatsappChatId, { sideEffectFree = false } = {}) => {
+  const warn = (...args) => { if (!sideEffectFree) console.warn(...args); };
   if (!whatsappChatId || typeof whatsappChatId !== "string") {
     return "";
   }
@@ -257,7 +259,7 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
         }
       }
     } catch (dbErr) {
-      console.warn(`⚠️ Error consultando lid_phone_map para LID ${lidKey}:`, dbErr.message);
+      warn(`⚠️ Error consultando lid_phone_map para LID ${lidKey}:`, dbErr.message);
     }
 
     // Si no está, llamar a whatsappClient.getContactLidAndPhone([lid])
@@ -274,29 +276,31 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
         ) {
           const phoneNumber = contactInfo.pn.replace("@c.us", "").replace(/\D/g, "");
           if (phoneNumber) {
-            // Guardar el par en lid_phone_map
-            await db
-              .collection("lid_phone_map")
-              .doc(lidKey)
-              .set(
-                {
-                  lid: lidKey,
-                  phoneNumber,
-                  pn: contactInfo.pn,
-                  updatedAt: Timestamp.now(),
-                },
-                { merge: true }
-              );
+            if (!sideEffectFree) {
+              // Guardar el par en lid_phone_map
+              await db
+                .collection("lid_phone_map")
+                .doc(lidKey)
+                .set(
+                  {
+                    lid: lidKey,
+                    phoneNumber,
+                    pn: contactInfo.pn,
+                    updatedAt: Timestamp.now(),
+                  },
+                  { merge: true }
+                );
+            }
 
             return phoneNumber;
           }
         }
       }
-      console.warn(
+      warn(
         `⚠️ No se pudo resolver número de teléfono para @lid (${whatsappChatId}): no se obtuvo pn válido terminado en @c.us.`
       );
     } catch (clientErr) {
-      console.warn(
+      warn(
         `⚠️ Error llamando a getContactLidAndPhone para ${whatsappChatId}:`,
         clientErr.message
       );
@@ -305,7 +309,7 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
     return "";
   }
 
-  console.warn(`⚠️ whatsappChatId con formato no reconocido (${whatsappChatId}). Devolviendo "".`);
+  warn(`⚠️ whatsappChatId con formato no reconocido (${whatsappChatId}). Devolviendo "".`);
   return "";
 };
 
