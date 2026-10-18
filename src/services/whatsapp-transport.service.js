@@ -5,7 +5,7 @@ const deliveryError = (code, cause) => Object.assign(new Error("No se pudo entre
 // Inyecta Client/MessageMedia: importar este módulo nunca inicia WhatsApp.
 export function createWhatsAppTransport({ client, MessageMedia, repository, getSignal = () => null,
   now = Date.now, pause = (ms, signal) => delay(ms, undefined, { signal }), fetchImpl = fetch,
-  imageMaxBytes = 10 * 1024 * 1024, allowLocalImages = false, onSent = () => {}, logger = () => {} }) {
+  imageMaxBytes = 10 * 1024 * 1024, allowLocalImages = false, onSent = () => {}, logger = () => {}, beforeSend = async () => {} }) {
   const queues = new Map(), lastSentAt = new Map(), uncertainChats = new Set();
   const lifetime = new AbortController();
   let closed = false;
@@ -39,13 +39,24 @@ export function createWhatsAppTransport({ client, MessageMedia, repository, getS
       const { content, sendOptions = {} } = await build(signal);
       signal?.throwIfAborted();
       const id = await repository.beginOutgoing(chatId, { type, origin: options.origin ?? "agent" });
-      signal?.throwIfAborted();
+      try {
+        signal?.throwIfAborted();
+        await beforeSend(chatId, { type, origin: options.origin ?? "agent" });
+        signal?.throwIfAborted();
+      } catch (error) {
+        await repository.finishOutgoing(id, { status: "cancelled", code: error.code ?? "PRE_SEND_CANCELLED" });
+        throw error;
+      }
       let sent;
       try {
-        sent = await client.sendMessage(chatId, content, { ...sendOptions, sendSeen: false });
+        sent = await client.sendMessage(chatId, content, { ...sendOptions, sendSeen: false, appSignal: signal });
         lastSentAt.set(chatId, now());
         if (!sent?.id?._serialized) throw deliveryError("SEND_UNCERTAIN");
       } catch (error) {
+        if (error.deliveryStarted === false) {
+          await repository.finishOutgoing(id, { status: "cancelled", code: error.code ?? "PRE_SEND_CANCELLED" });
+          throw error;
+        }
         lastSentAt.set(chatId, now()); uncertainChats.add(chatId);
         // La API no permite demostrar que un rechazo no llegó a enviar.
         try { await repository.finishOutgoing(id, { status: "uncertain", code: error.code ?? "SEND_FAILED" }); }

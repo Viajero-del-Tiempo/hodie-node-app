@@ -34,8 +34,10 @@ export function whatsappMemoryDatabase() {
         const writes = [];
         const result = await action({
           async get(reference) { if (writes.length) throw new Error("Lectura posterior a escritura"); return reference.get(); },
-          set(reference, value) { writes.push(() => reference.set(value)); },
+          set(reference, value, options) { writes.push(() => reference.set(value, options)); },
           create(reference, value) { writes.push(() => reference.create(value)); },
+          update(reference, value) { writes.push(() => reference.update(value)); },
+          delete(reference) { writes.push(() => reference.delete()); },
         });
         const before = copy(rows);
         try { for (const write of writes) await write(); }

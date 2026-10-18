@@ -1338,12 +1338,14 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
 
 ## Agente, entrega 7: conexión dividida en 7A, 7B y 7C
 
-- Solo 7A implementada para revisión del dueño; sin resultados de tests ni
-  evaluaciones afirmados. La tienda sigue en mantenimiento. No se despliega,
+- 7A aprobada por el dueño tras tests, regresión y piloto real silent. 7B
+  implementada para su revisión; sin resultados nuevos afirmados. La tienda
+  sigue en mantenimiento. No se despliega,
   no se elimina legacy y no se modifican YAML, checks, umbrales, pensamiento ni
   plazos del agente. No hay dependencias nuevas ni cambios a package.json.
 - AGENT_ENABLED ausente/false conserva el receptor y grafo anteriores, sin
-  acceder a los puertos del piloto. AGENT_MAINTENANCE_MODE se valida siempre;
+  activar el motor nuevo. El envoltorio de 7B registra igualmente todos los
+  envíos propios. AGENT_MAINTENANCE_MODE se valida siempre;
   las demás variables del piloto no alteran el camino apagado.
   Activado: AGENT_ALLOWLIST ausente habilita todos; presente vacía, ninguno;
   con números, solo sus teléfonos normalizados resueltos desde WhatsApp. Un
@@ -1391,13 +1393,39 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   --attach. Usa sesión WhatsApp separada, banco ficticio del runner, fotos y
   personalización locales y comprobantes privados en dev/receipts. El modelo
   sí es real. Mantiene el JWT local independiente y los guardas existentes.
-- 7B pendiente: message_create, envoltorio global de envíos propios, toma humana,
-  resume-bot por motor y despacho de agent_alerts/order_alerts. El panel debe
-  listar todos los chats pausados por derivación o toma manual, con motivo y
-  fecha, y reactivarlos con un clic. En 7A escribir desde la tienda aún no pausa
-  automáticamente el bot, y el panel todavía reactiva solo el grafo legacy.
+- 7B implementada: envoltorio único de sendMessage para todos los emisores,
+  registro durable por ID en agent_whatsapp_own_messages (sin texto/bytes, siete
+  días; habilitar TTL expiresAt en puesta en marcha). message_create espera
+  correlación de envíos en curso antes de atribuir una intervención humana.
+  PN/LID se resuelven con identidad del servidor; la autoría sigue siendo por
+  ID, y una toma manual pausa los identificadores de ese teléfono verificado.
+- agent_chat_controls es la autoridad de pausas con motivo toma_manual o
+  derivacion, fecha, versión y generación. Cancela guardián y envíos no iniciados,
+  invalida confirmaciones y conserva carrito/borradores. Pausa por derivación,
+  snapshot y alerta se guardan juntos. Los snapshots nuevos usan el documento
+  raíz de agent_checkpoints con control transaccional de versión; los históricos
+  de 7A se conservan para migrar. Turnos antiguos no pueden quitar el bloqueo ni
+  autorizar pedidos tras una reactivación. Carrito y confirmación/pedido del
+  adaptador real comprueban también el control; web/runner mantienen sus defaults.
+- Solo el panel reactiva, con versión y 409 ante cambio concurrente. Abre sesión
+  nueva sin enviar mensajes. Backend: GET /admin/chats/agent/paused y POST
+  /admin/chats/agent/:id/resume-bot, permisos admin reales, DTO enmascarado y
+  último texto truncado. resume-bot existente distingue motor antes de consultar
+  el grafo. La UI Angular queda para otro paso en feature/catalogo-variantes.
+- Despachador de agent_alerts y order_alerts con lease transaccional y estados
+  claimed/sending. Reintenta solo fallos demostrablemente previos al envío, con
+  espera creciente; entrega incierta requiere revisión humana, sin reenvío ciego.
+  ALERTS_PHONE ausente: advertencia al arrancar, alertas intactas. El aviso no
+  copia contenido sensible. En silent, el envoltorio bloquea también OTP/estados
+  fuera de lista; solo las alertas al ALERTS_PHONE tienen la excepción.
+- Los listeners de control cancelan el worker del piloto al reactivar desde la
+  API de otro proceso. Revisión de índice/bandeja de 7A al arrancar, sin modelo.
+  El intervalo SDK→guardado del ID no es atómico: una caída puede requerir
+  clasificación/revisión humana; nunca se correlaciona por texto.
+- Contrato Angular, comandos, pruebas y recorrido del dueño en
+  VERIFICACION-agente-7B.md. No se ejecutaron tests ni evaluaciones de 7B.
 - 7C pendiente: auth_failure/disconnected/message_ack, trabajador PDF sobre el
-  transporte real, telemetría y cachedContentTokenCount. En 7A se conservan los
-  trabajos PDF y alertas pendientes, sin despacharlos. No se toca el stock ni
+  transporte real, telemetría y cachedContentTokenCount. Los trabajos PDF reales
+  siguen pendientes de 7C; 7B ya despacha las solicitudes de alerta. No se toca el stock ni
   la confirmación manual de pagos. Guía, inventario y comandos del dueño:
   VERIFICACION-agente-7A.md.

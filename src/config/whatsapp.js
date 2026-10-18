@@ -6,6 +6,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { compiledGraph } from "../agents/graph.js";
 import { db } from "./firebase.js";
 import { createAgentWhatsAppConfig } from "./agent-whatsapp.config.js";
+import { createOwnMessageRepository, installWhatsAppClient, readAlertsPhone } from "../services/whatsapp-client.service.js";
 
 const agentWhatsAppConfig = createAgentWhatsAppConfig(process.env);
 let agentPilotPromise = null;
@@ -19,7 +20,7 @@ const getAgentPilot = () => {
       ]);
       return createWhatsAppPilotInfrastructure({ config: agentWhatsAppConfig, client: whatsappClient, MessageMedia, db,
         timestampNow: () => Timestamp.now(), timestampFromMillis: value => Timestamp.fromMillis(value),
-        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG });
+        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG, ownMessages, alertsPhone });
     })();
     agentPilotPromise.catch(() => { agentPilotPromise = null; });
   }
@@ -74,6 +75,17 @@ export const whatsappClient = new Client({
     ignoreHTTPSErrors: true,
   },
   authTimeoutMs: 60000,
+});
+
+const alertsPhone = readAlertsPhone(process.env);
+export const ownMessages = installWhatsAppClient({ client: whatsappClient,
+  repository: createOwnMessageRepository({ db, timestampFromMillis: value => Timestamp.fromMillis(value) }),
+  config: agentWhatsAppConfig, resolvePhone: (...args) => resolvePhoneFromChatId(...args), alertsPhone });
+
+export async function cancelAgentChat(chatId) { if (agentPilotPromise) (await agentPilotPromise).cancelChat(chatId); }
+whatsappClient.on("message_create", message => {
+  if (agentWhatsAppConfig.enabled && message.fromMe && !agentPilotClosed) void getAgentPilot().then(pilot => pilot.handleCreated(message))
+    .catch(error => console.error(JSON.stringify({ code: error.code ?? "MESSAGE_CREATE_FAILED" })));
 });
 
 whatsappClient.on("qr", (qr) => {
@@ -670,6 +682,7 @@ whatsappClient.on("message", handleIncomingWhatsAppMessage);
 
 export const initializeWhatsapp = async () => {
   try {
+    if (agentWhatsAppConfig.enabled) await getAgentPilot();
     await whatsappClient.initialize();
   } catch (error) {
     console.error("Error initializing WhatsApp client:", error);

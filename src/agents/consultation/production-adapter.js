@@ -1,6 +1,7 @@
 import { createAgentRuntime } from "./runtime-factory.js";
 import { createWhatsAppAdapter } from "../guardian/whatsapp-adapter.js";
-import { createAgentCheckpointStore } from "./checkpoint-store.js";
+import { createAgentCheckpointStore, createControlledCheckpointStore } from "./checkpoint-store.js";
+import { controlError } from "../../services/agent-chat-control.service.js";
 import { createCatalogService } from "../../services/catalog.service.js";
 import { createCatalogRepository } from "../../services/catalog.repository.js";
 import { createCartRepository } from "../../services/cart.repository.js";
@@ -27,36 +28,46 @@ export function initialAgentState(chatId) {
 // almacenamiento. 7A no inicia trabajador PDF, envío de alertas ni toma humana.
 export async function createProductionAgent({ db, chatId, timestampNow, timestampFromMillis, resolvePhone,
   transport, bankConfig, receiptStorage = createPrivateReceiptStorage(), uploadCustomizationImage,
-  store, now = Date.now, logger = () => {}, signal, ...agentOptions }) {
+  store, control, now = Date.now, logger = () => {}, signal, ...agentOptions }) {
   signal?.throwIfAborted();
   store ??= await createAgentCheckpointStore({ db, chatId });
+  let controlVersion = control ? (await control.get(chatId)).version : null;
+  if (control) store = await createControlledCheckpointStore({ db, chatId, control, fallback: store });
   let state = await store.read();
   signal?.throwIfAborted();
   const handoffRef = db.collection("handoff_threads").doc(chatId);
   const missing = !state;
   state ??= initialAgentState(chatId);
   const handoff = await handoffRef.get(); signal?.throwIfAborted();
-  if (handoff.exists && handoff.data().active !== false) {
+  if (!control && handoff.exists && handoff.data().active !== false) {
     state.humanHandoffRequired = true;
     state.humanHandoffReason = handoff.data().motivo ?? "Atención humana";
   }
   if (missing || handoff.exists && handoff.data().active !== false) {
     await store.write(state);
   }
-  let closed = false, deliverySignal = null, outgoing = [], turnStarted = false;
+  let closed = false, deliverySignal = null, outgoing = [], turnStarted = false, deriving = false;
   let persistence = Promise.resolve();
   const clone = value => structuredClone(value);
   const setState = next => {
     const snapshot = clone(assertCheckpointState(next));
     const write = persistence.catch(() => {}).then(async () => {
       if (closed) throw Object.assign(new Error("Agente cerrado"), { code: "PILOT_CLOSED" });
+      if (control && snapshot.humanHandoffRequired && !state.humanHandoffRequired) {
+        deriving = true;
+        try {
+          const paused = await control.pause(chatId, { reason: "derivacion", detail: snapshot.humanHandoffReason, expectedVersion: controlVersion, snapshot });
+          controlVersion = paused.version; store.rebase(controlVersion);
+        } catch (error) { deriving = false; throw error; }
+      }
       await store.write(snapshot); state = clone(snapshot);
     });
     persistence = write.catch(() => {});
     return write;
   };
   const adapter = createWhatsAppAdapter({ chatId, resolvePhone,
-    sendText: async (_chat, text) => { await transport.sendText(chatId, text, { signal: deliverySignal }); outgoing.push({ role: "assistant", content: text }); },
+    sendText: async (_chat, text) => { await transport.sendText(chatId, text, { signal: deliverySignal,
+      origin: deriving && state.humanHandoffRequired ? "handoff" : "agent" }); outgoing.push({ role: "assistant", content: text }); },
     sendImage: async (_chat, value) => { await transport.sendImage(chatId, value); outgoing.push({ role: "assistant", content: value.caption + " [imagen enviada]" }); },
   });
   const documents = snapshot => snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
@@ -69,8 +80,10 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
   const uploader = uploadCustomizationImage ?? ((file, options) => signedUploader(file, options));
   const ports = { transport: adapter, now, getState: () => clone(state), setState,
     catalog: createCatalogService({ repository: createCatalogRepository(db, { timestampNow }), now }), orders,
-    cartRepository: createCartRepository({ db, timestampFromMillis, now }), quoteRepository: createOrderQuoteRepository({ db }),
-    orderRepository: createOrderConfirmationRepository({ db, timestampNow, now }), bankConfig,
+    cartRepository: createCartRepository({ db, timestampFromMillis, now,
+      beforeTransaction: control ? tx => control.assertActive(tx, chatId, controlVersion) : undefined }), quoteRepository: createOrderQuoteRepository({ db }),
+    orderRepository: createOrderConfirmationRepository({ db, timestampNow, now,
+      beforeTransaction: control ? tx => control.assertActive(tx, chatId, controlVersion) : undefined }), bankConfig,
     agentConfig: createAgentConfigRepository({ db, timestampNow }),
     alerts: createAgentAlertService({ repository: createAgentAlertRepository({ db }) }),
     receiptRepository: createPaymentReceiptRepository({ db, now }), receiptStorage,
@@ -101,8 +114,23 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
   const { guardian, registry, purchase, agent } = await createAgentRuntime({ ports, logger, ...agentOptions });
   if (signal?.aborted) { guardian.shutdown(); adapter.shutdown(); throw signal.reason; }
   adapter.bindGuardian(guardian);
-  return { receive: message => adapter.receive(message), registry, purchase, agent,
+  const shutdown = () => {
+    if (closed) return;
+    closed = true; adapter.shutdown(); transport.close(); signal?.removeEventListener("abort", shutdown);
+  };
+  signal?.addEventListener("abort", shutdown, { once: true });
+  return { async receive(message) {
+      try { return await adapter.receive(message); }
+      finally { if (control && deriving && state.humanHandoffRequired) shutdown(); }
+    }, registry, purchase, agent,
+    ownsPause: version => controlVersion === version && (state.humanHandoffRequired || deriving) || deriving && controlVersion + 1 === version,
+    async assertCanSend({ origin } = {}) {
+      if (closed) throw controlError();
+      if (!control) return;
+      const current = await control.get(chatId);
+      if (!current || current.version !== controlVersion || current.paused && !(deriving && origin === "handoff" && current.reason === "derivacion")) throw controlError();
+    },
     getState: ports.getState,
-    shutdown() { closed = true; adapter.shutdown(); transport.close(); },
+    shutdown,
   };
 }

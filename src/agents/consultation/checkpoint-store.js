@@ -1,5 +1,6 @@
 import { Annotation, StateGraph, END } from "@langchain/langgraph";
 import { assertCheckpointState } from "../guardian/attachments.js";
+import { applyChatControl, controlError } from "../../services/agent-chat-control.service.js";
 
 export const AGENT_CHECKPOINT_COLLECTIONS = Object.freeze({ checkpointsCollection: "agent_checkpoints", writesCollection: "agent_checkpoint_writes" });
 
@@ -24,5 +25,31 @@ export async function createAgentCheckpointStore({ db, chatId, saver, graph: sup
       return state === undefined ? null : structuredClone(assertCheckpointState(state));
     },
     async write(state) { await graph.updateState(config, { snapshot: structuredClone(assertCheckpointState(state)) }, "checkpoint"); },
+  };
+}
+
+// El snapshot actual se guarda en el documento raíz de agent_checkpoints.
+// Los checkpoints históricos de 7A se leen para migrar y no se eliminan.
+// Snapshot y versión del bloqueo se comprueban en la misma transacción.
+export async function createControlledCheckpointStore({ db, chatId, control, fallback }) {
+  let expectedVersion = (await control.get(chatId)).version;
+  const ref = db.collection("agent_checkpoints").doc(chatId);
+  return {
+    rebase(version) { expectedVersion = version; },
+    async read() {
+      const current = await control.get(chatId);
+      if (!current || current.version !== expectedVersion) throw controlError();
+      const doc = await ref.get();
+      const snapshot = doc.data()?.snapshot ?? await fallback.read();
+      return snapshot ? applyChatControl(assertCheckpointState(snapshot), current) : null;
+    },
+    async write(state) {
+      const version = expectedVersion, snapshot = structuredClone(assertCheckpointState(state));
+      await db.runTransaction(async tx => {
+        const current = await tx.get(control.ref(chatId));
+        if (!current.exists || current.data().version !== version) throw controlError();
+        tx.set(ref, { snapshot: applyChatControl(snapshot, current.data()), controlVersion: version });
+      });
+    },
   };
 }

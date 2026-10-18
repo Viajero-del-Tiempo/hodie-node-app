@@ -1,5 +1,8 @@
 # Agente 7A: piloto mínimo de WhatsApp
 
+La conexión posterior de control humano y alertas se documenta en
+[VERIFICACION-agente-7B.md](VERIFICACION-agente-7B.md); esta guía conserva el alcance de 7A.
+
 Implementación para revisión. Los tests y las evaluaciones los ejecuta Arnaldo;
 esta guía no afirma resultados. No se despliega ni se retira mantenimiento.
 

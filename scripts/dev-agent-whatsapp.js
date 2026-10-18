@@ -59,8 +59,9 @@ if (process.argv.includes("--worker")) {
     },
   });
   client.on("qr", qr => qrcode.generate(qr, { small: true }));
-  client.on("ready", () => console.info("Piloto WhatsApp listo. Firestore demo; PDF y despacho de alertas pendientes de 7B/7C."));
+  client.on("ready", () => console.info("Piloto WhatsApp listo. Firestore demo; control humano y alertas activos; trabajador PDF pendiente de 7C."));
   client.on("message", message => { void pilot.handle(message).catch(error => console.error(JSON.stringify({ code: error.code ?? "PILOT_ERROR" }))); });
+  client.on("message_create", message => { void pilot.handleCreated(message).catch(error => console.error(JSON.stringify({ code: error.code ?? "MESSAGE_CREATE_FAILED" }))); });
   let stopping = false;
   const stop = async () => {
     if (stopping) return;

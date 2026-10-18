@@ -5,7 +5,7 @@ import { AGENT_CONFIG_COLLECTION, AGENT_CONFIG_ID } from "./agent-config.service
 import { prepareDurableAlert } from "./agent-alert.service.js";
 
 // Puerto dormido: conexión explícita del llamador, nunca inicializa Firebase.
-export function createOrderConfirmationRepository({ db, timestampNow, now = Date.now, counterId = "orderNumber", agentConfigId = AGENT_CONFIG_ID,
+export function createOrderConfirmationRepository({ db, timestampNow, now = Date.now, counterId = "orderNumber", agentConfigId = AGENT_CONFIG_ID, beforeTransaction,
   generateOrderId = () => db.collection("orders").doc().id }) {
   const ref = (collection, id) => db.collection(collection).doc(id);
   const data = snapshot => snapshot.exists ? snapshot.data() : null;
@@ -28,33 +28,39 @@ export function createOrderConfirmationRepository({ db, timestampNow, now = Date
     timestampNow,
     generateOrderId,
     async transact(action) {
-      return db.runTransaction(async tx => action({
-        readQuote: async id => data(await tx.get(ref("order_quotes", id))),
-        readConfirmation: async chatId => data(await tx.get(ref("order_confirmations", chatId))),
-        async readCart(chatId) {
-          const cart = data(await tx.get(ref("carts", chatId)));
-          return cart ? normalizeCartSnapshot({ ...cart, updatedAt: timestampMillis(cart.updatedAt),
-            expiresAt: timestampMillis(cart.expiresAt) }, chatId) : null;
-        },
-        readOrder: async id => data(await tx.get(ref("orders", id))),
-        readJob: async id => data(await tx.get(jobRef(id))),
-        readCounter: async () => data(await tx.get(ref("counters", counterId))),
-        readAgentConfig: async () => data(await tx.get(ref(AGENT_CONFIG_COLLECTION, agentConfigId))),
-        catalog: {
-          async getProductForPricing(id) { const product = data(await tx.get(ref("products", id))); return product ? { ...product, id } : null; },
-          async getCategoryForPricing(id) { const category = data(await tx.get(ref("categories", id))); return category ? { ...category, id } : null; },
-        },
-        createOrder: (id, order) => tx.create(ref("orders", id), order),
-        linkQuote: (id, orderId) => tx.update(ref("order_quotes", id), { orderId, committedAt: timestampNow() }),
-        writeCounter: counter => tx.set(ref("counters", counterId), counter, { merge: true }),
-        deleteCart: chatId => tx.delete(ref("carts", chatId)),
-        deleteConfirmation: chatId => tx.delete(ref("order_confirmations", chatId)),
-        createJob: job => tx.create(jobRef(job.id), job),
-      }));
+      return db.runTransaction(async tx => {
+        await beforeTransaction?.(tx);
+        return action({
+          readQuote: async id => data(await tx.get(ref("order_quotes", id))),
+          readConfirmation: async chatId => data(await tx.get(ref("order_confirmations", chatId))),
+          async readCart(chatId) {
+            const cart = data(await tx.get(ref("carts", chatId)));
+            return cart ? normalizeCartSnapshot({ ...cart, updatedAt: timestampMillis(cart.updatedAt),
+              expiresAt: timestampMillis(cart.expiresAt) }, chatId) : null;
+          },
+          readOrder: async id => data(await tx.get(ref("orders", id))),
+          readJob: async id => data(await tx.get(jobRef(id))),
+          readCounter: async () => data(await tx.get(ref("counters", counterId))),
+          readAgentConfig: async () => data(await tx.get(ref(AGENT_CONFIG_COLLECTION, agentConfigId))),
+          catalog: {
+            async getProductForPricing(id) { const product = data(await tx.get(ref("products", id))); return product ? { ...product, id } : null; },
+            async getCategoryForPricing(id) { const category = data(await tx.get(ref("categories", id))); return category ? { ...category, id } : null; },
+          },
+          createOrder: (id, order) => tx.create(ref("orders", id), order),
+          linkQuote: (id, orderId) => tx.update(ref("order_quotes", id), { orderId, committedAt: timestampNow() }),
+          writeCounter: counter => tx.set(ref("counters", counterId), counter, { merge: true }),
+          deleteCart: chatId => tx.delete(ref("carts", chatId)),
+          deleteConfirmation: chatId => tx.delete(ref("order_confirmations", chatId)),
+          createJob: job => tx.create(jobRef(job.id), job),
+        });
+      });
     },
     async saveConfirmation(chatId, value, { signal } = {}) {
       signal?.throwIfAborted();
-      await ref("order_confirmations", chatId).set(value);
+      await db.runTransaction(async tx => {
+        await beforeTransaction?.(tx); signal?.throwIfAborted();
+        tx.set(ref("order_confirmations", chatId), value);
+      });
     },
     async clearConfirmation(chatId, { signal } = {}) {
       signal?.throwIfAborted();
