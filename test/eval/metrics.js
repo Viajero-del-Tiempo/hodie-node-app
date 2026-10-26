@@ -1,3 +1,4 @@
+import { sumModelUsage, modelUsageForComponent } from "../../src/utils/model-usage.util.js";
 // Estadísticas descriptivas: no participan en checks, umbrales ni veredictos.
 export function latencyStats(samples) {
   const values = samples.map(item => typeof item === "number" ? item : item.durationMs)
@@ -51,7 +52,13 @@ export function evaluationMetrics(cases) {
       estimatedTokensMean: estimates.length ? estimates.reduce((sum, value) => sum + value, 0) / estimates.length : null,
       charactersTotal: fixedCalls.reduce((sum, call) => sum + call.fixedInput[key].characters, 0) };
   }
-  return { latency: { models: { agent: latencyStats(agent), evaluator: latencyStats(evaluator),
+  const componentUsage = component => {
+    const { callDetails: _details, ...counts } = sumModelUsage(runs.map(run => modelUsageForComponent(run.modelUsage.agent, component)));
+    return counts;
+  };
+  return { modelUsageByComponent: {
+    agent: componentUsage("agent"), transcription: componentUsage("transcription"),
+  }, latency: { models: { agent: latencyStats(agent), evaluator: latencyStats(evaluator),
     consultation: latencyStats(agent.filter(call => call.component === "agent")),
     transcription: latencyStats(agent.filter(call => call.component === "transcription")) },
     tools: { overall: latencyStats(tools), byName },

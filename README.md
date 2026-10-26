@@ -284,24 +284,104 @@ JWT_SECRET=tu_clave_secreta_super_segura
 
 ## 🚀 Despliegue en VM de Producción
 
-Para desplegar en la VM de producción, el script [`deploy.sh`](file:///home/arnaldoguerrero/Hodie/hodie-node-app/deploy.sh) automatiza el ciclo asegurando que Chrome siempre esté instalado tras la instalación de dependencias:
+[`ecosystem.config.cjs`](ecosystem.config.cjs) declara la aplicación **hodie-backend**,
+con `server.js`, directorio de trabajo del repositorio, `kill_timeout: 15000` y
+`time: true`. No contiene secretos ni `max_memory_restart`. Las variables siguen
+en `.env`, que no se versiona. No se modifica `.env`, `sessions/` ni `.wwebjs_auth/`.
+
+### Primer despliegue con el ecosystem
+
+El proceso existente usa la configuración vieja. **Solo la primera vez**, desde
+la VM y con el usuario que administra PM2, eliminar su registro antes del deploy:
 
 ```bash
-#!/usr/bin/env bash
-# exit on error
-set -o errexit
-
-# 1. Instala dependencias y ejecuta patch-package via postinstall
-npm install
-
-# 2. Garantiza la instalación de Chromium para Puppeteer (evita fallos de arranque tras cambios de versión)
-npx puppeteer browsers install chrome
-
-# 3. Reinicia el proceso en PM2
-pm2 restart hodie-node-app || pm2 start server.js --name hodie-node-app
+cd ~/hodie-node-app
+pm2 delete hodie-backend
+bash deploy.sh
 ```
 
-Para ejecutar el despliegue manualmente en la VM:
+`pm2 delete` retira el proceso de PM2; no ejecutar `logout`, borrar sesiones ni
+eliminar credenciales. Esta migración se prepara para la puesta en marcha
+aprobada; agregar los archivos no ejecuta el despliegue.
+
+Para despliegues posteriores:
+
 ```bash
-./deploy.sh
+cd ~/hodie-node-app
+bash deploy.sh
 ```
+
+[`deploy.sh`](deploy.sh) conserva `npm ci`, la instalación de Chrome con Puppeteer
+y la comprobación de `cleanMediaOptions` del parche de whatsapp-web.js. Luego:
+
+```bash
+pm2 startOrRestart ecosystem.config.cjs --update-env
+pm2 save
+pm2 logs hodie-backend --lines 15 --nostream
+```
+
+Finalmente espera **hasta 60 segundos** un evento JSON `WHATSAPP_READY` del
+proceso actual, posterior al inicio de este deploy. Ese evento incluye PID,
+identificador de arranque y modo efectivo del agente: `enabled`,
+`maintenanceMode`, `allowlistDefined` y `allowlistCount`, sin teléfonos.
+Una lista ausente se informa como `null` (sin restricción); vacía como `0`.
+Con el agente apagado, la lista se ignora y se informa `null`.
+
+La verificación consulta metadatos de PM2 sin volcarlos al log y lee el stdout
+actual y sus rotaciones recientes sin comprimir. No acepta un `WhatsApp listo`
+viejo, de otro PID, sin modo del agente o de un proceso que ya fue reemplazado.
+Si no encuentra el evento, termina con código 1: `set -e` propaga el error al
+workflow de GitHub. No hace rollback ni borra sesiones; revisar los logs y el
+estado de conexión. PM2 debe soportar archivos `ecosystem.config.cjs`.
+
+### Apagado y plazo de PM2
+
+SIGINT y SIGTERM se atienden tanto con agente nuevo como con legacy, incluso
+durante el arranque antes de ready. Se detiene la admisión, se cierra el
+guardián y se suspenden/cierran trabajadores, limpieza de comprobantes, HTTP
+y monitor de memoria. `client.destroy()` se inicia sin esperar a que terminen
+los trabajadores, para que un SDK o almacenamiento trabado no lo impida. Si
+WhatsApp aún se estaba inicializando, se espera su finalización y se vuelve a
+cerrar el cliente. HTTP deja de aceptar conexiones y da margen a las solicitudes
+en curso dentro del mismo plazo.
+
+El cierre interno tiene un máximo de **14 segundos**, con un segundo de margen
+respecto del `kill_timeout` de 15 segundos de PM2. Si todo termina, registra
+`SERVER_SHUTDOWN_COMPLETE` y sale 0; un error sale 1. Si algo no termina a
+tiempo, registra `SERVER_SHUTDOWN_TIMEOUT` con los componentes pendientes y
+sale 1. No se puede prometer que una operación externa trabada haya finalizado;
+los leases y las marcas durables conservan la recuperación/revisión aprobadas.
+No se llama a `logout` ni se borran archivos de autenticación. PM2 mantiene el
+SIGKILL de respaldo si el event loop no puede atender ni el timeout interno.
+Ver la [documentación de señales de PM2](https://pm2.keymetrics.io/docs/usage/signals-clean-restart/).
+
+### Rotación de logs
+
+Instalar una vez con el mismo usuario de PM2; no se agrega como dependencia npm
+de la aplicación:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+pm2 save
+```
+
+Se conservan hasta siete archivos rotados además del actual. La rotación se
+comprueba periódicamente; `10M` no es un límite instantáneo exacto. Se mantiene
+el modo sin compresión por defecto para verificar también un ready que coincida
+con una rotación. Ver [pm2-logrotate](https://github.com/keymetrics/pm2-logrotate).
+
+### Verificación local (la ejecuta Arnaldo)
+
+Pruebas con reloj y componentes falsos, sin PM2, WhatsApp ni Firestore reales:
+
+```bash
+node --import ./test/firebase-bootstrap.js --test test/test_server_shutdown.js test/test_deploy_readiness.js
+npm run test:unit
+```
+
+Comprobar en la VM, cuando se autorice desplegar: `pm2 describe hodie-backend`,
+evento `DEPLOY_WHATSAPP_READY` y modo esperado sin teléfonos. Un reinicio debe
+mostrar `SERVER_SHUTDOWN_COMPLETE` antes del arranque siguiente; revisar cualquier
+`SERVER_SHUTDOWN_TIMEOUT` antes de interpretar un PDF/alerta inciertos como enviados.

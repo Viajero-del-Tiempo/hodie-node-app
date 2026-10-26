@@ -21,7 +21,16 @@ export function whatsappMemoryDatabase() {
       limit: limit => collection(name, filters, order, limit),
       async get() {
         let selected = [...rows.entries()].filter(([path]) => path.startsWith(name + "/") && path.split("/").length === 2)
-          .filter(([, value]) => filters.every(item => item.op === "==" && value[item.field] === item.value));
+          .filter(([, value]) => filters.every(item => {
+            const current = value[item.field];
+            if (current === undefined) return false;
+            if (item.op === "==") return current === item.value;
+            if (item.op === "<=") return current <= item.value;
+            if (item.op === ">=") return current >= item.value;
+            if (item.op === "<") return current < item.value;
+            if (item.op === ">") return current > item.value;
+            throw new Error("Operador no implementado en el doble: " + item.op);
+          }));
         if (order) selected.sort(([, a], [, b]) => (a[order.field] < b[order.field] ? -1 : a[order.field] > b[order.field] ? 1 : 0) * (order.direction === "desc" ? -1 : 1));
         const docs = await Promise.all(selected.slice(0, count).map(([path]) => ref(path).get()));
         return { docs, empty: !docs.length };

@@ -5,12 +5,18 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { Timestamp } from "firebase-admin/firestore";
 import { compiledGraph } from "../agents/graph.js";
 import { db } from "./firebase.js";
+import { createWhatsAppRuntimeLogger } from "../utils/whatsapp-startup.util.js";
+import { createWhatsAppLifecycle } from "../services/whatsapp-lifecycle.service.js";
+import { createAgentAlertRepository } from "../services/agent-alert.repository.js";
+import { maskedChat } from "../services/agent-telemetry.service.js";
 import { createAgentWhatsAppConfig } from "./agent-whatsapp.config.js";
 import { createOwnMessageRepository, installWhatsAppClient, readAlertsPhone } from "../services/whatsapp-client.service.js";
 
 const agentWhatsAppConfig = createAgentWhatsAppConfig(process.env);
+const runtimeLogger = createWhatsAppRuntimeLogger(agentWhatsAppConfig);
 let agentPilotPromise = null;
 let agentPilotClosed = false;
+let legacyConnection = null;
 const getAgentPilot = () => {
   if (agentPilotClosed) throw Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" });
   if (!agentPilotPromise) {
@@ -20,7 +26,7 @@ const getAgentPilot = () => {
       ]);
       return createWhatsAppPilotInfrastructure({ config: agentWhatsAppConfig, client: whatsappClient, MessageMedia, db,
         timestampNow: () => Timestamp.now(), timestampFromMillis: value => Timestamp.fromMillis(value),
-        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG, ownMessages, alertsPhone });
+        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG, ownMessages, alertsPhone, logger: runtimeLogger });
     })();
     agentPilotPromise.catch(() => { agentPilotPromise = null; });
   }
@@ -30,6 +36,7 @@ const getAgentPilot = () => {
 export const shutdownAgentPilot = async () => {
   agentPilotClosed = true;
   if (agentPilotPromise) await (await agentPilotPromise).shutdown();
+  await legacyConnection?.stop();
 };
 
 /**
@@ -95,10 +102,8 @@ whatsappClient.on("qr", (qr) => {
 
 whatsappClient.on("ready", async () => {
   console.log("✅ WhatsApp listo");
-  console.log(
-    "📌 WhatsApp Web Version:",
-    await whatsappClient.getWWebVersion(),
-  );
+  try { console.log("📌 WhatsApp Web Version:", await whatsappClient.getWWebVersion()); }
+  catch { console.warn(JSON.stringify({ code: "WHATSAPP_VERSION_UNAVAILABLE" })); }
 });
 
 /**
@@ -326,6 +331,8 @@ export const resolvePhoneFromChatId = async (whatsappChatId, { sideEffectFree = 
 };
 
 export const handleIncomingWhatsAppMessage = async (mensaje) => {
+  if (agentPilotClosed) return;
+  if (legacyConnection && !legacyConnection.isReady()) return;
   if (agentWhatsAppConfig.enabled) {
     try { await (await getAgentPilot()).handle(mensaje); }
     catch (error) { console.error(JSON.stringify({ code: error.code ?? "PILOT_ERROR" })); }
@@ -682,8 +689,24 @@ whatsappClient.on("message", handleIncomingWhatsAppMessage);
 
 export const initializeWhatsapp = async () => {
   try {
-    if (agentWhatsAppConfig.enabled) await getAgentPilot();
-    await whatsappClient.initialize();
+    if (agentPilotClosed) return;
+    if (agentWhatsAppConfig.enabled) {
+      const pilot = await getAgentPilot();
+      if (agentPilotClosed) { await pilot.shutdown(); return; }
+      await pilot.start();
+    }
+    else {
+      legacyConnection ??= createWhatsAppLifecycle({ client: whatsappClient,
+        logger: runtimeLogger,
+        requestAlert: alert => createAgentAlertRepository({ db }).request(alert),
+        recordAck: async (chatId, id, ack) => {
+          const own = await ownMessages.recordAck(chatId, id, ack);
+          console.info(JSON.stringify({ event: "whatsapp_ack", chat: maskedChat(chatId), ack, own }));
+        },
+      });
+      ownMessages.setConnection(legacyConnection);
+      await legacyConnection.start();
+    }
   } catch (error) {
     console.error("Error initializing WhatsApp client:", error);
   }

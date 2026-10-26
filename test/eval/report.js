@@ -41,8 +41,14 @@ export async function writeReport(report, outputRoot) {
     ...Object.entries(report.summary.modelUsage).map(([name, usage]) =>
       "- " + name + ": llamadas " + (usage.calls ?? "desconocidas")
       + "; tokens informados (entrada/salida/total): " + usage.reportedTokens.input + "/" + usage.reportedTokens.output + "/" + usage.reportedTokens.total
+      + "; caché (parte de entrada, no se suma al total): " + (usage.cachedContentTokenCount ?? 0)
+      + "; llamadas con caché informada: " + (usage.cacheUsageReportedCalls ?? 0)
       + "; instrumentado: " + usage.instrumented + "; consumo completo: " + usage.usageComplete
       + "; llamadas sin metadatos: " + usage.callsWithoutUsage),
+    ...Object.entries(report.summary.modelUsageByComponent).map(([name, usage]) =>
+      "- Componente " + name + ": llamadas " + (usage.calls ?? "desconocidas")
+      + "; tokens entrada/salida/total: " + usage.reportedTokens.input + "/" + usage.reportedTokens.output + "/" + usage.reportedTokens.total
+      + "; caché: " + usage.cachedContentTokenCount + "; llamadas con caché informada: " + usage.cacheUsageReportedCalls),
     "",
     "## Intentos del agente", "",
     "- Reintentos: " + report.summary.modelAttempts.agent.retries + "; intentos con timeout: " + report.summary.modelAttempts.agent.timedOut + ".",

@@ -1,48 +1,49 @@
 import dotenv from "dotenv";
 import app, { receipts } from "./src/app.js";
 import { initializeWhatsapp, shutdownAgentPilot, whatsappClient } from "./src/config/whatsapp.js";
-import { createAgentWhatsAppConfig } from "./src/config/agent-whatsapp.config.js";
 import { cleanupStaleOrderPDFs } from "./src/services/pdf.service.js";
-
+import { createProcessMemoryMonitor } from "./src/services/process-memory.service.js";
+import { createServerShutdown } from "./src/services/server-shutdown.service.js";
 import { startReceiptCleanup } from "./src/services/payment-receipt.service.js";
 
 dotenv.config();
 
 const startServer = async () => {
-  const stopReceiptCleanup = startReceiptCleanup(receipts.cleanup);
-  // Limpieza de PDFs residuales de ejecuciones anteriores
-  cleanupStaleOrderPDFs();
-
-  // Iniciar servicios
-  await initializeWhatsapp();
-
-  
-
-  // Iniciar el servidor web
-  const PORT = process.env.PORT || 3000;
-  const httpServer = app.listen(PORT, () =>
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`)
-  );
-  httpServer.once("close", () => { void stopReceiptCleanup(); });
-  if (createAgentWhatsAppConfig(process.env).enabled) {
-    let stopping = false;
-    const stop = async () => {
-      if (stopping) return;
-      stopping = true;
-      const deadline = setTimeout(() => process.exit(1), 5000);
-      let code = 0;
-      try {
-        await shutdownAgentPilot();
-        await stopReceiptCleanup();
-        await whatsappClient.destroy();
-        httpServer.closeAllConnections();
-        await new Promise(resolve => httpServer.close(resolve));
-      } catch { code = 1; console.error(JSON.stringify({ code: "PILOT_SHUTDOWN_FAILED" })); }
-      finally { clearTimeout(deadline); process.exit(code); }
-    };
-    process.once("SIGINT", () => { void stop(); });
-    process.once("SIGTERM", () => { void stop(); });
+  const memory = createProcessMemoryMonitor();
+  let httpServer, whatsappInitialization = null, stopReceiptCleanup = async () => {};
+  const shutdown = createServerShutdown({ components: {
+    guardianAndWorkers: shutdownAgentPilot,
+    receiptCleanup: () => stopReceiptCleanup(),
+    memory: () => memory.stop(),
+    whatsapp: async () => {
+      // Cerrar ahora aunque initialize esté esperando; si termina después,
+      // volver a cerrar el navegador que pudo abrir durante el apagado.
+      const starting = whatsappInitialization;
+      await whatsappClient.destroy();
+      if (starting) { await starting; await whatsappClient.destroy(); }
+    },
+    http: async () => {
+      if (!httpServer) return;
+      const closing = new Promise((resolve, reject) => httpServer.close(error => error ? reject(error) : resolve()));
+      httpServer.closeIdleConnections();
+      await closing;
+    },
+  } });
+  try {
+    memory.start();
+    stopReceiptCleanup = startReceiptCleanup(receipts.cleanup);
+    cleanupStaleOrderPDFs();
+    whatsappInitialization = initializeWhatsapp();
+    await whatsappInitialization;
+    whatsappInitialization = null;
+    if (shutdown.isStopping()) return;
+    const PORT = process.env.PORT || 3000;
+    httpServer = app.listen(PORT, () => console.log(`🚀 Servidor corriendo en puerto ${PORT}`));
+    httpServer.on("error", () => { void shutdown.stop("HTTP_START_FAILED", { failed: true }); });
+  } catch {
+    console.error(JSON.stringify({ code: "SERVER_START_FAILED" }));
+    await shutdown.stop("SERVER_START_FAILED", { failed: true });
   }
 };
 
-startServer();
+void startServer();

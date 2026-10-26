@@ -7,14 +7,21 @@ import { allowsAgentPhone } from "../config/agent-whatsapp.config.js";
 export function createWhatsAppPilot({ config, repository, resolvePhone, transport, createRuntime, control, ownMessages, logger = () => {} }) {
   const admissions = new Map(), runtimes = new Map();
   const subscriptions = new Map(), runtimeControllers = new Map(), runtimeVersions = new Map(), pauses = new Map();
+  const retirements = new Map();
   const lifetime = new AbortController();
-  let closed = false;
+  let closed = false, suspended = false, connection = new AbortController();
   function cancelChat(chatId) {
     runtimeControllers.get(chatId)?.abort(Object.assign(new Error("Atención humana o sesión nueva"), { code: "CHAT_CONTROL_CHANGED" }));
     runtimeControllers.delete(chatId);
     runtimeVersions.delete(chatId);
     const pending = runtimes.get(chatId); runtimes.delete(chatId);
-    pending?.then(runtime => runtime.shutdown()).catch(() => {});
+    if (pending) {
+      const retiring = Promise.allSettled([retirements.get(chatId), pending.then(async runtime => {
+        runtime.shutdown(); await runtime.settled?.();
+      })].filter(Boolean));
+      retirements.set(chatId, retiring);
+      retiring.finally(() => { if (retirements.get(chatId) === retiring) retirements.delete(chatId); }).catch(() => {});
+    }
   }
   function watch(chatId, initialVersion) {
     if (!control || subscriptions.has(chatId)) return;
@@ -32,7 +39,8 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
     }, () => { cancelChat(chatId); logger({ code: "CHAT_CONTROL_WATCH_FAILED" }); }));
   }
   async function admit(message) {
-    lifetime.signal.throwIfAborted();
+    const active = AbortSignal.any([lifetime.signal, connection.signal]);
+    active.throwIfAborted();
     const chatId = message.from;
     let phone = null;
     const silent = config.maintenanceMode === "silent";
@@ -41,7 +49,7 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
       // El receptor real respeta sideEffectFree también para la caché de LID.
       try { phone = await resolvePhone(chatId, { sideEffectFree: true }); }
       catch { /* Identidad desconocida: permanece fuera de la lista, con un único log. */ }
-      lifetime.signal.throwIfAborted();
+      active.throwIfAborted();
       if (!allowsAgentPhone(config, phone)) {
         logger({ code: "MAINTENANCE_SILENT", chat: "chat-" + createHash("sha256").update(chatId).digest("hex").slice(0, 12) });
         return {};
@@ -55,10 +63,10 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
         try { phone = await resolvePhone(chatId); }
         catch { logger({ code: "PHONE_RESOLUTION_FAILED" }); }
       }
-      lifetime.signal.throwIfAborted();
+      active.throwIfAborted();
       if (!allowsAgentPhone(config, phone)) {
         const notify = await repository.claimMaintenance(chatId);
-        completion = notify ? transport.sendText(chatId, config.maintenanceMessage, { origin: "maintenance" }) : Promise.resolve();
+        completion = notify ? transport.sendText(chatId, config.maintenanceMessage, { origin: "maintenance", signal: active }) : Promise.resolve();
       } else {
         if (control) {
           await pauses.get(chatId);
@@ -66,6 +74,7 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
           watch(chatId, current.version);
           await control.touch(chatId, message.body || "[adjunto]");
           current = await control.get(chatId);
+          active.throwIfAborted();
           if (!current) throw Object.assign(new Error("Control de chat desaparecido"), { code: "CHAT_CONTROL_CHANGED" });
           if (current.paused) {
             await repository.finishMessage(id, "completed");
@@ -76,12 +85,15 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
         }
         if (!runtimes.has(chatId)) {
           const controller = new AbortController(); runtimeControllers.set(chatId, controller);
-          const signal = AbortSignal.any([lifetime.signal, controller.signal]);
-          const creating = Promise.resolve().then(() => { signal.throwIfAborted(); return createRuntime(chatId, { signal }); });
+          const signal = AbortSignal.any([active, controller.signal]);
+          const creating = Promise.resolve().then(async () => {
+            await retirements.get(chatId); signal.throwIfAborted(); return createRuntime(chatId, { signal });
+          });
           runtimes.set(chatId, creating);
           creating.catch(() => { if (runtimes.get(chatId) === creating) runtimes.delete(chatId); });
         }
         const runtime = await runtimes.get(chatId);
+        active.throwIfAborted();
         if (closed) throw Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" });
         // No esperar aquí el lote: los próximos mensajes deben poder sumarse.
         completion = runtime.receive(message);
@@ -95,8 +107,14 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
   }
   return {
     cancelChat,
+    suspend() {
+      suspended = true;
+      connection.abort(Object.assign(new Error("WhatsApp desconectado"), { code: "WHATSAPP_DISCONNECTED", deliveryStarted: false }));
+      for (const chatId of runtimes.keys()) cancelChat(chatId);
+    },
+    resume() { if (closed) return; if (connection.signal.aborted) connection = new AbortController(); suspended = false; },
     async handleCreated(message) {
-      if (!config.enabled || !message.fromMe || closed || !control || !ownMessages) return;
+      if (!config.enabled || !message.fromMe || closed || suspended || !control || !ownMessages) return;
       if (!ALLOWED_MESSAGE_TYPES.has(message.type || "chat")) return;
       const chatId = message.to;
       if (typeof chatId !== "string" || !/@(?:c\.us|lid)$/u.test(chatId) || message.isStatus || message.broadcast) return;
@@ -114,6 +132,7 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
     },
     async handle(message) {
       if (!config.enabled) return false;
+      if (suspended) return true;
       if (closed) throw Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" });
       if (!acceptsMessage(message) || !/@(?:c\.us|lid)$/u.test(message.from)
           || message.isStatus || message.broadcast) return true;
@@ -131,7 +150,10 @@ export function createWhatsAppPilot({ config, repository, resolvePhone, transpor
       closed = true; lifetime.abort(Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" })); transport.close();
       for (const unsubscribe of subscriptions.values()) unsubscribe();
       for (const controller of runtimeControllers.values()) controller.abort(lifetime.signal.reason);
-      await Promise.allSettled([...runtimes.values()].map(async pending => (await pending).shutdown()));
+      await Promise.allSettled([...runtimes.values()].map(async pending => {
+        const runtime = await pending; runtime.shutdown(); await runtime.settled?.();
+      }));
+      await Promise.allSettled([...retirements.values()]);
     },
   };
 }

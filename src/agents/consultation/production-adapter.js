@@ -14,6 +14,7 @@ import { createPaymentReceiptRepository } from "../../services/payment-receipt.r
 import { createPrivateReceiptStorage } from "../../services/payment-receipt.storage.js";
 import { createSignedImageUploader } from "../../services/cloudinary.service.js";
 import { assertCheckpointState } from "../guardian/attachments.js";
+import { createAgentTurnTelemetry } from "../../services/agent-telemetry.service.js";
 
 export function initialAgentState(chatId) {
   return { whatsappChatId: chatId, messages: [], sessionCutoff: 0, lastActivityAt: null,
@@ -25,7 +26,7 @@ export function initialAgentState(chatId) {
 }
 
 // Puertos reales, pero sin inicializadores: el llamador elige DB, cliente y
-// almacenamiento. 7A no inicia trabajador PDF, envío de alertas ni toma humana.
+// almacenamiento. Los trabajadores se componen fuera del plazo del turno.
 export async function createProductionAgent({ db, chatId, timestampNow, timestampFromMillis, resolvePhone,
   transport, bankConfig, receiptStorage = createPrivateReceiptStorage(), uploadCustomizationImage,
   store, control, now = Date.now, logger = () => {}, signal, ...agentOptions }) {
@@ -48,6 +49,7 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
   }
   let closed = false, deliverySignal = null, outgoing = [], turnStarted = false, deriving = false;
   let persistence = Promise.resolve();
+  const telemetry = createAgentTurnTelemetry({ chatId, logger });
   const clone = value => structuredClone(value);
   const setState = next => {
     const snapshot = clone(assertCheckpointState(next));
@@ -79,6 +81,7 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
   const signedUploader = createSignedImageUploader();
   const uploader = uploadCustomizationImage ?? ((file, options) => signedUploader(file, options));
   const ports = { transport: adapter, now, getState: () => clone(state), setState,
+    startTurnTelemetry: telemetry.start, recordTool: telemetry.tool, recordTurn: telemetry.finish,
     catalog: createCatalogService({ repository: createCatalogRepository(db, { timestampNow }), now }), orders,
     cartRepository: createCartRepository({ db, timestampFromMillis, now,
       beforeTransaction: control ? tx => control.assertActive(tx, chatId, controlVersion) : undefined }), quoteRepository: createOrderQuoteRepository({ db }),
@@ -131,6 +134,7 @@ export async function createProductionAgent({ db, chatId, timestampNow, timestam
       if (!current || current.version !== controlVersion || current.paused && !(deriving && origin === "handoff" && current.reason === "derivacion")) throw controlError();
     },
     getState: ports.getState,
+    settled: () => persistence,
     shutdown,
   };
 }

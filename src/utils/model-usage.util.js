@@ -56,7 +56,8 @@ export function estimateFixedInput({ systemPrompt, toolSchemas, serverContext })
 // Cuenta invoke(), no criterios ni herramientas. Tiempos con reloj monotónico.
 export function emptyModelUsage() {
   return { instrumented: true, calls: 0, observedCalls: 0, successfulCalls: 0, failedCalls: 0,
-    pendingCalls: 0, reportedTokens: { input: 0, output: 0, total: 0 }, callsWithoutUsage: 0, usageComplete: true, callDetails: [] };
+    pendingCalls: 0, reportedTokens: { input: 0, output: 0, total: 0 }, cachedContentTokenCount: 0,
+    cacheUsageReportedCalls: 0, callsWithoutUsage: 0, usageComplete: true, callDetails: [] };
 }
 export function unknownModelUsage() {
   return { ...emptyModelUsage(), instrumented: false, calls: null, usageComplete: false };
@@ -70,6 +71,7 @@ export function readModelUsage(source, { knownZero = false } = {}) {
     if (usage?.instrumented !== true
         || !["calls", "observedCalls", "successfulCalls", "failedCalls", "pendingCalls", "callsWithoutUsage"].every(field => valid(usage[field]))
         || !["input", "output", "total"].every(field => valid(usage.reportedTokens?.[field]))
+        || ["cachedContentTokenCount", "cacheUsageReportedCalls"].some(field => usage[field] !== undefined && !valid(usage[field]))
         || usage.calls !== usage.observedCalls
         || usage.successfulCalls + usage.failedCalls + usage.pendingCalls !== usage.calls) return unknownModelUsage();
     return sumModelUsage([usage]);
@@ -83,6 +85,8 @@ export function sumModelUsage(values) {
     result.instrumented &&= item.instrumented === true;
     for (const field of ["observedCalls", "successfulCalls", "failedCalls", "pendingCalls", "callsWithoutUsage"]) result[field] += item[field] ?? 0;
     for (const field of ["input", "output", "total"]) result.reportedTokens[field] += item.reportedTokens?.[field] ?? 0;
+    result.cachedContentTokenCount += item.cachedContentTokenCount ?? 0;
+    result.cacheUsageReportedCalls += item.cacheUsageReportedCalls ?? 0;
     result.usageComplete &&= item.usageComplete === true;
     result.callDetails.push(...structuredClone(item.callDetails ?? []));
   }
@@ -97,12 +101,28 @@ export function modelUsageSince(before, after) {
     result[field] = after[field] - before[field];
   }
   for (const field of ["input", "output", "total"]) result.reportedTokens[field] = after.reportedTokens[field] - before.reportedTokens[field];
+  for (const field of ["cachedContentTokenCount", "cacheUsageReportedCalls"]) result[field] = (after[field] ?? 0) - (before[field] ?? 0);
   result.usageComplete = result.callsWithoutUsage === 0;
   const seen = new Set((before.callDetails ?? []).map(call => call.id));
   result.callDetails = structuredClone((after.callDetails ?? []).filter(call => !seen.has(call.id)));
   return result;
 }
 
+const validToken = value => Number.isSafeInteger(value) && value >= 0;
+export function modelUsageForComponent(usage, component) {
+  if (!usage?.instrumented || (usage.callDetails?.length ?? 0) !== usage.observedCalls) return unknownModelUsage();
+  const result = emptyModelUsage();
+  result.callDetails = structuredClone(usage.callDetails.filter(call => call.component === component));
+  result.calls = result.observedCalls = result.callDetails.length;
+  for (const call of result.callDetails) {
+    result[call.status === "success" ? "successfulCalls" : call.status === "failed" ? "failedCalls" : "pendingCalls"]++;
+    for (const field of ["input", "output", "total"]) if (validToken(call.reportedTokens?.[field])) result.reportedTokens[field] += call.reportedTokens[field];
+    if (!["input", "output", "total"].every(field => validToken(call.reportedTokens?.[field]))) result.callsWithoutUsage++;
+    if (validToken(call.cachedContentTokenCount)) { result.cachedContentTokenCount += call.cachedContentTokenCount; result.cacheUsageReportedCalls++; }
+  }
+  result.usageComplete = result.callsWithoutUsage === 0;
+  return result;
+}
 export function createModelUsageTracker({ now = () => performance.now(), component = "model" } = {}) {
   const calls = [];
   const trackerId = randomUUID();
@@ -116,6 +136,18 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
       try {
         const response = await action();
         entry.usage = response?.usage_metadata ?? null;
+        // Ambas formas representan la misma parte de la entrada: elegir una,
+        // nunca sumarlas ni agregarlas a total_tokens. Gemini puede conservarla
+        // solo en response_metadata. Ausencia queda desconocida por llamada.
+        entry.cached = [response?.usage_metadata?.cachedContentTokenCount,
+          response?.usage_metadata?.input_token_details?.cache_read,
+          response?.usageMetadata?.cachedContentTokenCount,
+          response?.response_metadata?.usageMetadata?.cachedContentTokenCount,
+          response?.response_metadata?.cachedContentTokenCount].find(validToken) ?? null;
+        if (!entry.usage && (response?.response_metadata?.usageMetadata || response?.usageMetadata)) {
+          const raw = response.response_metadata?.usageMetadata ?? response.usageMetadata;
+          entry.usage = { input_tokens: raw.promptTokenCount, output_tokens: raw.candidatesTokenCount, total_tokens: raw.totalTokenCount };
+        }
         entry.status = "success";
         return response;
       } catch (error) { entry.status = "failed"; entry.errorCode = error.code ?? null; entry.errorDetails = safeErrorDetails(error); throw error; }
@@ -133,6 +165,7 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
         if (valid(input)) result.reportedTokens.input += input;
         if (valid(output)) result.reportedTokens.output += output;
         if (valid(total)) result.reportedTokens.total += total;
+        if (valid(entry.cached)) { result.cachedContentTokenCount += entry.cached; result.cacheUsageReportedCalls++; }
         if (!valid(input) || !valid(output) || !valid(total)) result.callsWithoutUsage++;
         result.callDetails.push({ id: entry.id, component: entry.component, turn: entry.turn, callInTurn: entry.callInTurn, status: entry.status,
           ...(entry.attempt !== undefined ? { attempt: entry.attempt, modelStep: entry.modelStep } : {}),
@@ -140,6 +173,7 @@ export function createModelUsageTracker({ now = () => performance.now(), compone
           ...(entry.errorDetails ?? {}),
           durationMs: entry.durationMs ?? Math.max(0, now() - entry.startedAt), incomplete: entry.status === "pending",
           reportedTokens: { input: valid(input) ? input : null, output: valid(output) ? output : null, total: valid(total) ? total : null },
+          cachedContentTokenCount: valid(entry.cached) ? entry.cached : null,
           ...(entry.fixedInput ? { fixedInput: structuredClone(entry.fixedInput) } : {}) });
       }
       result.usageComplete = result.callsWithoutUsage === 0;

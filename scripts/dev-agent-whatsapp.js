@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse } from "dotenv";
 import { assertLocalCatalogTarget, assertLocalEnvironment, makeLocalEnvironment, projectDirectory, localCatalog } from "./local-catalog.config.js";
+import { createProcessMemoryMonitor } from "../src/services/process-memory.service.js";
 import { createAgentWhatsAppConfig } from "../src/config/agent-whatsapp.config.js";
 
 // Proyecto/host primero, antes de importar SDKs, crear sesiones o revisar puertos.
@@ -18,6 +19,7 @@ if (!process.argv.includes("--worker")) console.info(`Piloto WhatsApp: mantenimi
 
 if (process.argv.includes("--worker")) {
   assertLocalEnvironment(process.env);
+  const memory = createProcessMemoryMonitor(); memory.start();
   const [{ default: pkg }, { default: qrcode }, { db }, { Timestamp }, { createWhatsAppPilotInfrastructure },
     { createLocalReceiptStorage }, { validatePaymentReceipt }] = await Promise.all([
     import("whatsapp-web.js"), import("qrcode-terminal"), import("../src/config/firebase.js"), import("firebase-admin/firestore"),
@@ -59,7 +61,7 @@ if (process.argv.includes("--worker")) {
     },
   });
   client.on("qr", qr => qrcode.generate(qr, { small: true }));
-  client.on("ready", () => console.info("Piloto WhatsApp listo. Firestore demo; control humano y alertas activos; trabajador PDF pendiente de 7C."));
+  client.on("ready", () => console.info("Piloto WhatsApp listo. Firestore demo; control humano, alertas y trabajador PDF activos."));
   client.on("message", message => { void pilot.handle(message).catch(error => console.error(JSON.stringify({ code: error.code ?? "PILOT_ERROR" }))); });
   client.on("message_create", message => { void pilot.handleCreated(message).catch(error => console.error(JSON.stringify({ code: error.code ?? "MESSAGE_CREATE_FAILED" }))); });
   let stopping = false;
@@ -67,11 +69,11 @@ if (process.argv.includes("--worker")) {
     if (stopping) return;
     stopping = true;
     const timeout = setTimeout(() => process.exit(1), 5000);
-    try { await pilot.shutdown(); await client.destroy(); mediaServer.closeAllConnections(); mediaServer.close(); await db.terminate(); }
+    try { memory.stop(); await pilot.shutdown(); await client.destroy(); mediaServer.closeAllConnections(); mediaServer.close(); await db.terminate(); }
     finally { clearTimeout(timeout); process.exit(0); }
   };
   process.once("SIGINT", () => { void stop(); }); process.once("SIGTERM", () => { void stop(); });
-  try { await client.initialize(); } catch (error) { await pilot.shutdown(); mediaServer.close(); throw error; }
+  try { await pilot.start(); } catch (error) { memory.stop(); await pilot.shutdown(); mediaServer.close(); throw error; }
 } else {
   // Solo toma del .env los parámetros del modelo; nunca credenciales/banco/DB.
   let values = {};

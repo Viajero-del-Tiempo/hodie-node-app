@@ -43,14 +43,18 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
     const before = snapshotUsage();
     const beforeAudio = media.getModelUsage();
     const batchId = turn.batchId ?? randomUUID();
+    const telemetryStartedAt = deadlineClock.now();
+    const queueWaitMs = Math.max(0, clock.now() - closedAt);
+    let outcome = "cancelled";
+    runtime.startTurnTelemetry?.({ batchId });
     let processed = turn;
     const diagnostics = [];
-    const finish = (outcome, extra = {}) => ({ usage: modelUsageSince(before, snapshotUsage()), diagnostics,
-      guardian: { outcome, groupedMessages: turn.messages.length, closedAt,
+    const finish = (result, extra = {}) => { outcome = result; return ({ usage: modelUsageSince(before, snapshotUsage()), diagnostics,
+      guardian: { outcome: result, groupedMessages: turn.messages.length, closedAt,
         transcriptionUsage: modelUsageSince(beforeAudio, media.getModelUsage()),
         imageAttachmentIds: (processed.imageInputs ?? []).map(image => image.id), ...extra },
       processedMessages: processed.messages.map(message => ({ text: message.text, type: message.type,
-        ...(message.attachmentId ? { attachmentId: message.attachmentId } : {}) })) });
+        ...(message.attachmentId ? { attachmentId: message.attachmentId } : {}) })) }); };
     try {
       runtime.setDeliverySignal?.(signal);
       if (runtime.onTurnStart) await withSignal(() => runtime.onTurnStart({ signal }), signal);
@@ -136,7 +140,14 @@ export function createGuardianRuntime({ runtime, agent, config = createGuardianC
       return finish("technical_error");
     } finally {
       try { if (runtime.onTurnEnd && !signal.aborted) await withSignal(() => runtime.onTurnEnd(processed), signal); }
+      catch (error) { outcome = signal.aborted ? "cancelled" : "technical_error"; throw error; }
       finally {
+        runtime.recordTurn?.({ batchId, groupedMessages: turn.messages.length, outcome,
+          media: { count: turn.attachments?.length ?? 0, bytes: processed.mediaBytes ?? 0,
+            types: (turn.attachments ?? []).reduce((counts, attachment) => ({ ...counts, [attachment.type]: (counts[attachment.type] ?? 0) + 1 }), {}) },
+          durationMs: queueWaitMs + Math.max(0, deadlineClock.now() - telemetryStartedAt), queueWaitMs,
+          handoff: runtime.getState().humanHandoffRequired === true,
+          usage: modelUsageSince(before, snapshotUsage()) });
         clock.clearTimeout(timer);
         deadlineClock.clearTimeout(deadlineTimer);
         controller.abort(Object.assign(new Error("Turno cerrado"), { code: "TURN_CLOSED" }));

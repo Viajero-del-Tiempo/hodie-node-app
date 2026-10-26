@@ -14,7 +14,9 @@ en el código. Leé todo antes de actuar.
 - Deploy manual por GitHub Actions (workflow_dispatch):
   "cd ~/hodie-node-app && git pull origin main && bash deploy.sh".
   deploy.sh: npm ci → descarga de Chrome de puppeteer → verificación de que
-  el parche de whatsapp-web.js esté aplicado → pm2 restart hodie-backend.
+  el parche de whatsapp-web.js esté aplicado →
+  pm2 startOrRestart ecosystem.config.cjs --update-env → pm2 save → logs →
+  verificación de WhatsApp listo y modo del agente del proceso actual (máximo 60 s).
 - Firestore de PRODUCCIÓN (proyecto hodie-tienda-de-regalos), accedido solo
   con Admin SDK. Reglas cerradas salvo lectura pública de products.
   Colecciones: products, orders, users, counters, langgraph_checkpoints,
@@ -1428,9 +1430,9 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   clasificación/revisión humana; nunca se correlaciona por texto.
 - Contrato Angular, comandos, pruebas y recorrido del dueño en
   VERIFICACION-agente-7B.md. No se ejecutaron tests ni evaluaciones de 7B.
-- 7C pendiente: auth_failure/disconnected/message_ack, trabajador PDF sobre el
-  transporte real, telemetría y cachedContentTokenCount. Los trabajos PDF reales
-  siguen pendientes de 7C; 7B ya despacha las solicitudes de alerta. No se toca el stock ni
+- 7C conecta auth_failure/disconnected/message_ack, trabajador PDF sobre el
+  transporte real, telemetría y cachedContentTokenCount; ver la sección 7C y
+  VERIFICACION-agente-7C.md. 7B ya despacha las solicitudes de alerta. No se toca el stock ni
   la confirmación manual de pagos. Guía, inventario y comandos del dueño:
   VERIFICACION-agente-7A.md.
 
@@ -1461,3 +1463,90 @@ B) Ordená la carpeta temp/. Para cada archivo, clasificalo en:
   trunca lo indica y termina con código 2. No se ejecutó contra producción.
 - No cambia conversations.yaml ni código del agente. El dueño corre suites,
   evaluaciones y diff; no se reconstruyen salidas ni se afirma que pasaron.
+
+# AGENTE — ENTREGA 7C: CONEXIÓN, PDF Y TELEMETRÍA (18 de octubre de 2026)
+
+- 7B y el aislamiento de tests aprobados por el dueño. 7C implementada para
+  revisión, sin ejecutar suites/evaluaciones ni desplegar. No se elimina legacy.
+  El interruptor y la lista blanca conservan su selección de motor y silent.
+- Ciclo común en whatsapp-lifecycle.service.js, compartido por servidor y piloto.
+  authenticated registra progreso, ready habilita atención y trabajadores.
+  disconnected suspende alertas/PDF y cancela runtimes/ráfagas y salidas no
+  iniciadas, sin quitar pausas humanas ni tocar carritos. Reconecta con 5 s,
+  10 s, 20 s, hasta 5 min; una sola inicialización activa. ready reinicia la
+  espera; cerrar cancela los reintentos. La pérdida de ráfagas RAM conserva
+  el diagnóstico de lotes descartados y la deduplicación durable de siete días.
+- auth_failure no llama a logout, no borra sesiones y no reconecta
+  automáticamente. Registra código sin el mensaje privado del SDK y solicita
+  una alerta durable por episodio; un fallo de persistencia reintenta el mismo
+  ID con espera creciente. La atención queda detenida hasta resolver la sesión
+  y reiniciar. La alerta queda pendiente hasta disponer de conexión operativa.
+  LocalAuth de la dependencia instalada conserva archivos con destroy; logout
+  sí los borra y no se usa. Si el usuario desvincula expresamente el dispositivo,
+  el SDK tiene su propio flujo LOGOUT: no se promete evitar esa revocación.
+- message_ack espera la correlación por ID propio, incluso PN/LID, y guarda
+  ack/lastAckEvent/ackAt en agent_whatsapp_own_messages. No usa texto, no
+  confirma pagos, no cambia pedidos ni dispara reenvíos. ACK es telemetría:
+  la aceptación del SDK y la lectura por el destinatario son estados distintos.
+- El piloto inicia alertas y PDF solo con ready. Los workers son suspendibles
+  y reanudables; no se duplican intervalos al reconectar. Sin ALERTS_PHONE,
+  advertencia única al arrancar y solicitudes pendientes. Con el interruptor
+  apagado se conserva el motor viejo, con ciclo de conexión/ACK y sin workers
+  nuevos. El launcher usa la misma composición, no otro ciclo ni otro PDF.
+- PDF usa order-pdf-job.service.js y el repositorio transaccional existentes,
+  generateOrderPDF y el transporte común. Cola FIFO por chat compartida entre
+  runtimes, mantenimiento y PDF, pausa de 500 ms y registros durables de envío
+  y autoría. La fase sending/receipt_sending se persiste al salir de la cola,
+  antes de la operación externa. Una interrupción demostrablemente anterior
+  reprograma pending; fallos de render/formato alertan. Un resultado incierto
+  o un sending abandonado requieren revisión humana y no se reenvían a ciegas.
+  Se conserva pdfDelivered:false, el pedido y su pago; no se pide comprar otra
+  vez. Archivo temporal eliminado en finally. Los jobs de chats pausados o
+  fuera de lista se conservan pendientes. Se usan los dos índices ya declarados
+  de order_pdf_jobs (status/availableAt y status/leaseUntil); desplegarlos en
+  la puesta en marcha conjunta, como ya quedó anotado.
+- Una línea JSON agent_turn por lote procesado/cancelado, con chat enmascarado,
+  lote, cantidad de mensajes/medios, bytes, resultado, latencia, herramientas
+  en orden, handoff y consumo. Una agent_tool por herramienta, con código y
+  duración; sin argumentos, textos, precios, bancos, documentos ni prompts.
+- Contador y reportes admiten cachedContentTokenCount e
+  input_token_details.cache_read, además de usageMetadata crudo de Gemini.
+  Se elige una representación; caché ya integra la entrada y no se agrega al
+  total. Ausencia queda null por llamada, con contador de llamadas informadas.
+  Agente y transcripción separados; el evaluador mantiene su contador propio.
+  Resumen/trace de evaluación incluyen caché y componentes sin cambiar calidad,
+  umbrales, pensamiento ni plazos del modelo.
+- El proceso registra rss/heapUsed en bytes al arrancar y cada 10 min. Sobre
+  MEMORY_WARN_MB (entero positivo, default 700; MB de 1024² bytes) emite
+  MEMORY_WARN. Esto mide Node, no los procesos Chromium ni el total de la VM;
+  no reinicia el proceso ni cambia límites automáticamente.
+- Tests nuevos de cliente falso, reloj virtual, recuperación de PDF y
+  consumo/caché están incluidos en test:unit. Guía completa de archivos,
+  comandos y recorrido del dueño: docs/VERIFICACION-agente-7C.md.
+
+# OPERACIÓN CON PM2
+
+- `ecosystem.config.cjs`: nombre existente `hodie-backend`, arranque con
+  `server.js`, `kill_timeout: 15000` y `time: true`. Sin secretos, bloque de
+  entorno ni `max_memory_restart`; las variables siguen en `.env` no versionado.
+- El primer despliegue requiere `pm2 delete hodie-backend` antes de
+  `bash deploy.sh`, porque el proceso existente tiene la configuración vieja.
+  Después se usa `pm2 startOrRestart ecosystem.config.cjs --update-env` y
+  `pm2 save`. No se borra ni modifica `.env`, `sessions/` o `.wwebjs_auth/`.
+- El deploy conserva npm ci, Chrome y la comprobación del parche. Tras los
+  logs espera hasta 60 s el evento estructurado `WHATSAPP_READY` con el modo
+  efectivo: interruptor, modo de mantenimiento y cantidad de la lista blanca,
+  sin teléfonos. Se valida PID y arranque contra el proceso actual de PM2 y
+  la fecha del deploy; logs viejos no habilitan un deploy. Si falta ready o
+  el modo, termina con error y el workflow queda en rojo.
+- SIGINT/SIGTERM cierran la admisión, guardián, trabajadores, limpieza de
+  comprobantes, HTTP y monitor. `client.destroy()` se inicia aunque otro
+  cierre quede esperando. Si initialize aún estaba en curso, se espera su
+  finalización y se vuelve a destruir el cliente antes de dar el cierre por
+  completo. No se llama a logout. Plazo interno de 14 s: éxito sale 0, error
+  o timeout sale 1 con los componentes pendientes. PM2 conserva su límite
+  de 15 s; una operación externa trabada no se declara completada.
+- Rotación documentada en README: instalar pm2-logrotate con `max_size 10M`,
+  `retain 7`, sin compresión. No se agrega una dependencia npm. Pruebas de
+  señales, cierre y verificación de arranque con reloj simulado incluidas
+  en `test:unit`; la ejecución corresponde al dueño.

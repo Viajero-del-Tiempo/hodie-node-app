@@ -14,7 +14,7 @@ test("filtro nuevo tiene paridad con el código actual sin importar ni iniciar W
   // La paridad legacy se conserva con el interruptor apagado. El receptor
   // ahora espera la puerta del piloto antes de ejecutar sus filtros originales.
   const current = vm.runInNewContext("async (mensaje) => { const ALLOWED_MESSAGE_TYPES = new Set(" + types[1] + ");"
-    + filters[1] + empty[0] + " return true; }", { agentWhatsAppConfig: { enabled: false } });
+    + filters[1] + empty[0] + " return true; }", { agentWhatsAppConfig: { enabled: false }, agentPilotClosed: false, legacyConnection: { isReady: () => true } });
   const base = { from: "test@lid", body: "Hola", type: "chat", fromMe: false, hasMedia: false };
   const variants = [{}, { fromMe: true }, { from: "" }, { from: undefined }, { from: "0@c.us" }, { from: "test@g.us" },
     { from: "status@broadcast" }, { type: "e2e_notification" }, { type: "call_log" }, { type: undefined },

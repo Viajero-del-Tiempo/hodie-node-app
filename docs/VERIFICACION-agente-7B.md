@@ -137,7 +137,8 @@ El aviso al equipo contiene un tipo de atención controlado y referencia opaca;
 no copia contexto, mensajes, teléfonos, cédulas/RUC, datos bancarios, importes,
 nombres de archivos ni enlaces de comprobantes. El contenido completo sigue
 en el backend para la revisión autorizada. No confirma pagos ni cambia pedidos.
-7C mantiene pendiente el trabajador PDF real, ACK, desconexión y telemetría.
+El trabajador PDF real, ACK, desconexión y telemetría se implementan en 7C;
+ver `VERIFICACION-agente-7C.md` para la composición y comandos actuales.
 
 ## Comandos para Arnaldo
 

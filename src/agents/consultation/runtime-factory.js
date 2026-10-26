@@ -22,6 +22,16 @@ export async function createAgentRuntime({ ports, installTools, onPurchase = () 
     setTurnSignal: value => { turnSignal = value; },
     invokeTool: ports.invokeTool ?? ((name, args) => registry.dispatch(name, args, { signal: turnSignal })),
   };
+  const invoke = runtime.invokeTool;
+  runtime.invokeTool = async (...args) => {
+    const start = (modelClock?.now ?? (() => performance.now()))();
+    const batchId = runtime.getTurnContext?.()?.id;
+    let code = "TOOL_ERROR";
+    try { const result = await invoke(...args); code = result?.code ?? "OK"; return result; }
+    catch (error) { code = error.code ?? "TOOL_ERROR"; throw error; }
+    finally { runtime.recordTool?.({ batchId, name: registry.names.includes(args[0]) ? args[0] : "unknown", code: /^[A-Z0-9_]{1,80}$/u.test(code) ? code : "TOOL_ERROR",
+      durationMs: Math.max(0, (modelClock?.now ?? (() => performance.now()))() - start) }); }
+  };
   const purchase = createPurchaseTools(runtime, { confirmationConfig });
   runtime.getCommittedReceipt = () => purchase.orders.receiptForTurn();
   runtime.getCart = () => purchase.carts.read();

@@ -50,7 +50,7 @@ test("piloto real usa el guardián y las herramientas comunes: ráfaga, fotos y 
   for (const category of fixtures.categories) await f.db.collection("categories").doc(category.id).set({ ...category, active: true });
   for (const product of fixtures.products) await f.db.collection("products").doc(product.id).set({ ...product, schemaVersion: 2, active: true,
     slug: product.id, variants: product.variants.map(variant => ({ ...variant, active: true })) });
-  const stored = new Map(), chatId = incoming("unused").from;
+  const stored = new Map(), chatId = incoming("unused").from, telemetry = [];
   const store = { read: async () => structuredClone(stored.get(chatId) ?? null), write: async state => { stored.set(chatId, structuredClone(state)); } };
   const model = scriptedModel([reply("buscar_productos", { consulta: "producto" }), reply("responder", {
     texto: "Estas son las opciones.", cierre: "¿Querés más?", entendido: true, productosMostrados: ["product-a", "product-b"],
@@ -58,7 +58,7 @@ test("piloto real usa el guardián y las herramientas comunes: ráfaga, fotos y 
   const options = { db: f.db, chatId, store, now: clock.now, clock, model, guardianConfig: createGuardianConfig(),
     timestampNow: () => new Date(clock.now()), timestampFromMillis: value => new Date(value),
     resolvePhone: async () => "595900000001", transport: f.transport, receiptStorage: memoryPrivateReceiptStorage(),
-    bankConfig: JSON.parse(await readFile(new URL("./fixtures/agent-bank.json", import.meta.url), "utf8")) };
+    bankConfig: JSON.parse(await readFile(new URL("./fixtures/agent-bank.json", import.meta.url), "utf8")), logger: event => telemetry.push(event) };
   let runtime, restarted;
   try {
     runtime = await createProductionAgent(options);
@@ -74,6 +74,12 @@ test("piloto real usa el guardián y las herramientas comunes: ráfaga, fotos y 
     assert.equal(saved.phoneVerified, true); assert.equal(saved.userPhoneNumber, "595900000001");
     assert.deepEqual(saved.messages.slice(0, 2), [{ role: "user", content: "Mostrame opciones" }, { role: "user", content: "Con fotos" }]);
     assert.equal(saved.sentProductImages.length, 2); assert.equal(JSON.stringify(saved).includes("base64"), false);
+    const logs = telemetry.filter(event => ["agent_turn", "agent_tool"].includes(event.event));
+    assert.deepEqual(logs.map(event => event.event), ["agent_tool", "agent_tool", "agent_turn"]);
+    assert.deepEqual(logs.at(-1).tools, ["buscar_productos", "responder"]);
+    assert.equal(logs.at(-1).groupedMessages, 2); assert.equal(logs.at(-1).result, "processed");
+    assert.equal(logs.at(-1).consumption.agent.calls, 2); assert.equal(logs.at(-1).consumption.transcription.calls, 0);
+    assert.equal(JSON.stringify(logs).includes(chatId), false); assert.equal(JSON.stringify(logs).includes("Mostrame opciones"), false);
     runtime.shutdown();
     const next = deliveryFixture({ db: f.db, now: clock.now, pause: async ms => clock.advance(ms) });
     const nextModel = scriptedModel([messages => {

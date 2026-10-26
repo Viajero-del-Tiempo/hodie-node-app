@@ -25,6 +25,15 @@ export function createOwnMessageRepository({ db, now = Date.now, timestampFromMi
       // El mismo ID global puede llegar con PN o LID; no atribuir por dirección/texto.
       return doc.exists && expiry > now();
     },
+    async recordAck(id, ack) {
+      return db.runTransaction(async tx => {
+        const doc = await tx.get(ref(id));
+        if (!doc.exists || doc.data().messageId !== id) return false;
+        tx.set(ref(id), { ack: Math.max(doc.data().ack ?? -1, ack), lastAckEvent: ack,
+          ackAt: timestampFromMillis(now()) }, { merge: true });
+        return true;
+      });
+    },
   };
 }
 
@@ -32,15 +41,18 @@ export function createOwnMessageRepository({ db, now = Date.now, timestampFromMi
 export function installWhatsAppClient({ client, repository, config, resolvePhone, alertsPhone }) {
   if (installed.has(client)) return installed.get(client);
   const original = client.sendMessage.bind(client), pending = new Map();
+  let connection = null;
   client.sendMessage = function (chatId, content, options = {}) {
     let release;
     const settled = new Promise(resolve => { release = resolve; });
     const inFlight = pending.get(chatId) ?? new Set();
-    const entry = { settled, error: null, phone: null }; inFlight.add(entry); pending.set(chatId, inFlight);
+    const entry = { settled, error: null, phone: normalizePurchasePhone(chatId.replace(/@c\.us$/u, "")) }; inFlight.add(entry); pending.set(chatId, inFlight);
     let deliveryStarted = false;
     const send = (async () => {
       const { appOrigin, appSignal, ...providerOptions } = options;
-      appSignal?.throwIfAborted();
+      const signal = AbortSignal.any([appSignal, connection?.getSignal()].filter(Boolean));
+      signal.throwIfAborted();
+      if (connection && !connection.isReady()) throw Object.assign(new Error("WhatsApp no está listo"), { code: "WHATSAPP_NOT_READY", deliveryStarted: false });
       if (config.enabled) {
         const alert = appOrigin === "alert" && chatId === alertsPhone + "@c.us";
         if (alert) entry.phone = alertsPhone;
@@ -50,7 +62,8 @@ export function installWhatsAppClient({ client, repository, config, resolvePhone
           if (config.maintenanceMode === "silent" && !allowsAgentPhone(config, entry.phone)) throw Object.assign(new Error("Destino fuera de la lista del piloto"), { code: "WHATSAPP_OUTSIDE_ALLOWLIST", deliveryStarted: false });
         }
       }
-      appSignal?.throwIfAborted();
+      signal.throwIfAborted();
+      if (connection && !connection.isReady()) throw Object.assign(new Error("WhatsApp no está listo"), { code: "WHATSAPP_NOT_READY", deliveryStarted: false });
       let result;
       try { deliveryStarted = true; result = await original(chatId, content, providerOptions); }
       catch (error) { throw Object.assign(new Error("Envío WhatsApp incierto"), { code: "SEND_UNCERTAIN", deliveryStarted: true, cause: error }); }
@@ -68,6 +81,15 @@ export function installWhatsAppClient({ client, repository, config, resolvePhone
     });
   };
   const control = {
+    setConnection(value) { connection = value; },
+    async recordAck(chatId, id, ack) {
+      let phone = normalizePurchasePhone(chatId?.replace(/@c\.us$/u, ""));
+      if (!phone && resolvePhone) {
+        try { phone = normalizePurchasePhone(await resolvePhone(chatId, { sideEffectFree: true })); } catch { /* El ID sigue siendo la única prueba. */ }
+      }
+      if (!await control.owns(chatId, id, { phone })) return false;
+      return repository.recordAck(id, ack);
+    },
     async owns(chatId, id, { phone = normalizePurchasePhone(chatId.replace(/@c\.us$/u, "")) } = {}) {
       if (!id) throw new Error("Saliente sin ID");
       const inFlight = [...new Set([...(pending.get(chatId) ?? []),
