@@ -1,0 +1,8 @@
+{
+  "bankName": "Banco Ficticio Alfa",
+  "accountHolder": "Titular Ficticio Beta",
+  "documentId": "9999990",
+  "accountNumber": "000000123456",
+  "currency": "Gs",
+  "alias": "cuenta-ficticia@example.test"
+}

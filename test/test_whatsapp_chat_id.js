@@ -1,7 +1,4 @@
-if (process.env.ALLOW_PROD_FIRESTORE_TESTS !== "1") {
-  console.error("❌ ERROR: Este test interactúa con Firestore de producción. Debe ejecutarse con ALLOW_PROD_FIRESTORE_TESTS=1 (ej: npm run test:unit).");
-  process.exit(1);
-}
+import "./firebase-bootstrap.js";
 
 import { AgentStateAnnotation } from "../src/agents/state.js";
 import {
@@ -14,7 +11,7 @@ import {
   sendLimitError,
 } from "../src/services/whatsapp.service.js";
 import { whatsappClient } from "../src/config/whatsapp.js";
-import { processAndSendOrder, updateOrderStatusAndNotify } from "../src/services/order.service.js";
+import { processAndSendOrder } from "../src/services/order.service.js";
 import { updateAdminOrderStatus } from "../src/controllers/admin.order.controller.js";
 import { db } from "../src/config/firebase.js";
 import { Timestamp } from "firebase-admin/firestore";
@@ -42,6 +39,8 @@ async function runTests() {
   // Identificadores de recursos de prueba para aislamiento total
   const timestamp = Date.now();
   const testProductId = `test-prod-chatid-${timestamp}`;
+  const testVariantProductId = `test-prod-variant-chatid-${timestamp}`;
+  const testVariantId = `test-variant-chatid-${timestamp}`;
   const testOrderId4 = `test-ord-t4-${timestamp}`;
   const testOrderId6Lid = `test-ord-t6-lid-${timestamp}`;
   const testOrderId6Old = `test-ord-t6-old-${timestamp}`;
@@ -59,6 +58,12 @@ async function runTests() {
       sku: `TEST-SKU-${timestamp}`,
       stock: 10,
       price: 50000,
+      createdAt: new Date(),
+    });
+
+    await db.collection("products").doc(testVariantProductId).set({
+      schemaVersion: 2, active: true, name: "Producto Alfa", optionNames: [],
+      variants: [{ id: testVariantId, sku: `test-variant-sku-${timestamp}`, options: {}, price: 50000, stock: 10, active: true, imageUrls: [] }],
       createdAt: new Date(),
     });
 
@@ -284,34 +289,6 @@ async function runTests() {
     }
 
     // -------------------------------------------------------------
-    // TEST 5: updateOrderStatusAndNotify con whatsappChatId y fallback
-    // -------------------------------------------------------------
-    console.log("\n--- TEST 5: updateOrderStatusAndNotify con whatsappChatId ---");
-    {
-      let sentTo = null;
-      whatsappClient.sendMessage = async (to, msg) => {
-        sentTo = to;
-        return { id: "msg-status" };
-      };
-
-      // 1. Directo con whatsappChatId
-      await updateOrderStatusAndNotify({
-        whatsappChatId: "123456789@lid",
-        status: "paid",
-        amount: 50000,
-      });
-      assert(sentTo === "123456789@lid", "updateOrderStatusAndNotify usa whatsappChatId directamente");
-
-      // 2. Con phone fallback (genera advertencia pero funciona)
-      await updateOrderStatusAndNotify({
-        phone: "595981777888",
-        status: "shipped",
-        amount: 50000,
-      });
-      assert(sentTo === "595981777888@c.us", "updateOrderStatusAndNotify hace fallback a phone@c.us");
-    }
-
-    // -------------------------------------------------------------
     // TEST 6: updateAdminOrderStatus y ciclo de inventario con producto de prueba propio
     // -------------------------------------------------------------
     console.log("\n--- TEST 6: updateAdminOrderStatus y control de stock real en producto de prueba ---");
@@ -331,7 +308,8 @@ async function runTests() {
         total: 100000,
         items: [
           {
-            productId: testProductId,
+            productId: testVariantProductId,
+            variantId: testVariantId,
             quantity: 3,
             price: 50000,
           },
@@ -352,11 +330,11 @@ async function runTests() {
 
       await updateAdminOrderStatus(reqPreparing, resPreparing);
 
-      const prodAfterDeduct = (await db.collection("products").doc(testProductId).get()).data();
+      const prodAfterDeduct = (await db.collection("products").doc(testVariantProductId).get()).data();
       assert(
-        Number(prodAfterDeduct.stock) === 7,
+        Number(prodAfterDeduct.variants.find(variant => variant.id === testVariantId).stock) === 7,
         "updateAdminOrderStatus descontó correctamente 3 unidades de stock del producto de prueba (10 -> 7)",
-        `Stock actual: ${prodAfterDeduct.stock}`
+        `Stock actual: ${prodAfterDeduct.variants.find(variant => variant.id === testVariantId).stock}`
       );
       assert(
         notifiedTo === "150697601421342@lid",
@@ -375,11 +353,11 @@ async function runTests() {
 
       await updateAdminOrderStatus(reqCancel, resCancel);
 
-      const prodAfterRestore = (await db.collection("products").doc(testProductId).get()).data();
+      const prodAfterRestore = (await db.collection("products").doc(testVariantProductId).get()).data();
       assert(
-        Number(prodAfterRestore.stock) === 10,
+        Number(prodAfterRestore.variants.find(variant => variant.id === testVariantId).stock) === 10,
         "updateAdminOrderStatus restituyó correctamente el stock del producto de prueba al cancelar (7 -> 10)",
-        `Stock actual: ${prodAfterRestore.stock}`
+        `Stock actual: ${prodAfterRestore.variants.find(variant => variant.id === testVariantId).stock}`
       );
 
       // Caso B: Pedido sin whatsappChatId (fallback a phone@c.us)
@@ -431,6 +409,12 @@ async function runTests() {
       console.log(`  🗑️ Producto de prueba eliminado: products/${testProductId}`);
     } catch (cleanProdErr) {
       console.warn(`  ⚠️ Error eliminando producto ${testProductId}:`, cleanProdErr.message);
+    }
+
+    try {
+      await db.collection("products").doc(testVariantProductId).delete();
+    } catch (cleanProdErr) {
+      console.warn(`Error eliminando producto ${testVariantProductId}:`, cleanProdErr.message);
     }
 
     // 3. Restaurar mocks

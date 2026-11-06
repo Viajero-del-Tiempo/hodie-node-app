@@ -1,108 +1,96 @@
 import { processAndSendOrder } from '../services/order.service.js';
-import { sendOrderStatus } from '../services/whatsapp.service.js';
+import { sanitizeOrderItemInput } from '../services/order-pricing.service.js';
+import { validateShippingAddress, getShippingOptions } from '../services/shipping.service.js';
+import { validateOrderBilling } from '../validators/billing.validator.js';
+import { booleanInput, sendCustomerError, CustomerDataError } from '../utils/customer-data.util.js';
+import { profileService } from './user.controller.js';
 
-export const sendOrder = async (req, res) => {
-  try {
-    const user = req.user;
-    const body = req.body || {};
+export function createSendOrderController({ processOrder = processAndSendOrder,
+  notifyStatus = async (...args) => (await import('../services/whatsapp.service.js')).sendOrderStatus(...args),
+  profiles = profileService,
+} = {}) {
+  return async (req, res) => {
+    try {
+      const user = req.user;
+      const body = req.body || {};
 
-    if (!Array.isArray(body.items) || body.items.length === 0) {
-      return res.status(400).json({ error: "El pedido debe contener al menos un ítem." });
-    }
-
-    if (!body.shippingAddress || typeof body.shippingAddress !== "object") {
-      return res.status(400).json({ error: "La dirección de envío es obligatoria." });
-    }
-
-    // Validación de límites de caracteres en campos de dirección (máximo 200 caracteres)
-    for (const [key, val] of Object.entries(body.shippingAddress)) {
-      if (typeof val === "string" && val.length > 200) {
-        return res.status(400).json({
-          error: `El campo '${key}' de la dirección de envío supera el límite permitido de 200 caracteres.`,
-        });
+      if (!Array.isArray(body.items) || body.items.length === 0) {
+        throw new CustomerDataError('items', 'El pedido debe contener al menos un ítem.');
       }
-    }
 
-    // Validación de límites de caracteres en personalización e instrucciones (máximo 500 caracteres)
-    for (const it of body.items) {
-      if (it.customization && String(it.customization).length > 500) {
-        return res.status(400).json({
-          error: "El campo de personalización supera el límite permitido de 500 caracteres.",
-        });
-      }
-      if (it.instructions && String(it.instructions).length > 500) {
-        return res.status(400).json({
-          error: "El campo de instrucciones supera el límite permitido de 500 caracteres.",
-        });
-      }
-    }
+      // Whitelist: referencias, cantidades y personalización. Datos comerciales
+      // y estado salen del servidor; identidad exclusivamente del JWT.
+      const cleanItems = body.items.map(sanitizeOrderItemInput);
 
-    // Whitelist estricta para checkout web:
-    // Solo se aceptan items (productId, quantity, packaging, personalización) y dirección del body.
-    // Identidad viene exclusivamente de req.user del JWT.
-    // id, orderNumber, status, price, subtotal, shippingMethod, total se ignoran / fuerzan por el servidor.
-    const cleanItems = body.items.map((it) => {
-      const cust = it.customization ? String(it.customization).trim() : (it.instructions ? String(it.instructions).trim() : "");
-      return {
-        productId: it.productId || it.id,
-        quantity: it.quantity,
-        selectedPackaging: it.selectedPackaging || null,
-        customization: cust,
-        customizationPending: !cust,
+      const cleanShippingAddress = validateShippingAddress(body.shippingAddress);
+      const billing = validateOrderBilling(body.billing);
+      const saveShippingAddress = booleanInput(body.saveShippingAddress, 'saveShippingAddress', !user.addresses?.length);
+      const saveBillingProfile = booleanInput(body.saveBillingProfile, 'saveBillingProfile');
+
+      const cleanPayload = {
+        userId: user.uid,
+        userPhoneNumber: user.phoneNumber || req.userPhone,
+        userDisplayName: user.displayName || "Cliente Web",
+        items: cleanItems,
+        shippingAddress: cleanShippingAddress,
+        billing: { ...billing, ...(billing.rucValidation?.status === 'mismatch_confirmed' ? { acknowledgeRucMismatch: true } : {}) },
+        status: "pending",
+        whatsappChatId: user.whatsappChatId || "",
       };
-    });
 
-    const cleanShippingAddress = {
-      alias: body.shippingAddress.alias || "",
-      street: body.shippingAddress.street || "",
-      city: body.shippingAddress.city || "",
-      department: body.shippingAddress.department || "",
-      postalCode: body.shippingAddress.postalCode || "",
-      instructions: body.shippingAddress.instructions || "",
-    };
-
-    const cleanPayload = {
-      userId: user.uid,
-      userPhoneNumber: user.phoneNumber || req.userPhone,
-      userDisplayName: user.displayName || "Cliente Web",
-      items: cleanItems,
-      shippingAddress: cleanShippingAddress,
-      status: "pending",
-      whatsappChatId: user.whatsappChatId || "",
-    };
-
-    const result = await processAndSendOrder(cleanPayload);
-
-    // Enviar mensaje de estado inicial con datos bancarios solo si el PDF fue entregado
-    // (si falló el PDF, processAndSendOrder ya envió el mensaje de contingencia con datos bancarios)
-    if (result.pdfDelivered) {
-      const targetChatId = cleanPayload.whatsappChatId || cleanPayload.userPhoneNumber;
-      try {
-        await sendOrderStatus(targetChatId, "pending", result.total, result.shippingMethod, {
-          hasPendingCustomization: Boolean(result.customizationPending),
-        });
-      } catch (statusErr) {
-        console.warn("⚠️ No se pudo enviar notificación de estado inicial por WhatsApp:", statusErr.message);
+      const result = await processOrder(cleanPayload, { identity: { origin: 'web', phone: req.userPhone } });
+      // El pedido ya existe. Un fallo al guardar datos opcionales no debe crear
+      // otro pedido al reintentar: se devuelve éxito y un aviso independiente.
+      let profileSaved = null;
+      let profileWarning;
+      if (saveShippingAddress || (saveBillingProfile && billing.invoiceRequested)) {
+        try {
+          await profiles.saveCheckoutDetails(user.uid, { shippingAddress: cleanShippingAddress, billing,
+            saveShippingAddress, saveBillingProfile });
+          profileSaved = true;
+        } catch (error) {
+          profileSaved = false;
+          profileWarning = 'El pedido está guardado, pero no pudimos guardar los datos en tu perfil. Podés guardarlos desde Mi perfil sin repetir la compra.';
+          console.warn('No se pudieron guardar los datos opcionales del perfil:', error.message);
+        }
       }
-    }
 
-    return res.json({
-      success: result.success,
-      status: "success",
-      pdfDelivered: result.pdfDelivered,
-      message: result.message,
-      orderId: result.orderId,
-      orderNumber: result.orderNumber,
-      file: result.file,
-      shippingMethod: result.shippingMethod,
-      customizationPending: result.customizationPending,
-      total: result.total,
-    });
-  } catch (error) {
-    if (error.statusCode === 400) {
-      return res.status(400).json({ error: error.message });
+      // Enviar mensaje de estado inicial con datos bancarios solo si el PDF fue entregado
+      // (si falló el PDF, processAndSendOrder ya envió el mensaje de contingencia con datos bancarios)
+      if (result.pdfDelivered) {
+        const targetChatId = cleanPayload.whatsappChatId || cleanPayload.userPhoneNumber;
+        try {
+          await notifyStatus(targetChatId, "pending", result.total, result.shippingMethod, {
+            hasPendingCustomization: Boolean(result.customizationPending),
+          });
+        } catch (statusErr) {
+          console.warn("⚠️ No se pudo enviar notificación de estado inicial por WhatsApp:", statusErr.message);
+        }
+      }
+
+      return res.json({
+        success: result.success,
+        status: "success",
+        pdfDelivered: result.pdfDelivered,
+        message: result.message,
+        orderId: result.orderId,
+        orderNumber: result.orderNumber,
+        file: result.file,
+        shippingMethod: result.shippingMethod,
+        customizationPending: result.customizationPending,
+        total: result.total,
+        profileSaved,
+        ...(profileWarning ? { profileWarning } : {}),
+      });
+    } catch (error) {
+      return sendCustomerError(res, error);
     }
-    console.error('Error en sendOrder:', error);
-    return res.status(500).json({ error: 'Error procesando el pedido.' });
-  }
-};
+  };
+}
+
+export const sendOrder = createSendOrderController();
+
+export function shippingOptions(req, res) {
+  try { return res.json({ success: true, ...getShippingOptions(req.query.city) }); }
+  catch (error) { return sendCustomerError(res, error); }
+}

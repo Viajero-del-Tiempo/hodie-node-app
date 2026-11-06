@@ -1,7 +1,7 @@
 import jwt from "jsonwebtoken";
 import { JWT_SECRET } from "../config/jwt.js";
 import { db } from "../config/firebase.js";
-import { tokenBlacklist } from "../controllers/auth.controller.js";
+import { tokenBlacklist } from "../services/auth-session.service.js";
 
 /**
  * Middleware para validar que el usuario tenga un token JWT válido y no revocado.
@@ -39,7 +39,7 @@ export const requireAuth = async (req, res, next) => {
  * Consulta la colección 'users' de Firestore por phoneNumber:
  * - 401 si el usuario no existe en la base de datos.
  * - 403 si el usuario tiene active === false.
- * Inyecta req.user = { uid: doc.id, ...doc.data() }.
+ * Inyecta req.user = { ...doc.data(), uid: doc.id }.
  */
 export const loadActiveUser = async (req, res, next) => {
   try {
@@ -65,7 +65,7 @@ export const loadActiveUser = async (req, res, next) => {
       return res.status(403).json({ error: "Usuario inactivo o suspendido." });
     }
 
-    req.user = { uid: doc.id, ...userData };
+    req.user = { ...userData, uid: doc.id };
     next();
   } catch (err) {
     console.error("Error en middleware loadActiveUser:", err);
@@ -112,7 +112,7 @@ export const requireAdmin = async (req, res, next) => {
       return res.status(403).json({ error: "Acceso denegado: se requieren permisos de administrador" });
     }
 
-    req.user = { uid: snapshot.docs[0].id, ...userData };
+    req.user = { ...userData, uid: snapshot.docs[0].id };
     req.token = token;
     next();
   } catch (err) {

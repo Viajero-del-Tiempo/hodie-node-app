@@ -1,7 +1,4 @@
-if (process.env.ALLOW_PROD_FIRESTORE_TESTS !== "1") {
-  console.error("❌ ERROR: Este test interactúa con Firestore de producción. Debe ejecutarse con ALLOW_PROD_FIRESTORE_TESTS=1 (ej: npm run test:unit).");
-  process.exit(1);
-}
+import "./firebase-bootstrap.js";
 
 import app from "../src/app.js";
 import { db } from "../src/config/firebase.js";
@@ -9,6 +6,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { JWT_SECRET } from "../src/config/jwt.js";
 import { whatsappClient } from "../src/config/whatsapp.js";
 import { budgetAgentNode } from "../src/agents/nodes/budget.node.js";
+import { createSendOrderController } from "../src/controllers/order.controller.js";
 import jwt from "jsonwebtoken";
 import { HumanMessage } from "@langchain/core/messages";
 
@@ -193,7 +191,7 @@ async function runOrderSecurityTests() {
             imageUrl: "https://res.cloudinary.com/test/termo.jpg",
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           alias: "Casa",
           street: "Palma 123",
           city: "Asunción",
@@ -247,7 +245,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -291,7 +289,7 @@ async function runOrderSecurityTests() {
             },
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -337,7 +335,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Calle Atacante 456",
           city: "San Lorenzo",
           department: "Central",
@@ -382,7 +380,7 @@ async function runOrderSecurityTests() {
             quantity: 1,
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567", 
           street: "Palma 123",
           city: "Asunción",
           department: "Central",
@@ -425,12 +423,12 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdInactive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const inactiveData = await inactiveRes.json();
       assert(inactiveRes.status === 400, "Producto inactivo responde HTTP 400", `Obtenido: ${inactiveRes.status}`);
-      assert(inactiveData.error?.includes("inactivo"), "Mensaje de error indica producto inactivo");
+      assert(inactiveData.field === "productId", "El error identifica productId como campo inválido");
 
       // 6.b Empaque inválido -> 400
       const invalidPkgRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -447,12 +445,12 @@ async function runOrderSecurityTests() {
               selectedPackaging: { type: "diamantes_oro" },
             },
           ],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const invalidPkgData = await invalidPkgRes.json();
       assert(invalidPkgRes.status === 400, "Empaque inválido responde HTTP 400", `Obtenido: ${invalidPkgRes.status}`);
-      assert(invalidPkgData.error?.includes("empaque inválida"), "Mensaje de error indica empaque inválido");
+      assert(invalidPkgData.field === "selectedPackaging", "El error identifica selectedPackaging como campo inválido");
 
       // 6.c Cantidad no entera -> 400
       const floatQtyRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -463,10 +461,12 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 2.5 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
+      const floatQtyData = await floatQtyRes.json();
       assert(floatQtyRes.status === 400, "Cantidad decimal responde HTTP 400");
+      assert(floatQtyData.field === "quantity", "El error de cantidad decimal identifica quantity");
 
       // 6.d Cantidad negativa o cero -> 400
       const zeroQtyRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -477,10 +477,12 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 0 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
+      const zeroQtyData = await zeroQtyRes.json();
       assert(zeroQtyRes.status === 400, "Cantidad 0 responde HTTP 400");
+      assert(zeroQtyData.field === "quantity", "El error de cantidad 0 identifica quantity");
 
       // 6.e Cantidad excesiva (> 100) -> 400
       const excessiveQtyRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -491,10 +493,12 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 101 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
+      const excessiveQtyData = await excessiveQtyRes.json();
       assert(excessiveQtyRes.status === 400, "Cantidad > 100 responde HTTP 400");
+      assert(excessiveQtyData.field === "quantity", "El error de cantidad excesiva identifica quantity");
     }
 
     // -------------------------------------------------------------
@@ -510,13 +514,14 @@ async function runOrderSecurityTests() {
         },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
 
       const data = await res.json();
       assert(res.status === 403, "Usuario inactivo responde HTTP 403", `Status: ${res.status}`);
-      assert(data.error?.includes("inactivo") || data.error?.includes("suspendido"), "Mensaje de error indica usuario inactivo");
+      // El middleware de autenticación devuelve error, sin field.
+      assert(typeof data.error === "string" && data.error.trim().length > 0, "El rechazo del usuario incluye un error textual no vacío");
     }
 
     // -------------------------------------------------------------
@@ -546,13 +551,45 @@ async function runOrderSecurityTests() {
       });
       assert(adminRes.status === 200, "GET /admin/orders con JWT admin responde HTTP 200");
 
-      // 8.d POST /orders/order/status eliminado -> 404
-      const noAuthStatusRes = await fetch(`${baseUrl}/orders/order/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orderId: "some-order", status: "paid" }),
+      // 8.d La ruta eliminada no permite cambiar un pedido, con o sin sesión.
+      // El cliente autenticado es su dueño: el rechazo no depende de que sea ajeno.
+      const statusOrderId = `test-ord-status-${timestamp}`;
+      const statusOrderRef = db.collection("orders").doc(statusOrderId);
+      createdOrderIds.push(statusOrderId);
+      await statusOrderRef.create({
+        id: statusOrderId,
+        orderNumber: statusOrderId,
+        userId: testUserAId,
+        userPhoneNumber: testUserAPhone,
+        status: "pending",
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       });
-      assert(noAuthStatusRes.status === 404, "POST /order/status fue eliminado y responde HTTP 404");
+      const initialStatus = (await statusOrderRef.get()).data().status;
+
+      for (const { label, token } of [
+        { label: "sin JWT" },
+        { label: "con JWT válido de cliente", token: tokenA },
+      ]) {
+        const statusRes = await fetch(`${baseUrl}/orders/order/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({ orderId: statusOrderId, status: "paid" }),
+        });
+        assert(
+          [401, 404].includes(statusRes.status),
+          `POST /orders/order/status ${label} se rechaza con HTTP 401 o 404`,
+          `Status: ${statusRes.status}`
+        );
+        const afterAttempt = await statusOrderRef.get();
+        assert(
+          afterAttempt.exists && afterAttempt.data().status === initialStatus,
+          `POST /orders/order/status ${label} conserva el estado del pedido`
+        );
+      }
     }
 
     // -------------------------------------------------------------
@@ -575,7 +612,7 @@ async function runOrderSecurityTests() {
             name: "bolsa",
             price: 20000,
           },
-          shippingAddress: {
+          shippingAddress: {recipientDocument: "1234567", 
             recipientName: "Cliente Presupuestador",
             city: "Caacupé",
             department: "Cordillera",
@@ -628,7 +665,7 @@ async function runOrderSecurityTests() {
             },
           },
         ],
-        shippingAddress: {
+        shippingAddress: {recipientDocument: "1234567", 
           recipientName: "Test Sanitización",
           street: "Palma 123",
           city: "Asunción",
@@ -653,7 +690,7 @@ async function runOrderSecurityTests() {
         const savedOrder = orderDoc.data();
         const item = savedOrder.items[0];
 
-        assert(item.selectedPackaging.name === "Caja de Regalo", "Nombre de packaging proviene de displayNames ('Caja de Regalo') ignorando body");
+        assert(item.selectedPackaging.name === item.selectedPackaging.type, "Nombre del empaque del modelo viejo usa su clave de catálogo e ignora el body");
         assert(item.selectedPackaging.imageUrl !== "https://attacker.com/malicious-box.png", "imageUrl de packaging en Firestore no toma la URL maliciosa del cliente");
         assert(item.imageUrl !== "https://attacker.com/malicious-item.png", "imageUrl del ítem en Firestore no toma la URL maliciosa del cliente");
       }
@@ -673,12 +710,12 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1, customization: longText600 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
       const customData = await customRes.json();
       assert(customRes.status === 400, "Personalización de 600 caracteres responde HTTP 400");
-      assert(customData.error?.includes("500 caracteres"), "Mensaje indica límite de 500 caracteres para personalización");
+      assert(customData.field === "customization", "El error identifica customization como campo inválido");
 
       // 11.b Instructions > 500 chars -> 400
       const instrRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -686,10 +723,12 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1, instructions: longText600 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
+      const instrData = await instrRes.json();
       assert(instrRes.status === 400, "Instrucciones de 600 caracteres responde HTTP 400");
+      assert(instrData.field === "instructions", "El error identifica instructions como campo inválido");
 
       // 11.c Dirección (calle) > 200 chars -> 400
       const streetRes = await fetch(`${baseUrl}/orders/order/send`, {
@@ -697,12 +736,12 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: longText250, city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: longText250, city: "Asunción", department: "Central" },
         }),
       });
       const streetData = await streetRes.json();
       assert(streetRes.status === 400, "Calle de 250 caracteres responde HTTP 400");
-      assert(streetData.error?.includes("200 caracteres"), "Mensaje indica límite de 200 caracteres para campos de dirección");
+      assert(streetData.field === "shippingAddress.street", "El error de calle identifica shippingAddress.street");
     }
 
     // -------------------------------------------------------------
@@ -710,41 +749,45 @@ async function runOrderSecurityTests() {
     // -------------------------------------------------------------
     console.log("\n--- TEST 12: Errores 500 devuelven mensaje genérico al cliente ---");
     {
-      // Mockear temporalmente processAndSendOrder para que lance un error interno crítico no controlado
-      const orderServices = await import("../src/services/order.service.js");
-      const originalGeneratePDF = orderServices.processAndSendOrder;
-
-      // Invocamos un endpoint con una función forzada a fallar
-      const brokenPayload = {
-        items: [{ productId: "INVALID_FORCE_CRASH", quantity: 1 }],
-        shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
-      };
-
-      // Si pasamos un producto que existe pero forzamos un throw en el controller sin statusCode 400:
-      // Probemos con un ítem cuyo cálculo dispare un error interno
-      const originalConsoleError = console.error;
-      console.error = () => {}; // Silenciar log esperado en test
-
-      // Creamos una ruta mock en el servidor o probamos el catch
-      const res500 = await fetch(`${baseUrl}/orders/order/send`, {
+      // Un ítem nulo es una validación 400, no un mecanismo para provocar 500.
+      const invalidItemRes = await fetch(`${baseUrl}/orders/order/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
-          items: [null], // Provocará TypeError o excepción interna
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          items: [null],
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
         }),
       });
-      console.error = originalConsoleError;
+      const invalidItemData = await invalidItemRes.json();
+      assert(invalidItemRes.status === 400, "Ítem nulo responde HTTP 400");
+      assert(invalidItemData.field === "items", "El error del ítem nulo identifica items");
 
-      const data500 = await res500.json();
-      // Debe responder 400 si lo atrapa el validador, o 500 si es error interno
-      if (res500.status === 500) {
-        assert(res500.status === 500, "Error interno responde HTTP 500");
-        assert(data500.error === "Error procesando el pedido.", `Error 500 es genérico: '${data500.error}'`);
-      } else {
-        // En caso de que el validador retorne 400, probamos mandando una manipulación que force 500
-        assert(data500.error !== undefined, "Validación o error manejado correctamente");
+      // Inyectar un fallo interno permite comprobar el contrato 500 real sin
+      // depender de la redacción pública ni provocar operaciones en Firestore.
+      const internalError = new Error(`test-internal-detail-${timestamp}`);
+      const sendBrokenOrder = createSendOrderController({ processOrder: async () => { throw internalError; } });
+      const response = {
+        statusCode: 200,
+        status(code) { this.statusCode = code; return this; },
+        json(body) { this.body = body; return this; },
+      };
+      const originalConsoleError = console.error;
+      console.error = () => {};
+      try {
+        await sendBrokenOrder({
+          user: { uid: testUserAId, phoneNumber: testUserAPhone, displayName: "Cliente Legítimo A" },
+          body: {
+            items: [{ productId: testProductIdActive, quantity: 1 }],
+            shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
+          },
+        }, response);
+      } finally {
+        console.error = originalConsoleError;
       }
+      assert(response.statusCode === 500, "Error interno responde HTTP 500");
+      assert(typeof response.body?.error === "string" && response.body.error.trim().length > 0, "Error 500 incluye un error textual no vacío");
+      assert(!JSON.stringify(response.body).includes(internalError.message), "Error 500 no expone el detalle interno inyectado");
+      assert(Object.keys(response.body).length === 1 && Object.hasOwn(response.body, "error"), "Error 500 solo expone el campo público error");
     }
 
     // -------------------------------------------------------------
@@ -758,7 +801,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Km 16", city: "minga guazu", department: "Alto Paraná" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Km 16", city: "minga guazu", department: "Alto Paraná" },
         }),
       });
       const mingaData = await mingaRes.json();
@@ -780,7 +823,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Palma 123", city: "Asunción", department: "Central" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Palma 123", city: "Asunción", department: "Central" },
           shippingMethod: "local_gratis", // Intento de inyectar local_gratis para Asunción
         }),
       });
@@ -803,7 +846,7 @@ async function runOrderSecurityTests() {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tokenA}` },
         body: JSON.stringify({
           items: [{ productId: testProductIdActive, quantity: 1 }],
-          shippingAddress: { street: "Ruta PY02", city: "Minga Guazú km 20", department: "Alto Paraná" },
+          shippingAddress: {recipientName: "Destinatario de prueba", recipientDocument: "1234567",  street: "Ruta PY02", city: "Minga Guazú km 20", department: "Alto Paraná" },
         }),
       });
       const km20Data = await km20Res.json();
@@ -842,12 +885,9 @@ async function runOrderSecurityTests() {
       for (const d of remainingOrdersSnap.docs) {
         const odata = d.data();
         if (
-          d.id.startsWith("test-") ||
-          odata.userId === testUserAId ||
-          odata.userId === testUserBId ||
-          odata.userId === testUserAdminId ||
-          (odata.userId && odata.userId.startsWith("test-")) ||
-          (Array.isArray(odata.items) && odata.items.some(i => i.productId && String(i.productId).startsWith("test-")))
+          createdOrderIds.includes(d.id) ||
+          createdUserIds.includes(odata.userId) ||
+          (Array.isArray(odata.items) && odata.items.some(item => createdProductIds.includes(item.productId)))
         ) {
           await d.ref.delete();
           console.log(`  🗑️ Pedido residual eliminado en barrido: orders/${d.id}`);

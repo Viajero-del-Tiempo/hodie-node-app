@@ -29,11 +29,12 @@ export class FirestoreCheckpointSaver extends BaseCheckpointSaver {
    * @param {import("firebase-admin").firestore.Firestore} [firestoreDb]
    * @param {any} [serde]
    */
-  constructor(firestoreDb, serde) {
+  constructor(firestoreDb, serde, { checkpointsCollection = "langgraph_checkpoints", writesCollection = "langgraph_checkpoint_writes", throwOnReadError = false } = {}) {
     super(serde);
     this.db = firestoreDb || db;
-    this.checkpointsCollection = "langgraph_checkpoints";
-    this.writesCollection = "langgraph_checkpoint_writes";
+    this.checkpointsCollection = checkpointsCollection;
+    this.writesCollection = writesCollection;
+    this.throwOnReadError = throwOnReadError;
   }
 
   /**
@@ -147,6 +148,7 @@ export class FirestoreCheckpointSaver extends BaseCheckpointSaver {
 
       return checkpointTuple;
     } catch (err) {
+      if (this.throwOnReadError) throw Object.assign(new Error("No se pudo leer el checkpoint del agente"), { code: "CHECKPOINT_READ_FAILED", cause: err });
       console.error(`❌ Error en FirestoreCheckpointSaver.getTuple para thread ${threadId}:`, err);
       return undefined;
     }

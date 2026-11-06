@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+dev/receipts/
 package-lock.json.backup
 npm-debug.log*
 yarn-debug.log*
@@ -43,6 +44,7 @@ pid
 # Coverage & Testing
 coverage/
 .nyc_output/
+salida-*.txt
 
 # IDEs & Code Editors
 .vscode/
@@ -70,3 +72,6 @@ ehthumbs.db
 Thumbs.db
 Thumbs.db:encryptable
 desktop.inisalida-*.txt
+
+# Informes generados del agente
+test/eval/results/

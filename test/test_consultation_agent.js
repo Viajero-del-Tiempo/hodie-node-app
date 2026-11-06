@@ -1,0 +1,477 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { AIMessage, ToolMessage } from "@langchain/core/messages";
+import { readFile } from "node:fs/promises";
+import { consultationFixture, scriptedModel, reply } from "./helpers/consultation-fixtures.js";
+import { evalFixtures, evalCart } from "./helpers/eval-fixtures.js";
+import { deterministicChecks } from "./eval/checks.js";
+import { createConsultationAgent } from "../src/agents/consultation/agent.js";
+import { parseAgentThinkingBudget, resolveAgentModelConfig } from "../src/agents/consultation/model-config.js";
+import { createVirtualClock, flushMicrotasks } from "./helpers/virtual-clock.js";
+import { withTimeout } from "./eval/agent-contract.js";
+import { TECHNICAL_FAILURE_NOTICE, TECHNICAL_HANDOFF_MESSAGE } from "../src/agents/consultation/technical-failure.js";
+
+test("presupuesto del agente valida números, usa 512 por defecto y prioriza override sin mutar entorno", () => {
+  assert.deepEqual(resolveAgentModelConfig({ env: {} }), { options: { thinkingBudget: 512 },
+    thinking: { mode: "budget", thinkingBudget: 512, source: "default" } });
+  for (const value of [0, 512, 1024]) {
+    assert.equal(parseAgentThinkingBudget(String(value)), value);
+    assert.equal(resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: String(value) } }).options.thinkingBudget, value);
+  }
+  for (const value of ["", " ", "1.5", "1e3", "abc", "-1", -1, 2.5, NaN, Infinity, true, null, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => parseAgentThinkingBudget(value), { code: "INVALID_AGENT_THINKING_BUDGET" });
+  }
+  const env = Object.freeze({ AGENT_THINKING_BUDGET: "2048" });
+  assert.deepEqual(resolveAgentModelConfig({ env, thinkingBudget: 0 }), { options: { thinkingBudget: 0 },
+    thinking: { mode: "budget", thinkingBudget: 0, source: "override" } });
+  assert.equal(env.AGENT_THINKING_BUDGET, "2048");
+  assert.equal(resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" }, thinkingBudget: 512 }).options.thinkingBudget, 512);
+  assert.throws(() => resolveAgentModelConfig({ env: { AGENT_THINKING_BUDGET: "invalid" } }), { code: "INVALID_AGENT_THINKING_BUDGET" });
+});
+test("factory del agente recibe presupuesto y maxRetries cero sin modificar otros consumidores", async () => {
+  for (const [env, thinkingBudget, expected] of [[{}, undefined, { thinkingBudget: 512 }], [{ AGENT_THINKING_BUDGET: "512" }, undefined, { thinkingBudget: 512 }],
+    [{ AGENT_THINKING_BUDGET: "2048" }, 0, { thinkingBudget: 0 }]]) {
+    const requests = [];
+    const agent = await createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba de configuración.", modelEnv: env, thinkingBudget,
+      modelFactory: options => { requests.push(options); return { model: "test-budget-model" }; } });
+    assert.deepEqual(requests, [{ ...expected, maxRetries: 0 }]); assert.equal(agent.metadata.model, "test-budget-model");
+    assert.deepEqual(agent.metadata.modelCalls, { timeoutMs: 20000, maxRetries: 1, sdkMaxRetries: 0,
+      retryReserveMs: 5000, transientRetryDelayMs: 500 });
+    assert.equal(agent.metadata.thinking.thinkingBudget, expected.thinkingBudget);
+    assert.equal(agent.metadata.thinking.mode, "budget");
+    assert.equal(agent.metadata.thinking.source, thinkingBudget !== undefined ? "override" : env.AGENT_THINKING_BUDGET === undefined ? "default" : "env");
+    assert.equal(agent.metadata.modelInjected, true); assert.equal(agent.getModelUsage().calls, 0);
+  }
+  let called = false;
+  await assert.rejects(createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba", modelEnv: { AGENT_THINKING_BUDGET: "bad" },
+    modelFactory: () => { called = true; } }), { code: "INVALID_AGENT_THINKING_BUDGET" });
+  assert.equal(called, false);
+  const injected = await createConsultationAgent({ runtime: {}, registry: {}, prompt: "Prueba", model: { model: "test-injected" },
+    modelEnv: {}, thinkingBudget: 512 });
+  assert.deepEqual(injected.metadata.thinking, { mode: "unknown", thinkingBudget: null, source: "injected_model" });
+  assert.equal(injected.metadata.requestedThinking.thinkingBudget, 512);
+});
+
+test("ciclo búsqueda/detalle/respuesta usa datos cambiantes de herramientas y conserva firmas del modelo", async () => {
+  for (const price of [100, 234]) {
+    const fixtures = evalFixtures(); fixtures.products[0].variants[0].price = price;
+    const first = reply("buscar_productos", { consulta: "Alfa" });
+    first.additional_kwargs = { signature_sentinel: "PRIVATE_MODEL_SIGNATURE" };
+    const model = scriptedModel([first, messages => {
+      assert.equal(messages.at(-2), first);
+      assert.equal(messages.at(-1).name, "buscar_productos");
+      assert.equal(messages.at(-1).tool_call_id, first.tool_calls[0].id);
+      const data = JSON.parse(messages.at(-1).content);
+      return reply("ver_producto", { productId: data.products[0].id });
+    }, messages => {
+      const data = JSON.parse(messages.at(-1).content);
+      return reply("responder", { texto: data.product.name + ": " + data.product.variants[0].price, entendido: true });
+    }]);
+    const f = await consultationFixture({ fixtures, model });
+    try {
+      const result = await f.run({ user: "Información de Producto Alfa" });
+      assert.equal(f.transport.getOutgoing()[0].text, "Producto Alfa: " + price);
+      assert.deepEqual(f.world.getEvents().map(event => event.name), ["buscar_productos", "ver_producto", "responder"]);
+      assert.equal(result.usage.calls, 3);
+      assert.deepEqual(result.usage.reportedTokens, { input: 30, output: 6, total: 36 });
+      assert.ok(deterministicChecks({ handoff: "no" }, { tools: f.world.getEvents(), finalHandoff: false,
+        turns: [{ number: 1, handoffBefore: false, handoffAfter: false, outgoing: f.transport.getOutgoing() }] }).every(check => check.pass));
+      const context = JSON.parse(model.invocations[0].messages[1].content.split("\n").slice(1).join("\n"));
+      assert.equal(context.categories[0].name, "Categoría Alfa");
+      assert.equal(JSON.stringify(context).includes("Producto Alfa"), false);
+      const searchSchema = model.bindings[1].definitions[0].functionDeclarations.find(tool => tool.name === "buscar_productos");
+      assert.deepEqual(Object.keys(searchSchema.parameters.properties.opciones.properties), ["finish"]);
+    } finally { f.close(); }
+  }
+});
+test("contexto del servidor recorta historial, conserva ráfaga en orden y no envía productos completos, datos ajenos ni bytes", async () => {
+  const fixtures = evalFixtures();
+  fixtures.orders.push({ ...fixtures.orders[0], orderNumber: "other-order", userPhoneNumber: "595900000002" });
+  const conversacion = Array.from({ length: 25 }, (_, i) => ({ cliente: "Anterior " + i }));
+  const model = scriptedModel([reply("responder", { texto: "Respuesta", entendido: true })]);
+  const f = await consultationFixture({ fixtures, model,
+    context: { telefonoCliente: "595900000001", conversacion, carrito: evalCart(), umbralCorporativo: 5 } });
+  try {
+    await f.run({ user: "Primero", burst: ["Segundo", "Tercero"] });
+    const messages = model.invocations[0].messages;
+    assert.equal(messages.length, 23); // prompt + contexto + 20 previos + entrada agrupada
+    assert.equal(messages[2].content, "Anterior 5");
+    assert.equal(messages.at(-1).content, "Primero\nSegundo\nTercero");
+    const context = JSON.parse(messages[1].content.split("\n").slice(1).join("\n"));
+    assert.equal(context.identity.phoneVerified, true);
+    assert.deepEqual(context.orders, [{ orderNumber: "test-order-a", status: "pending" }]);
+    assert.equal(context.cart.lines[0].variantId, "variant-a");
+    assert.equal(context.consecutiveMisunderstandings, 0);
+    assert.equal(context.corporateQuantityThreshold, 5);
+    assert.equal(context.orders[0].items, undefined);
+    assert.equal(context.timezone, "America/Asuncion");
+    assert.equal(f.transport.getOutgoing().length, 1);
+    assert.equal(f.world.getState().messages.length, 25); // El runner administra el historial.
+  } finally { f.close(); }
+});
+test("contexto lee el umbral vigente en cada turno y no inventa un valor si falta o es inválido", async () => {
+  const f = await consultationFixture({ context: { umbralCorporativo: 5 },
+    model: scriptedModel(Array.from({ length: 4 }, () => reply("responder", { texto: "Respuesta de prueba", entendido: true }))) });
+  try {
+    const values = [{ corporateQuantityThreshold: 5, revision: 1 }, { corporateQuantityThreshold: 17, revision: 2,
+      updatedAt: "Marca interna", privateConfig: "No exponer" }, null, { corporateQuantityThreshold: "17" }];
+    for (const [index, value] of values.entries()) {
+      f.world.agentConfig.set(value);
+      const result = await f.run({ user: "Consulta de prueba " + index }, index + 1);
+      assert.deepEqual(result.diagnostics, []);
+      const context = JSON.parse(f.model.invocations[index].messages[1].content.split("\n").slice(1).join("\n"));
+      assert.equal(context.corporateQuantityThreshold, index < 2 ? value.corporateQuantityThreshold : null);
+      assert.equal(context.revision, undefined); assert.equal(context.updatedAt, undefined); assert.equal(context.privateConfig, undefined);
+      assert.equal(JSON.stringify(context).includes("Marca interna"), false);
+    }
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.transport.getOutgoing().length, values.length);
+  } finally { await f.agent.dispose(); f.close(); }
+});
+test("handoff activo evita modelo y envíos sin importar el tiempo transcurrido", async () => {
+  const f = await consultationFixture();
+  try {
+    const state = f.world.getState(); state.humanHandoffRequired = true; state.lastActivityAt = 0; f.world.setState(state);
+    const result = await f.run();
+    assert.equal(result.usage.calls, 0);
+    assert.equal(f.model.invocations.length, 0);
+    assert.deepEqual(f.transport.getOutgoing(), []);
+    assert.deepEqual(f.world.getEvents(), []);
+  } finally { f.close(); }
+});
+test("errores de argumentos se devuelven al modelo; responder inválido no cuenta como cierre", async () => {
+  const model = scriptedModel([reply("responder", { texto: "No se debe enviar" }), messages => {
+    assert.equal(JSON.parse(messages.at(-1).content).field, "entendido");
+    return reply("responder", { texto: "Respuesta válida", entendido: true });
+  }]);
+  const f = await consultationFixture({ model });
+  try {
+    await f.run();
+    assert.equal(f.transport.getOutgoing().length, 1);
+    assert.equal(f.transport.getOutgoing()[0].text, "Respuesta válida");
+    assert.equal(f.world.getEvents()[0].result.code, "ARGUMENTOS_INVALIDOS");
+    const checks = deterministicChecks({ handoff: "no" }, { tools: f.world.getEvents(), finalHandoff: false,
+      turns: [{ number: 1, handoffBefore: false, handoffAfter: false, outgoing: f.transport.getOutgoing() }] });
+    assert.equal(checks.find(check => check.kind === "turn_end").pass, true);
+  } finally { f.close(); }
+});
+test("LISTA_FALTANTE vuelve como dato al modelo y permite completar la lista en el mismo turno sin enviar la introducción incompleta", async () => {
+  for (const args of [
+    { texto: "Estas son las opciones:" },
+    { texto: "Opciones:", cierre: "¿Querés elegir?" },
+    { texto: "**Opciones:**  ", productosMostrados: [] },
+    { texto: "Opciones：", productosMostrados: [], empaquesMostrados: [] },
+  ]) {
+    const model = scriptedModel([reply("ver_producto", { productId: "product-a" }),
+      reply("responder", { ...args, entendido: true }), messages => {
+        const error = JSON.parse(messages.at(-1).content);
+        assert.equal(error.code, "LISTA_FALTANTE"); assert.equal(error.field, args.cierre ? "cierre" : "productosMostrados");
+        assert.deepEqual(f.transport.getOutgoing(), []);
+        return reply("responder", { texto: "Esta es la opción:", entendido: true, productosMostrados: ["product-a"], cierre: "¿Querés seguir?" });
+      }]);
+    const f = await consultationFixture({ model });
+    try {
+      const result = await f.run();
+      assert.deepEqual(result.diagnostics, []); assert.equal(f.model.invocations.length, 3);
+      assert.deepEqual(f.world.getEvents().map(event => [event.name, event.result.code]),
+        [["ver_producto", "OK"], ["responder", "LISTA_FALTANTE"], ["responder", "OK"]]);
+      assert.deepEqual(f.transport.getOutgoing().map(item => item.text), ["Esta es la opción:", "Producto Alfa — 100 Gs.", "¿Querés seguir?"]);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+    } finally { await f.agent.dispose(); f.close(); }
+  }
+});
+test("siete lecturas y el cierre usan ocho herramientas pero solo dos invocaciones al modelo", async () => {
+  const calls = Array.from({ length: 7 }, (_, i) => ({ id: "read-" + i, name: "ver_producto", args: { productId: "product-a" }, type: "tool_call" }));
+  const model = scriptedModel([new AIMessage({ content: "", tool_calls: calls,
+    usage_metadata: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } }), reply("responder", { texto: "Respuesta", entendido: true })]);
+  const f = await consultationFixture({ model });
+  try {
+    const result = await f.run();
+    assert.equal(f.world.getEvents().length, 8);
+    assert.equal(result.usage.calls, 2);
+    assert.deepEqual(model.bindings[1].options.allowedFunctionNames, ["responder", "derivar"]);
+    assert.equal(f.transport.getOutgoing().length, 1);
+  } finally { f.close(); }
+});
+test("lotes que superan el presupuesto, omiten la reserva o continúan después del cierre no ejecutan efectos", async () => {
+  for (const count of [8, 9]) {
+    const model = scriptedModel([new AIMessage({ content: "", tool_calls: Array.from({ length: count }, (_, i) => ({
+      id: "read-" + i, name: "ver_producto", args: { productId: "product-a" }, type: "tool_call",
+    })) })]);
+    const f = await consultationFixture({ model });
+    try {
+      const result = await f.run();
+      assert.equal(result.diagnostics[0].code, "TOOL_LIMIT");
+      assert.equal(f.world.getEvents().length, 0);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+      assert.deepEqual(f.world.getState().guardianAlerts, []);
+      assert.equal(f.transport.getOutgoing().length, 1);
+      assert.equal(f.transport.getOutgoing()[0].text, TECHNICAL_FAILURE_NOTICE);
+    } finally { f.close(); }
+  }
+  for (const names of [["responder", "ver_producto"], ["responder", "responder"]]) {
+    const model = scriptedModel([new AIMessage({ content: "", tool_calls: names.map((name, i) => ({
+      name, id: "call-" + i, args: name === "responder" ? { texto: "No enviar", entendido: true } : { productId: "product-a" }, type: "tool_call",
+    })) })]);
+    const f = await consultationFixture({ model });
+    try {
+      assert.equal((await f.run()).diagnostics[0].code, "INVALID_TOOL_BATCH");
+      assert.equal(f.world.getEvents().length, 0);
+      assert.equal(f.transport.getOutgoing().length, 1);
+    } finally { f.close(); }
+  }
+});
+test("intentos de herramientas ajenas consumen presupuesto y no modifican catálogo, pedidos o carrito", async () => {
+  const model = scriptedModel([...Array.from({ length: 7 }, () => reply("modificar_precio", { price: 1 })),
+    reply("responder", { texto: "No puedo modificar precios por este chat.", entendido: true })]);
+  const f = await consultationFixture({ model, context: { carrito: evalCart() } });
+  try {
+    const before = f.world.snapshot();
+    await f.run();
+    assert.equal(f.world.getEvents().length, 8);
+    assert.ok(f.world.getEvents().slice(0, 7).every(event => event.result.code === "HERRAMIENTA_NO_DISPONIBLE"));
+    assert.deepEqual(f.world.snapshot().catalog, before.catalog);
+    assert.deepEqual(f.world.snapshot().orders, before.orders);
+    assert.deepEqual(f.world.getCart(), before.cart);
+    assert.deepEqual(model.bindings.at(-1).options.allowedFunctionNames, ["responder", "derivar"]);
+  } finally { f.close(); }
+});
+test("sin cierre o con error del proveedor se avisa una vez; la segunda falla deriva y los turnos siguientes quedan en silencio", async () => {
+  for (const step of [new AIMessage("Texto fuera de responder"), () => { throw new Error("PRIVATE_PROVIDER_ERROR"); }]) {
+    const f = await consultationFixture({ model: scriptedModel([step, step]) });
+    try {
+      const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
+      const result = await f.run();
+      assert.equal(result.diagnostics.length, 1);
+      assert.equal(result.diagnostics[0].technicalFailure, true);
+      assert.equal(f.world.getState().humanHandoffRequired, false);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+      assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+      assert.deepEqual(f.world.getState().guardianAlerts, []);
+      assert.equal(f.transport.getOutgoing().length, 1);
+      assert.equal(f.transport.getOutgoing()[0].text, TECHNICAL_FAILURE_NOTICE);
+      assert.equal(f.transport.getOutgoing()[0].text.includes("PRIVATE_PROVIDER_ERROR"), false);
+      await f.run({ user: "Otro mensaje" }, 2);
+      assert.equal(f.model.invocations.length, 2);
+      assert.equal(f.world.getState().humanHandoffRequired, true);
+      assert.equal(f.world.getState().consecutiveTechnicalFailures, 2);
+      assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+      assert.equal(f.transport.getOutgoing().length, 2);
+      assert.equal(f.transport.getOutgoing()[1].text, TECHNICAL_HANDOFF_MESSAGE);
+      const alerts = f.world.getState().guardianAlerts;
+      assert.equal(alerts.length, 1); assert.equal(alerts[0].type, "TECHNICAL_FAILURE"); assert.equal(alerts[0].delivered, false);
+      const index = f.world.handoffs.get(f.world.getState().whatsappChatId);
+      assert.equal(index.active, true); assert.equal(index.motivo, f.world.getState().humanHandoffReason);
+      await f.run({ user: "Siguiente mensaje" }, 3);
+      assert.equal(f.model.invocations.length, 2); assert.equal(f.transport.getOutgoing().length, 2);
+      assert.deepEqual(f.world.getState().guardianAlerts, alerts);
+    } finally { await f.agent.dispose(); f.close(); }
+  }
+});
+test("un cierre válido reinicia la racha técnica aunque entendido sea false", async () => {
+  const fail = () => { throw new Error("Falla de prueba"); };
+  const f = await consultationFixture({ model: scriptedModel([fail,
+    reply("responder", { texto: "Repregunta de prueba.", entendido: false }), fail]) });
+  try {
+    // Mantener este caso debajo del cuarto intento para aislar la racha técnica.
+    // La derivación en el cuarto intento se verifica en su suite propia.
+    const state = f.world.getState(); state.consecutiveMisunderstandings = 2; f.world.setState(state);
+    await f.run(); assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    await f.run({ user: "Lo explico de nuevo" }, 2);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 0);
+    assert.equal(f.world.getState().lastTechnicalFailure, null);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+    await f.run({ user: "Otro mensaje" }, 3);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 3);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.deepEqual(f.world.getState().guardianAlerts, []);
+    assert.deepEqual(f.transport.getOutgoing().map(message => message.text),
+      [TECHNICAL_FAILURE_NOTICE, "Repregunta de prueba.", TECHNICAL_FAILURE_NOTICE]);
+  } finally { await f.agent.dispose(); f.close(); }
+});
+test("la racha técnica persiste al restaurar el checkpoint en otro runtime", async () => {
+  const fail = () => { throw new Error("Falla de prueba"); };
+  const first = await consultationFixture({ model: scriptedModel([fail]) });
+  let saved;
+  try { await first.run(); saved = structuredClone(first.world.getState()); }
+  finally { await first.agent.dispose(); first.close(); }
+  const second = await consultationFixture({ model: scriptedModel([fail]) });
+  try {
+    second.world.setState(saved);
+    await second.run();
+    assert.equal(second.world.getState().consecutiveTechnicalFailures, 2);
+    assert.equal(second.world.getState().humanHandoffRequired, true);
+    assert.equal(second.world.getState().guardianAlerts.length, 1);
+    assert.equal(second.transport.getOutgoing()[0].text, TECHNICAL_HANDOFF_MESSAGE);
+  } finally { await second.agent.dispose(); second.close(); }
+});
+test("si falla el envío del aviso, agente y guardián no cuentan dos fallas en el mismo lote", async () => {
+  const f = await consultationFixture({ model: scriptedModel([() => { throw new Error("Proveedor no disponible"); }]) });
+  let attempts = 0;
+  f.transport.sendText = async () => { attempts++; throw new Error("Transporte no disponible"); };
+  try {
+    const result = await f.run();
+    assert.equal(result.guardian.outcome, "technical_error");
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.deepEqual(f.world.getState().guardianAlerts, []); assert.equal(attempts, 1);
+  } finally { await f.agent.dispose(); f.close(); }
+});
+test("cancelación externa impide envíos y escrituras tardías aunque el modelo ignore AbortSignal", async () => {
+  let finish, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  const model = scriptedModel([() => { started(); return new Promise(resolve => { finish = resolve; }); }]);
+  const f = await consultationFixture({ model });
+  try {
+    const controller = new AbortController();
+    const pending = f.run(undefined, 1, controller.signal);
+    await ready;
+    controller.abort(new Error("Cancelado por el runner"));
+    await assert.rejects(pending, /Cancelado por el runner/);
+    finish(reply("responder", { texto: "No enviar tarde", entendido: true }));
+    await Promise.resolve();
+    assert.deepEqual(f.transport.getOutgoing(), []);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.agent.getModelUsage().calls, 1);
+    assert.equal(f.agent.getModelUsage().failedCalls, 1);
+  } finally { f.close(); }
+});
+test("timeout interno fuerza cierre antes del timeout del runner y no acepta una respuesta tardía", async () => {
+  const clock = createVirtualClock(0);
+  let finish, notifyStarted, runnerSignal;
+  const started = new Promise(resolve => { notifyStarted = resolve; });
+  const model = scriptedModel([() => { notifyStarted(); return new Promise(resolve => { finish = resolve; }); }]);
+  const f = await consultationFixture({ model, timeoutMs: 5000, modelCallTimeoutMs: 1000, modelClock: clock });
+  const task = withTimeout(signal => { runnerSignal = signal; return f.run(undefined, 1, signal); }, 60000);
+  const outcome = task.then(result => ({ result }), error => ({ error }));
+  try {
+    await Promise.race([started, outcome.then(value => { throw value.error ?? new Error("El turno terminó antes de invocar el modelo"); })]);
+    await clock.advanceAsync(1000);
+    const result = await task;
+    assert.equal(result.diagnostics[0].code, "MODEL_CALL_TIMEOUT");
+    assert.equal(result.diagnostics[0].retrySkipped, "INSUFFICIENT_TURN_TIME");
+    assert.equal(runnerSignal.aborted, false); assert.equal(clock.now(), 1000);
+    assert.equal(f.world.getState().humanHandoffRequired, false);
+    assert.equal(f.world.getState().consecutiveTechnicalFailures, 1);
+    assert.deepEqual(f.world.getState().guardianAlerts, []);
+    assert.equal(result.usage.callsWithoutUsage, 1);
+    assert.equal(result.usage.calls, 1); assert.equal(result.usage.failedCalls, 1);
+    const messages = f.transport.getOutgoing(), state = f.world.getState();
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].text, TECHNICAL_FAILURE_NOTICE);
+    finish(reply("responder", { texto: "No enviar tarde", entendido: true }));
+    await flushMicrotasks();
+    assert.deepEqual(f.transport.getOutgoing(), messages); assert.deepEqual(f.world.getState(), state);
+    assert.equal(f.world.getEvents().length, 0);
+    assert.equal(model.invocations.length, 1); assert.equal(clock.pendingTimers(), 0);
+  } finally { await f.agent.dispose(); await outcome; f.close(); }
+});
+test("entendido false alcanza el cuarto intento y deriva por código con alerta durable", async () => {
+  const f = await consultationFixture({ model: scriptedModel([reply("responder", { texto: "Repregunta", entendido: false })]) });
+  try {
+    const state = f.world.getState(); state.consecutiveMisunderstandings = 3; f.world.setState(state);
+    await f.run();
+    assert.equal(f.world.getState().consecutiveMisunderstandings, 4);
+    assert.equal(f.world.getState().humanHandoffRequired, true);
+    assert.equal(f.world.alertRequests.list().length, 1);
+    assert.equal(f.world.alertRequests.list()[0].type, "MISUNDERSTANDING");
+  } finally { f.close(); }
+});
+test("prompt habilita 5B, preserva seguridad y elimina el bloque temporal de comprobantes", async () => {
+  const prompt = await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8");
+  assert.equal(prompt.includes("TEMPORAL ENTREGA 4"), false);
+  assert.equal(prompt.includes("TEMPORAL ENTREGA 5"), false);
+  assert.equal(prompt.includes("No podés registrar comprobantes."), false);
+  assert.ok(prompt.includes("registrar_comprobante"));
+  assert.ok(prompt.includes("No leas importes como verdad ni confirmes pagos"));
+  assert.equal(prompt.includes("La única herramienta de cierre disponible por ahora"), false);
+  assert.ok(prompt.includes("usá derivar con motivo y texto"));
+  assert.ok(prompt.includes("El cuarto intento consecutivo lo deriva el código"));
+  assert.ok(prompt.includes("CANTIDAD_CORPORATIVA indica el total y umbral del servidor"));
+  assert.ok(prompt.includes("servidor envía el acuse textual"));
+  for (const rule of ["sin afirmar que es un producto de HoDie", "confirmarTexto", "Subtotal de productos", "confirmedRuc", "acknowledgeRucMismatch", "responder.quoteIdMostrado", "nunca hagas cuentas", "usá crear_pedido solo con el quoteId vigente"]) assert.ok(prompt.includes(rule), rule);
+  assert.equal(prompt.includes("crear_pedido todavía no está disponible"), false);
+  for (const rule of ["lote posterior", "pregunta corta sin repetir", "nunca copies ni reformules datos bancarios", "no pidas repetir la compra"]) assert.ok(prompt.includes(rule), rule);
+  assert.equal(prompt.includes("Producto Alfa"), false);
+  for (const rule of ["Seguí pendientes del servidor en su orden", "nombres y precios", "packagingType:null",
+    "cotizar con lineas", "no prometas que se puede producir", "cliente posterga la compra",
+    "política vigente consultada y no insistas"]) assert.ok(prompt.includes(rule), rule);
+  assert.ok(prompt.includes("no llames a carrito_ver para releerlos"));
+  assert.ok(prompt.includes("pendientes empieza con informar_subtotal, llamá a cotizar"));
+});
+test("prompt separa alcance de comprensión, ofrece en el tercero y reserva esa derivación al código", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("entendido:false significa que no comprendiste el mensaje"));
+  assert.ok(prompt.includes("fueraDeAlcance:true indica que pide algo que la tienda no ofrece, aunque lo entendiste"));
+  assert.ok(prompt.includes("Una consulta fuera de rubro no usa derivar: su escalada la hace el código"));
+  assert.ok(prompt.includes("un pedido explícito de una persona sí usa derivar"));
+  assert.ok(prompt.includes("Si vale 2 y este turno también lo es, es el tercero"));
+  assert.ok(prompt.includes("ofrecé hablar con una persona, sin derivar"));
+  assert.ok(prompt.includes("El cuarto intento consecutivo lo deriva el código"));
+});
+test("prompt ofrece atención corporativa desde el umbral del contexto aunque se consulte por diseño y se disculpa ante reclamos", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("cantidad total que pide el cliente supera corporateQuantityThreshold"));
+  assert.ok(prompt.includes("esos pedidos los coordina una persona del equipo"));
+  assert.ok(prompt.includes("ofrecé comunicarlo, aunque también consulte por diseño o logo"));
+  assert.ok(prompt.includes("No omitas la oferta ni derives sin su aceptación"));
+  assert.ok(prompt.includes("las herramientas siguen comprobando la regla"));
+  assert.ok(prompt.includes("Ante un reclamo, pedí disculpas en el texto antes de derivar"));
+  assert.equal(prompt.includes("Producto Alfa"), false);
+});
+
+test("prompt procesa y responde los datos recibidos en el turno antes de usar pendientes para la próxima pregunta", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("Registrá primero los datos que el cliente aporta con su herramienta y respondé sobre ellos en ese mismo turno"));
+  assert.ok(prompt.includes("pendientes indica qué preguntar después, nunca impide procesar lo recibido"));
+  assert.ok(prompt.includes("Después de datos_envio, comunicá modalidad, costo y requisito de cédula de options en ese mismo turno"));
+  assert.ok(prompt.includes("shippingCost es el cargo del pedido; label explica el flete"));
+  assert.ok(prompt.includes("Pedí cédula solo si requiresRecipientDocument:true, sin estimar flete"));
+  assert.ok(prompt.includes("Seguí pendientes del servidor en su orden"));
+});
+test("prompt delega lista y precios al servidor; el modelo solo escribe introducción y cierre opcional", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes('Al listar productos, el servidor informa el precio del catálogo y "desde" cuando varía entre variantes'));
+  assert.ok(prompt.includes("Al listar o recomendar, pasá en responder.productosMostrados los IDs (máximo tres)"));
+  assert.ok(prompt.includes("escribí en texto solo una introducción breve"));
+  assert.ok(prompt.includes("un cierre opcional en cierre; no listes productos ni precios en ninguno"));
+  assert.ok(prompt.includes("El servidor arma introducción, foto o línea por producto con nombre y precio, y cierre"));
+  assert.ok(prompt.includes("productosMostrados es para listas y recomendaciones"));
+  assert.ok(prompt.includes("Si preguntan por un solo producto puntual, no hace falta productosMostrados: escribí en texto el precio devuelto por la herramienta"));
+  assert.ok(prompt.includes("Respondé todo lo que preguntó (medidas, stock, etc.)"));
+  assert.ok(prompt.includes("si mencionó una cantidad, llamá a cotizar y comunicá el total devuelto por el servidor, sin calcularlo"));
+  assert.ok(prompt.includes("Respetá la regla de cantidad corporativa"));
+  assert.ok(prompt.includes("Usá cotizar para cualquier subtotal o total; nunca hagas cuentas"));
+  assert.ok(prompt.includes("Para consultar importes sin armar un carrito, usá cotizar con lineas"));
+  assert.ok(prompt.includes("no cotices ni crees esa solicitud automáticamente"));
+  // La garantía de precio/Desde en el envío real (foto y línea) vive en
+  // test_agent_product_images.js: "principal respeta orden activo, salta
+  // variantes sin fotos y precio desde del servidor en foto o línea".
+  assert.equal(prompt.includes("Producto Beta"), false);
+});
+test("prompt explica políticas completas y ofrece una persona ante cualquier condición distinta sin prometer derivación", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  assert.ok(prompt.includes("Consultá consultar_politicas para responder sobre condiciones del negocio"));
+  assert.ok(prompt.includes("Transmití todas las condiciones y restricciones de la política que explicás, sin resumirlas ni omitirlas, aunque requiera más de cuatro oraciones"));
+  assert.ok(prompt.includes("Ante pedidos de condiciones distintas de las políticas"));
+  for (const condition of ["descuentos", "rebajas", "regateo", "cambios de precio", "pago al recibir", "entregas personales", "anticipos u otras"]) {
+    assert.ok(prompt.includes(condition), condition);
+  }
+  assert.ok(prompt.includes("lo vigente consultado y ofrecé hablar con una persona del equipo sin afirmar derivación"));
+  assert.ok(prompt.includes("desde el chat no podés modificarlos e informá el precio vigente de las herramientas"));
+  assert.ok(prompt.includes("solo afirmá que son fijos si lo indica consultar_politicas"));
+  assert.ok(prompt.includes("Al rechazar un descuento o una condición distinta, terminá el mensaje ofreciendo hablar con una persona mediante una pregunta concreta"));
+  assert.ok(prompt.includes("¿Querés que te comunique con alguien del equipo?"));
+  assert.ok(prompt.includes("Si usás una lista, poné esa pregunta en cierre"));
+  assert.ok(prompt.includes("Mencionar que una persona decide no es ofrecer; no afirmes derivación"));
+  assert.equal(prompt.includes("Condición ficticia Alfa"), false);
+});
+test("prompt exige aclarar verificación manual cada vez que pide un comprobante", async () => {
+  const prompt = (await readFile(new URL("../src/agents/prompts/agente.md", import.meta.url), "utf8")).replace(/\s+/gu, " ");
+  const receipts = prompt.split("COMPROBANTES")[1];
+  assert.ok(receipts.includes("Siempre que pidas un comprobante, aclarale que el equipo verifica el pago manualmente"));
+  assert.ok(receipts.includes("decir solo que es para registrarlo no alcanza"));
+  assert.ok(receipts.includes("No leas importes como verdad ni confirmes pagos"));
+});

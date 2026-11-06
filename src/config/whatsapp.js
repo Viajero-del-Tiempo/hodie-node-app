@@ -5,6 +5,39 @@ import { HumanMessage, AIMessage } from "@langchain/core/messages";
 import { Timestamp } from "firebase-admin/firestore";
 import { compiledGraph } from "../agents/graph.js";
 import { db } from "./firebase.js";
+import { createWhatsAppRuntimeLogger } from "../utils/whatsapp-startup.util.js";
+import { createWhatsAppLifecycle } from "../services/whatsapp-lifecycle.service.js";
+import { createAgentAlertRepository } from "../services/agent-alert.repository.js";
+import { maskedChat } from "../services/agent-telemetry.service.js";
+import { createAgentWhatsAppConfig } from "./agent-whatsapp.config.js";
+import { createOwnMessageRepository, installWhatsAppClient, readAlertsPhone } from "../services/whatsapp-client.service.js";
+
+const agentWhatsAppConfig = createAgentWhatsAppConfig(process.env);
+const runtimeLogger = createWhatsAppRuntimeLogger(agentWhatsAppConfig);
+let agentPilotPromise = null;
+let agentPilotClosed = false;
+let legacyConnection = null;
+const getAgentPilot = () => {
+  if (agentPilotClosed) throw Object.assign(new Error("Piloto cerrado"), { code: "PILOT_CLOSED" });
+  if (!agentPilotPromise) {
+    agentPilotPromise = (async () => {
+      const [{ createWhatsAppPilotInfrastructure }, { BANK_CONFIG }] = await Promise.all([
+        import("../services/whatsapp-agent.bootstrap.js"), import("./bank.config.js"),
+      ]);
+      return createWhatsAppPilotInfrastructure({ config: agentWhatsAppConfig, client: whatsappClient, MessageMedia, db,
+        timestampNow: () => Timestamp.now(), timestampFromMillis: value => Timestamp.fromMillis(value),
+        resolvePhone: resolvePhoneFromChatId, bankConfig: BANK_CONFIG, ownMessages, alertsPhone, logger: runtimeLogger });
+    })();
+    agentPilotPromise.catch(() => { agentPilotPromise = null; });
+  }
+  return agentPilotPromise;
+};
+
+export const shutdownAgentPilot = async () => {
+  agentPilotClosed = true;
+  if (agentPilotPromise) await (await agentPilotPromise).shutdown();
+  await legacyConnection?.stop();
+};
 
 /**
  * Tipos de mensajes permitidos para procesamiento.
@@ -51,6 +84,17 @@ export const whatsappClient = new Client({
   authTimeoutMs: 60000,
 });
 
+const alertsPhone = readAlertsPhone(process.env);
+export const ownMessages = installWhatsAppClient({ client: whatsappClient,
+  repository: createOwnMessageRepository({ db, timestampFromMillis: value => Timestamp.fromMillis(value) }),
+  config: agentWhatsAppConfig, resolvePhone: (...args) => resolvePhoneFromChatId(...args), alertsPhone });
+
+export async function cancelAgentChat(chatId) { if (agentPilotPromise) (await agentPilotPromise).cancelChat(chatId); }
+whatsappClient.on("message_create", message => {
+  if (agentWhatsAppConfig.enabled && message.fromMe && !agentPilotClosed) void getAgentPilot().then(pilot => pilot.handleCreated(message))
+    .catch(error => console.error(JSON.stringify({ code: error.code ?? "MESSAGE_CREATE_FAILED" })));
+});
+
 whatsappClient.on("qr", (qr) => {
   console.log("📱 Escaneá este QR para iniciar sesión en WhatsApp:");
   qrcode.generate(qr, { small: true });
@@ -58,10 +102,8 @@ whatsappClient.on("qr", (qr) => {
 
 whatsappClient.on("ready", async () => {
   console.log("✅ WhatsApp listo");
-  console.log(
-    "📌 WhatsApp Web Version:",
-    await whatsappClient.getWWebVersion(),
-  );
+  try { console.log("📌 WhatsApp Web Version:", await whatsappClient.getWWebVersion()); }
+  catch { console.warn(JSON.stringify({ code: "WHATSAPP_VERSION_UNAVAILABLE" })); }
 });
 
 /**
@@ -205,9 +247,11 @@ export const runInThreadQueue = async (queueKey, taskFn, timeoutMs = 60000) => {
  * - Si falla o no hay 'pn': devuelve "" y loguea una advertencia. NUNCA devuelve el LID como si fuera teléfono.
  *
  * @param {string} whatsappChatId
+ * @param {{sideEffectFree?: boolean}} options Sin escrituras de caché ni advertencias para la admisión silent.
  * @returns {Promise<string>} Número de teléfono resuelto o cadena vacía "" si no se puede resolver.
  */
-export const resolvePhoneFromChatId = async (whatsappChatId) => {
+export const resolvePhoneFromChatId = async (whatsappChatId, { sideEffectFree = false } = {}) => {
+  const warn = (...args) => { if (!sideEffectFree) console.warn(...args); };
   if (!whatsappChatId || typeof whatsappChatId !== "string") {
     return "";
   }
@@ -232,7 +276,7 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
         }
       }
     } catch (dbErr) {
-      console.warn(`⚠️ Error consultando lid_phone_map para LID ${lidKey}:`, dbErr.message);
+      warn(`⚠️ Error consultando lid_phone_map para LID ${lidKey}:`, dbErr.message);
     }
 
     // Si no está, llamar a whatsappClient.getContactLidAndPhone([lid])
@@ -249,29 +293,31 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
         ) {
           const phoneNumber = contactInfo.pn.replace("@c.us", "").replace(/\D/g, "");
           if (phoneNumber) {
-            // Guardar el par en lid_phone_map
-            await db
-              .collection("lid_phone_map")
-              .doc(lidKey)
-              .set(
-                {
-                  lid: lidKey,
-                  phoneNumber,
-                  pn: contactInfo.pn,
-                  updatedAt: Timestamp.now(),
-                },
-                { merge: true }
-              );
+            if (!sideEffectFree) {
+              // Guardar el par en lid_phone_map
+              await db
+                .collection("lid_phone_map")
+                .doc(lidKey)
+                .set(
+                  {
+                    lid: lidKey,
+                    phoneNumber,
+                    pn: contactInfo.pn,
+                    updatedAt: Timestamp.now(),
+                  },
+                  { merge: true }
+                );
+            }
 
             return phoneNumber;
           }
         }
       }
-      console.warn(
+      warn(
         `⚠️ No se pudo resolver número de teléfono para @lid (${whatsappChatId}): no se obtuvo pn válido terminado en @c.us.`
       );
     } catch (clientErr) {
-      console.warn(
+      warn(
         `⚠️ Error llamando a getContactLidAndPhone para ${whatsappChatId}:`,
         clientErr.message
       );
@@ -280,11 +326,18 @@ export const resolvePhoneFromChatId = async (whatsappChatId) => {
     return "";
   }
 
-  console.warn(`⚠️ whatsappChatId con formato no reconocido (${whatsappChatId}). Devolviendo "".`);
+  warn(`⚠️ whatsappChatId con formato no reconocido (${whatsappChatId}). Devolviendo "".`);
   return "";
 };
 
 export const handleIncomingWhatsAppMessage = async (mensaje) => {
+  if (agentPilotClosed) return;
+  if (legacyConnection && !legacyConnection.isReady()) return;
+  if (agentWhatsAppConfig.enabled) {
+    try { await (await getAgentPilot()).handle(mensaje); }
+    catch (error) { console.error(JSON.stringify({ code: error.code ?? "PILOT_ERROR" })); }
+    return; // Con el piloto activo, ningún rechazo/error cae al router legacy.
+  }
   // Ignorar mensajes enviados por el propio bot (fromMe)
   if (mensaje.fromMe) return;
 
@@ -636,7 +689,24 @@ whatsappClient.on("message", handleIncomingWhatsAppMessage);
 
 export const initializeWhatsapp = async () => {
   try {
-    await whatsappClient.initialize();
+    if (agentPilotClosed) return;
+    if (agentWhatsAppConfig.enabled) {
+      const pilot = await getAgentPilot();
+      if (agentPilotClosed) { await pilot.shutdown(); return; }
+      await pilot.start();
+    }
+    else {
+      legacyConnection ??= createWhatsAppLifecycle({ client: whatsappClient,
+        logger: runtimeLogger,
+        requestAlert: alert => createAgentAlertRepository({ db }).request(alert),
+        recordAck: async (chatId, id, ack) => {
+          const own = await ownMessages.recordAck(chatId, id, ack);
+          console.info(JSON.stringify({ event: "whatsapp_ack", chat: maskedChat(chatId), ack, own }));
+        },
+      });
+      ownMessages.setConnection(legacyConnection);
+      await legacyConnection.start();
+    }
   } catch (error) {
     console.error("Error initializing WhatsApp client:", error);
   }

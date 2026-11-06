@@ -1,10 +1,17 @@
 import express from "express";
-import { requireAuth } from "../middlewares/auth.middleware.js";
-import { getMyProfile, updateMyProfile } from "../controllers/admin.user.controller.js";
+import { requireAuth, loadActiveUser } from "../middlewares/auth.middleware.js";
+import { createUserController } from "../controllers/user.controller.js";
+import { createCustomerOrderController } from "../controllers/customer-order.controller.js";
 
-export const router = express.Router();
-
-router.use(requireAuth); // Requiere token JWT de cliente autenticado
-
-router.get("/me", getMyProfile);
-router.put("/me", updateMyProfile);
+export function createUserRouter({ profile = createUserController(), orders = createCustomerOrderController() } = {}) {
+  const router = express.Router();
+  router.use(requireAuth, loadActiveUser);
+  router.get("/me", profile.getMyProfile);
+  router.put("/me", profile.updateMyProfile);
+  router.post("/me/ruc/validate", profile.validateRuc);
+  router.get("/me/orders", orders.list);
+  router.get("/me/orders/:id/pdf", orders.pdf);
+  router.get("/me/orders/:id", orders.get);
+  return router;
+}
+export const router = createUserRouter();

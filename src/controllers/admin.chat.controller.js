@@ -1,6 +1,10 @@
 import { compiledGraph } from "../agents/graph.js";
 import { db } from "../config/firebase.js";
 import { runInThreadQueue } from "../config/whatsapp.js";
+import { cancelAgentChat } from "../config/whatsapp.js";
+import { createAgentChatControl } from "../services/agent-chat-control.service.js";
+
+const agentControl = createAgentChatControl({ db });
 
 /**
  * Consulta la lista de hilos que están actualmente en handoff humano
@@ -16,7 +20,7 @@ export const getHandoffChats = async (req, res) => {
       .orderBy("fecha", "desc")
       .get();
 
-    const chats = snapshot.docs.map((doc) => {
+    const chats = snapshot.docs.filter(doc => doc.data().engine !== "agent" && doc.data().active !== false).map((doc) => {
       const data = doc.data() || {};
       const rawFecha = data.fecha;
       let fechaIso = new Date().toISOString();
@@ -28,6 +32,7 @@ export const getHandoffChats = async (req, res) => {
       }
 
       return {
+        engine: "legacy",
         thread_id: data.thread_id || doc.id,
         whatsappChatId: data.whatsappChatId || (doc.id.includes("@") ? doc.id : `${doc.id}@c.us`),
         userPhoneNumber: data.userPhoneNumber || (doc.id.includes("@") ? "" : doc.id),
@@ -73,6 +78,16 @@ export const resumeBot = async (req, res) => {
     const handoffRef = db.collection("handoff_threads").doc(threadId);
     const handoffDoc = await handoffRef.get();
     const handoffData = handoffDoc.exists ? handoffDoc.data() : null;
+
+    // Resolver el motor antes de consultar/modificar el checkpoint legacy.
+    const controlled = await agentControl.get(threadId);
+    if (controlled || handoffData?.engine === "agent") {
+      if (!controlled) return res.status(404).json({ error: "Chat del agente no encontrado." });
+      if (!Number.isSafeInteger(req.body?.version) || req.body.version < 0) return res.status(400).json({ field: "version", error: "Se requiere la versión del chat listado." });
+      const resumed = await agentControl.resume(controlled.id, req.body.version);
+      await cancelAgentChat(threadId);
+      return res.json({ success: true, engine: "agent", id: resumed.id, version: resumed.version });
+    }
 
     // 1. Obtener estado actual del hilo en LangGraph
     const config = { configurable: { thread_id: threadId } };
@@ -150,6 +165,7 @@ export const resumeBot = async (req, res) => {
     return res.json({
       success: true,
       message: `Asistente virtual reactivado exitosamente para el hilo ${threadId}.`,
+      engine: "legacy",
       thread_id: threadId,
     });
   } catch (error) {
